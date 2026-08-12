@@ -1,24 +1,58 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { Suspense, useCallback, useEffect, useState, useRef } from 'react';
 import { supabase } from '../supabase'; // Asegúrate de que la ruta a supabase sea correcta desde fuera de admin
-import { UserPlus, Trash2, ArrowLeft, Download, Upload, Users, Edit2, Check, X, RefreshCcw, AlertTriangle, ArrowRight, Trophy, CheckCircle2 } from 'lucide-react';
+import { UserPlus, Trash2, ArrowLeft, Download, Upload, Users, Edit2, Check, X, AlertTriangle, ArrowRight, Trophy, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 'react-icons/fa';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
+import Image from 'next/image';
+import AppSelect from '@/app/components/AppSelect';
+import {
+  addPublicRegistrationPlayers,
+  deletePublicRegistrationPlayer,
+  deletePublicRegistrationTeam,
+  getOrCreatePublicRegistrationTeam,
+  updatePublicRegistrationTeamName,
+} from './actions';
 
-export default function InscripcionPublicaPage() {
+type School = {
+  id: string;
+  name: string;
+};
+
+type Category = {
+  id: string;
+  name?: string | null;
+  gender?: string | null;
+  sports?: { name?: string | null } | null;
+};
+
+type Team = {
+  id: string;
+  name: string;
+};
+
+type Player = {
+  id: string;
+  name: string;
+  shirt_number?: number | string | null;
+  birth_year?: number | string | null;
+};
+
+type ExcelRow = Record<string, string | number | null | undefined>;
+
+function InscripcionPublicaContent() {
   const searchParams = useSearchParams();
-  const router = useRouter();
   const urlCategory = searchParams.get('cat');
 
   // Estado para la Pantalla de Bienvenida
   const [hasStarted, setHasStarted] = useState(false);
 
   // Datos base
-  const [schools, setSchools] = useState<any[]>([]);
-  const [categories, setCategories] = useState<any[]>([]);
+  const [schools, setSchools] = useState<School[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   
   // Flujo de navegación
   const [selectedSport, setSelectedSport] = useState<string | null>(null);
@@ -26,8 +60,8 @@ export default function InscripcionPublicaPage() {
   
   // Datos específicos de la categoría seleccionada
   const [selectedSchool, setSelectedSchool] = useState('');
-  const [currentTeam, setCurrentTeam] = useState<any>(null);
-  const [players, setPlayers] = useState<any[]>([]);
+  const [currentTeam, setCurrentTeam] = useState<Team | null>(null);
+  const [players, setPlayers] = useState<Player[]>([]);
   
   // Estados de interfaz y formularios
   const [loading, setLoading] = useState(false);
@@ -55,22 +89,13 @@ export default function InscripcionPublicaPage() {
       const cat = categories.find(c => c.id === urlCategory);
       if (cat) {
         setSelectedCategory(urlCategory);
-        setSelectedSport(cat.sports?.name);
+        setSelectedSport(cat.sports?.name ?? null);
         setHasStarted(true); // Si entra por link directo con categoría, saltamos el landing
       }
     }
   }, [urlCategory, categories]);
 
-  useEffect(() => {
-    if (selectedSchool && selectedCategory) {
-      fetchPlayers();
-    } else {
-      setCurrentTeam(null);
-      setPlayers([]);
-    }
-  }, [selectedSchool, selectedCategory]);
-
-  async function fetchPlayers() {
+  const fetchPlayers = useCallback(async () => {
     const { data: team } = await supabase.from('teams').select('*').eq('school_id', selectedSchool).eq('category_id', selectedCategory).single();
     if (team) {
       setCurrentTeam(team);
@@ -80,32 +105,34 @@ export default function InscripcionPublicaPage() {
       setCurrentTeam(null);
       setPlayers([]);
     }
-  }
+  }, [selectedCategory, selectedSchool]);
+
+  useEffect(() => {
+    if (selectedSchool && selectedCategory) {
+      fetchPlayers();
+    } else {
+      setCurrentTeam(null);
+      setPlayers([]);
+    }
+  }, [fetchPlayers, selectedSchool, selectedCategory]);
 
   async function getOrCreateTeam() {
-    let { data: team } = await supabase.from('teams').select('*').eq('school_id', selectedSchool).eq('category_id', selectedCategory).single();
-    
-    if (!team) {
-      const schoolName = schools.find(s => s.id === selectedSchool)?.name;
-      const { data: newTeam, error } = await supabase.from('teams').insert({
-        school_id: selectedSchool,
-        category_id: selectedCategory,
-        name: schoolName
-      }).select().single();
-      
-      if (error) { toast.error('Error al crear la delegación'); return null; }
-      team = newTeam;
+    if (!selectedSchool || !selectedCategory) return null;
+    const result = await getOrCreatePublicRegistrationTeam(selectedSchool, selectedCategory);
+    if (!result.success) {
+      toast.error(result.error);
+      return null;
     }
-    setCurrentTeam(team);
-    return team;
+    setCurrentTeam(result.data);
+    return result.data;
   }
 
   const handleUpdateTeamName = async () => {
     if (!editTeamName.trim() || !currentTeam) return;
     setLoading(true);
-    const { error } = await supabase.from('teams').update({ name: editTeamName.toUpperCase() }).eq('id', currentTeam.id);
-    if (error) {
-      toast.error('Error al actualizar el nombre');
+    const result = await updatePublicRegistrationTeamName(currentTeam.id, editTeamName);
+    if (!result.success) {
+      toast.error(result.error);
     } else {
       toast.success('Nombre de delegación actualizado');
       setCurrentTeam({ ...currentTeam, name: editTeamName.toUpperCase() });
@@ -120,11 +147,10 @@ export default function InscripcionPublicaPage() {
     setShowDeleteTeamModal(false);
     const toastId = toast.loading('Eliminando delegación y jugadores...');
     
-    await supabase.from('players').delete().eq('team_id', currentTeam.id);
-    const { error } = await supabase.from('teams').delete().eq('id', currentTeam.id);
+    const result = await deletePublicRegistrationTeam(currentTeam.id);
     
-    if (error) {
-      toast.error('Error al eliminar la delegación', { id: toastId });
+    if (!result.success) {
+      toast.error(result.error, { id: toastId });
     } else {
       toast.success('Delegación eliminada con éxito', { id: toastId });
       setSelectedSchool('');
@@ -137,9 +163,9 @@ export default function InscripcionPublicaPage() {
   const executeDeletePlayer = async () => {
     if (!playerToDelete) return;
     setLoading(true);
-    const { error } = await supabase.from('players').delete().eq('id', playerToDelete.id);
-    if (error) {
-      toast.error('Error al dar de baja al atleta');
+    const result = await deletePublicRegistrationPlayer(playerToDelete.id);
+    if (!result.success) {
+      toast.error(result.error);
     } else {
       toast.success('Atleta dado de baja');
       fetchPlayers();
@@ -159,7 +185,7 @@ export default function InscripcionPublicaPage() {
     toast.success('Plantilla descargada con éxito');
   };
 
-  const extractYearFromExcelValue = (value: any): number => {
+  const extractYearFromExcelValue = (value: unknown): number => {
     if (!value) return 0;
     if (typeof value === 'number' && value > 1900 && value < 2100) return value;
     const strVal = String(value).trim();
@@ -184,18 +210,17 @@ export default function InscripcionPublicaPage() {
         const wb = XLSX.read(bstr, { type: 'binary' });
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
-        const data = XLSX.utils.sheet_to_json(ws);
+        const data = XLSX.utils.sheet_to_json<ExcelRow>(ws);
 
         const team = await getOrCreateTeam();
         if (!team) throw new Error("Error de delegación");
 
-        const formattedPlayers = data.map((row: any) => {
+        const formattedPlayers = data.map((row) => {
           const rawYear = row.ANO_NACIMIENTO || row.Ano_Nacimiento || row.ano_nacimiento || row.FECHA_NACIMIENTO || '';
           return {
-            team_id: team.id,
             name: String(row.NOMBRE_COMPLETO || row.Nombre || row.nombre || '').toUpperCase().trim(),
-            shirt_number: parseInt(row.DORSAL || row.Dorsal || row.dorsal || 0),
-            birth_year: extractYearFromExcelValue(rawYear),
+            shirtNumber: parseInt(String(row.DORSAL || row.Dorsal || row.dorsal || 0)),
+            birthYear: extractYearFromExcelValue(rawYear),
           };
         }).filter(p => p.name && p.name !== 'UNDEFINED');
 
@@ -203,13 +228,14 @@ export default function InscripcionPublicaPage() {
           throw new Error("No se encontraron jugadores válidos. Revisa las columnas de tu Excel.");
         }
 
-        const { error } = await supabase.from('players').insert(formattedPlayers);
-        if (error) throw error;
+        const result = await addPublicRegistrationPlayers(selectedSchool, selectedCategory, formattedPlayers);
+        if (!result.success) throw new Error(result.error);
+        setCurrentTeam(result.data.team);
         
-        toast.success(`¡${formattedPlayers.length} atletas inscritos con éxito!`, { id: toastId });
+        toast.success(`¡${result.data.inserted} atletas inscritos con éxito!`, { id: toastId });
         fetchPlayers();
-      } catch (err: any) {
-        toast.error(err.message || 'Error procesando el Excel.', { id: toastId });
+      } catch (err: unknown) {
+        toast.error(err instanceof Error ? err.message : 'Error procesando el Excel.', { id: toastId });
       }
       setLoading(false);
       if(fileInputRef.current) fileInputRef.current.value = '';
@@ -227,17 +253,18 @@ export default function InscripcionPublicaPage() {
 
     const yearToSave = extractYearFromExcelValue(newPlayer.birth_year);
 
-    const { error } = await supabase.from('players').insert({
+    const result = await addPublicRegistrationPlayers(selectedSchool, selectedCategory, [{
       name: newPlayer.name.trim().toUpperCase(),
-      shirt_number: parseInt(newPlayer.shirt_number),
-      birth_year: yearToSave,
-      team_id: team.id
-    });
+      shirtNumber: parseInt(newPlayer.shirt_number),
+      birthYear: yearToSave,
+    }]);
 
-    if (!error) {
+    if (result.success) {
       toast.success('Atleta registrado');
       setNewPlayer({ name: '', shirt_number: '', birth_year: '' });
       fetchPlayers();
+    } else {
+      toast.error(result.error);
     }
     setLoading(false);
   }
@@ -263,21 +290,21 @@ export default function InscripcionPublicaPage() {
         {/* Decoración de fondo */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-blue-500/10 blur-[100px] rounded-full pointer-events-none"></div>
 
-        <div className="bg-white border border-slate-200 p-12 rounded-[3rem] w-full max-w-2xl shadow-2xl flex flex-col items-center text-center relative z-10 animate-in fade-in zoom-in-95 duration-700">
+        <div className="bg-white border border-slate-200 p-6 sm:p-8 md:p-12 rounded-[2rem] md:rounded-[3rem] w-full max-w-2xl shadow-2xl flex flex-col items-center text-center relative z-10 animate-in fade-in zoom-in-95 duration-700">
           
-          <div className="w-32 h-32 bg-white rounded-full flex items-center justify-center mb-8 border-4 border-slate-50 shadow-xl p-4">
-             <img src="/logo.png" alt="Logo Torneo" className="w-full h-full object-contain" />
+          <div className="w-24 h-24 sm:w-32 sm:h-32 bg-white rounded-full flex items-center justify-center mb-6 sm:mb-8 border-4 border-slate-50 shadow-xl p-4">
+             <Image src="/logo.png" alt="Logo Torneo" width={128} height={128} className="w-full h-full object-contain" />
           </div>
 
-          <h1 className="text-4xl md:text-5xl font-black text-slate-900 uppercase tracking-tighter mb-4 leading-none">
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-slate-900 uppercase tracking-tighter mb-4 leading-none">
             CSJB <span className="text-blue-600">Championship</span>
           </h1>
           
-          <p className="text-slate-500 font-bold uppercase tracking-[0.2em] text-xs mb-10">
+          <p className="text-slate-500 font-bold uppercase tracking-[0.18em] text-[10px] sm:text-xs mb-8 sm:mb-10">
             Portal Oficial de Inscripción de Delegaciones
           </p>
 
-          <div className="bg-slate-50 border border-slate-100 rounded-3xl p-6 mb-10 w-full text-left space-y-4">
+          <div className="bg-slate-50 border border-slate-100 rounded-2xl sm:rounded-3xl p-4 sm:p-6 mb-8 sm:mb-10 w-full text-left space-y-4">
              <div className="flex items-center gap-3 text-sm font-bold text-slate-600">
                 <CheckCircle2 size={18} className="text-emerald-500 shrink-0" /> Selecciona tu Deporte y Categoría
              </div>
@@ -291,7 +318,7 @@ export default function InscripcionPublicaPage() {
 
           <button 
             onClick={() => setHasStarted(true)}
-            className="w-full py-6 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-sm hover:bg-blue-500 hover:scale-[1.02] active:scale-[0.98] transition-all shadow-[0_0_30px_rgba(37,99,235,0.4)] flex items-center justify-center gap-3"
+            className="w-full py-4 sm:py-6 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs sm:text-sm hover:bg-blue-500 hover:scale-[1.02] active:scale-[0.98] transition-all shadow-[0_0_30px_rgba(37,99,235,0.4)] flex items-center justify-center gap-3"
           >
             Iniciar Inscripción <ArrowRight size={20} />
           </button>
@@ -315,7 +342,7 @@ export default function InscripcionPublicaPage() {
             </div>
             <h3 className="text-2xl font-black text-slate-900 uppercase tracking-tighter mb-2">¿Eliminar Delegación?</h3>
             <p className="text-slate-500 text-sm font-medium mb-8 leading-relaxed">
-              Esta acción borrará al equipo completo <strong>"{currentTeam?.name}"</strong> y eliminará a todos los jugadores inscritos en esta categoría. No se puede deshacer.
+              Esta acción borrará al equipo completo <strong>&quot;{currentTeam?.name}&quot;</strong> y eliminará a todos los jugadores inscritos en esta categoría. No se puede deshacer.
             </p>
             <div className="flex w-full gap-4">
               <button onClick={() => setShowDeleteTeamModal(false)} disabled={loading} className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-slate-200 transition-colors shadow-sm">Cancelar</button>
@@ -422,10 +449,15 @@ export default function InscripcionPublicaPage() {
             <div className="bg-white border border-slate-200 p-6 rounded-[2rem] mb-8 shadow-sm relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-blue-500 to-indigo-500"></div>
               <label className="text-[10px] text-slate-500 uppercase font-black tracking-[0.2em] mb-3 flex items-center gap-2 mt-2"><Users size={14} className="text-blue-500"/> 3. Seleccionar Institución o Club</label>
-              <select className="w-full bg-slate-50 border border-slate-200 p-4 rounded-xl text-sm font-bold text-slate-900 outline-none focus:border-blue-400 focus:bg-white transition-colors cursor-pointer" value={selectedSchool} onChange={(e) => setSelectedSchool(e.target.value)}>
-                <option value="">Buscar en la lista oficial...</option>
-                {schools.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+              <AppSelect
+                value={selectedSchool}
+                onChange={setSelectedSchool}
+                placeholder="Buscar en la lista oficial..."
+                options={[
+                  { value: '', label: 'Buscar en la lista oficial...' },
+                  ...schools.map((school) => ({ value: school.id, label: school.name })),
+                ]}
+              />
             </div>
 
             {selectedSchool && (
@@ -483,7 +515,7 @@ export default function InscripcionPublicaPage() {
                               {getSportIcon(selectedSport || '')}
                             </div>
                             <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">{currentTeam.name}</h2>
-                            <button onClick={() => { setEditTeamName(currentTeam.name); setIsEditingTeam(true); }} className="text-slate-400 hover:text-blue-600 transition-colors p-2 rounded-lg hover:bg-blue-50 border border-transparent hover:border-blue-200">
+                            <button onClick={() => { setEditTeamName(currentTeam.name ?? ''); setIsEditingTeam(true); }} className="text-slate-400 hover:text-blue-600 transition-colors p-2 rounded-lg hover:bg-blue-50 border border-transparent hover:border-blue-200">
                               <Edit2 size={16} />
                             </button>
                           </div>
@@ -539,5 +571,13 @@ export default function InscripcionPublicaPage() {
         )}
       </div>
     </main>
+  );
+}
+
+export default function InscripcionPublicaPage() {
+  return (
+    <Suspense fallback={null}>
+      <InscripcionPublicaContent />
+    </Suspense>
   );
 }

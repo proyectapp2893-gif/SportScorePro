@@ -1,63 +1,134 @@
 'use client';
 
-import { ShieldCheck, Trophy, Medal, ArrowRight } from 'lucide-react';
-import Link from 'next/link';
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { Lock, User, ArrowRight, ShieldCheck } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { loginCentralUser } from './login-actions';
 
-export default function LandingPage() {
+export default function SportScoreMainLogin() {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    const toastId = toast.loading('Verificando credenciales...');
+
+    const result = await loginCentralUser(username, password);
+
+    if (result.success) {
+      if (result.isMaster) {
+        // 🔐 MODO DIOS: Teletransporte directo al panel maestro
+        toast.success('Modo Maestro Activado. Abriendo Bóveda Central...', { id: toastId, icon: '🔐' });
+        router.push('/master');
+      } else {
+        // 🏫 MODO COLEGIO: Redirección normal al búnker del colegio
+        toast.success(`Bienvenido a la red, ${result.name}`, { id: toastId });
+        router.push(`/${result.slug}/admin`);
+      }
+    } else {
+      toast.error(result.error || 'Acceso denegado', { id: toastId });
+      setLoading(false);
+    }
+  };
+
   return (
-    <main className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 relative overflow-hidden font-sans text-slate-900">
+    <main className="min-h-screen flex flex-col md:flex-row font-sans selection:bg-blue-500/30">
       
-      {/* Luces de estadio de fondo */}
-      <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-400/10 rounded-full blur-[100px] pointer-events-none"></div>
-      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-indigo-400/10 rounded-full blur-[100px] pointer-events-none"></div>
-
-      <div className="z-10 text-center max-w-4xl w-full flex flex-col items-center">
+      {/* SECCIÓN IZQUIERDA: BRANDING CLARO Y LOGO GIGANTE */}
+      <div className="hidden md:flex flex-[1.2] bg-white p-12 flex-col justify-center items-center relative overflow-hidden">
         
-        {/* LOGO DEL COLEGIO ANFITRIÓN */}
-        <div className="mx-auto w-40 h-40 md:w-56 md:h-56 bg-white border border-slate-200 rounded-full shadow-2xl flex items-center justify-center mb-8 overflow-hidden relative z-20">
-          <img src="/logo.png" alt="Logo CSJB" className="w-full h-full object-contain p-4 md:p-6" />
+        {/* Patrón de cuadrícula de fondo estilo software */}
+        <div className="absolute inset-0 bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] opacity-60"></div>
+        
+        <div className="relative z-10 w-full max-w-2xl px-8 flex flex-col items-center">
+          {/* EL LOGO NUEVO EN HD */}
+          <img 
+            src="/sportscore.png" 
+            alt="SportScore Pro Logo" 
+            className="w-full h-auto object-contain drop-shadow-2xl"
+          />
         </div>
 
-        {/* TÍTULO PRINCIPAL */}
-        <h1 className="text-6xl md:text-7xl lg:text-8xl font-black text-slate-900 uppercase tracking-tighter leading-none italic mb-4 drop-shadow-sm">
-          CSJB <br />
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600 inline-block pr-4 pb-2">
-            Championship
-          </span>
-        </h1>
-        
-        <p className="text-slate-500 font-bold uppercase tracking-[0.2em] sm:tracking-[0.3em] text-xs sm:text-sm md:text-base mb-12 flex items-center justify-center gap-2 sm:gap-3">
-          <Medal size={20} className="text-amber-500" /> Plataforma Oficial Multideporte <Medal size={20} className="text-amber-500" />
-        </p>
-
-        {/* ACCESO PRINCIPAL ÚNICO (GIGANTE) PARA EL PÚBLICO */}
-        <Link 
-          href="/fixture" 
-          className="group relative flex items-center gap-6 bg-white border border-blue-200 p-4 pr-10 rounded-full hover:border-blue-400 hover:shadow-2xl hover:shadow-blue-200 transition-all duration-300 active:scale-95"
-        >
-          <div className="w-20 h-20 bg-blue-600 rounded-full flex items-center justify-center shadow-lg shadow-blue-400/50 group-hover:scale-105 transition-transform">
-            <Trophy size={32} className="text-white" />
-          </div>
-          <div className="text-left">
-            <h2 className="text-2xl sm:text-3xl font-black text-slate-900 uppercase tracking-tighter mb-1">Portal Público</h2>
-            <p className="text-slate-500 text-xs font-medium uppercase tracking-widest flex items-center gap-2">
-              Ingresar al Torneo <ArrowRight size={14} className="group-hover:translate-x-2 transition-transform text-blue-600" />
-            </p>
-          </div>
-        </Link>
-        
+        {/* Footer del área de branding */}
+        <div className="absolute bottom-8 left-12 right-12 flex items-center justify-between gap-4 text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] z-10">
+          <span>Sistema Oficial Multi-Tenant</span>
+          <span className="w-1 h-1 bg-blue-500 rounded-full"></span>
+          <span>Versión 4.1</span>
+        </div>
       </div>
 
-      {/* ACCESO ADMIN ESCONDIDO EN EL FOOTER */}
-      <div className="absolute bottom-8 text-center w-full flex justify-center z-20">
-        <Link 
-          href="/admin" 
-          className="flex items-center gap-2 text-slate-400 hover:text-indigo-600 transition-colors text-[10px] font-black uppercase tracking-widest opacity-60 hover:opacity-100"
-        >
-          <ShieldCheck size={14} /> 
-        </Link>
-      </div>
+      {/* SECCIÓN DERECHA: LOGIN OSCURO (EL ACCESO AL BÚNKER) */}
+      <div className="flex-[0.8] bg-slate-950 p-8 md:p-16 flex flex-col justify-center items-center relative shadow-[-20px_0_50px_rgba(0,0,0,0.3)] z-20">
+        <div className="w-full max-w-md">
+          
+          {/* Logo visible solo en celulares */}
+          <div className="md:hidden flex items-center justify-center mb-12">
+            <img src="/sportscore.png" alt="SportScore" className="h-20 object-contain drop-shadow-lg" />
+          </div>
 
+          <div className="mb-12">
+            <h2 className="text-3xl font-black text-white uppercase tracking-tighter mb-2">Iniciar Sesión</h2>
+            <p className="text-slate-500 font-bold text-xs uppercase tracking-widest">Portal Central de Instituciones</p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-6">
+            
+            <div className="space-y-2">
+              <label className="text-[10px] text-slate-500 uppercase font-black tracking-widest">Usuario Asignado</label>
+              <div className="relative group">
+                <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
+                  <User size={18} className="text-slate-600 group-focus-within:text-blue-500 transition-colors" />
+                </div>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="ID de Institución"
+                  required
+                  disabled={loading}
+                  className="w-full bg-slate-900 border border-slate-800 text-white pl-14 pr-4 py-4 rounded-2xl font-bold uppercase text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all outline-none placeholder:text-slate-700 disabled:opacity-50"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-[10px] text-slate-500 uppercase font-black tracking-widest">Contraseña de Operador</label>
+              <div className="relative group">
+                <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
+                  <Lock size={18} className="text-slate-600 group-focus-within:text-blue-500 transition-colors" />
+                </div>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  disabled={loading}
+                  className="w-full bg-slate-900 border border-slate-800 text-white pl-14 pr-4 py-4 rounded-2xl font-black tracking-[0.2em] text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all outline-none placeholder:text-slate-700 disabled:opacity-50"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full mt-6 bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-xs flex items-center justify-center gap-3 transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)] hover:shadow-[0_0_30px_rgba(37,99,235,0.5)] active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100"
+            >
+              {loading ? 'Sincronizando Matriz...' : <>Acceder al Sistema <ArrowRight size={16} /></>}
+            </button>
+          </form>
+
+          <div className="mt-12 text-center flex items-center justify-center gap-2 text-slate-700 text-[10px] font-black uppercase tracking-[0.2em]">
+            <ShieldCheck size={14} className="text-blue-600/60" /> 
+            CONEXIÓN CIFRADA
+          </div>
+
+        </div>
+      </div>
     </main>
   );
 }

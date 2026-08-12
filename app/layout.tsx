@@ -2,13 +2,14 @@ import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { Toaster } from 'react-hot-toast';
+import { AppDialogHost } from './components/AppDialog';
 
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'CSJB Championship',
-  description: 'Plataforma Oficial Multideporte',
-};
+  title: 'SportScore Pro',
+  description: 'Gestor Integral de Competiciones',
+}
 
 export default function RootLayout({
   children,
@@ -17,7 +18,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es">
-      <body className={`${inter.className} min-h-screen antialiased bg-[#020617] text-white`}>
+      <body className={`${inter.className} min-h-screen antialiased`}>
         <Toaster 
           position="top-center"
           toastOptions={{
@@ -26,6 +27,7 @@ export default function RootLayout({
             error: { iconTheme: { primary: '#ef4444', secondary: '#0f172a' } },
           }}
         />
+        <AppDialogHost />
         {children}
       </body>
     </html>

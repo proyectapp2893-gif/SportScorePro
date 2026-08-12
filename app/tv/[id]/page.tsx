@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { supabase } from '../../supabase';
 import { ArrowLeft, Trophy, Flame, Activity } from 'lucide-react';
 import Link from 'next/link';
+import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '../../lib/sports/rules';
 
 export default function TvScoreboardPage() {
   const params = useParams();
@@ -162,15 +163,63 @@ export default function TvScoreboardPage() {
     const categoryId = matchDataRef.current?.matchdays?.categories?.id;
     if (!categoryId) return;
 
-    const { data: teamsData } = await supabase.from('teams').select('id, name, points, goals_for, goals_against, schools(logo_url)').eq('category_id', categoryId);
+    const { data: teamsData } = await supabase.from('teams').select('id, name, schools(logo_url)').eq('category_id', categoryId);
     
     if (teamsData) {
-      const sorted = teamsData.sort((a, b) => {
-        if (b.points !== a.points) return b.points - a.points;
-        const diffB = (b.goals_for || 0) - (b.goals_against || 0);
-        const diffA = (a.goals_for || 0) - (a.goals_against || 0);
-        return diffB - diffA;
+      const sportRules = getSportRules(matchDataRef.current?.matchdays?.categories?.sports?.name);
+      const teamStats: Record<string, any> = {};
+
+      teamsData.forEach((team: any) => {
+        teamStats[team.id] = { ...team, played: 0, won: 0, drawn: 0, lost: 0, goals_for: 0, goals_against: 0, points: 0 };
       });
+
+      const { data: finishedMatches } = await supabase
+        .from('matches')
+        .select(`
+          home_score, away_score, home_sets, away_sets, status,
+          home_team:teams!home_team_id(id),
+          away_team:teams!away_team_id(id),
+          matchdays!inner(category_id)
+        `)
+        .eq('matchdays.category_id', categoryId)
+        .eq('status', 'FINISHED');
+
+      (finishedMatches || []).forEach((match: any) => {
+        const homeId = match.home_team?.id;
+        const awayId = match.away_team?.id;
+        if (!homeId || !awayId || !teamStats[homeId] || !teamStats[awayId]) return;
+
+        teamStats[homeId].played += 1;
+        teamStats[awayId].played += 1;
+
+        const matchScore = getMatchScoreForStandings(match, sportRules);
+        const homeScore = matchScore.home;
+        const awayScore = matchScore.away;
+
+        if (matchScore.countsForScoreColumns) {
+          teamStats[homeId].goals_for += homeScore;
+          teamStats[homeId].goals_against += awayScore;
+          teamStats[awayId].goals_for += awayScore;
+          teamStats[awayId].goals_against += homeScore;
+        }
+
+        const points = getResultPoints(homeScore, awayScore, sportRules);
+        teamStats[homeId].points += points.home;
+        teamStats[awayId].points += points.away;
+
+        if (homeScore > awayScore) {
+          teamStats[homeId].won += 1;
+          teamStats[awayId].lost += 1;
+        } else if (awayScore > homeScore) {
+          teamStats[awayId].won += 1;
+          teamStats[homeId].lost += 1;
+        } else {
+          teamStats[homeId].drawn += 1;
+          teamStats[awayId].drawn += 1;
+        }
+      });
+      
+      const sorted = Object.values(teamStats).sort((a: any, b: any) => compareTeamsForStandings(a, b, sportRules));
       
       setLiveStandings(sorted.slice(0, 4)); // Solo mostramos Top 4
       setActiveOverlay('STANDINGS');
@@ -228,35 +277,35 @@ export default function TvScoreboardPage() {
            <div className="w-16 h-16 bg-white rounded-full p-2 flex items-center justify-center shadow-[0_0_20px_rgba(255,255,255,0.1)]">
              <img src="/logo.png" alt="Logo" className="w-full h-full object-contain" />
            </div>
-           <div className="flex flex-col">
-             <h1 className="text-3xl font-black uppercase tracking-[0.2em] text-white/90 drop-shadow-md">
+           <div className="flex flex-col min-w-0">
+             <h1 className="text-xl sm:text-2xl lg:text-3xl font-black uppercase tracking-[0.12em] sm:tracking-[0.2em] text-white/90 drop-shadow-md break-words">
                {matchData.matchdays?.categories?.tournaments?.name || 'CSJB Championship'}
              </h1>
-             <p className="text-blue-400 font-bold uppercase tracking-widest text-lg">
+             <p className="text-blue-400 font-bold uppercase tracking-widest text-xs sm:text-sm lg:text-lg">
                {sportName} • {matchData.matchdays?.categories?.name}
              </p>
            </div>
          </div>
-         <div className="flex flex-col items-end">
-           <span className="flex items-center gap-2 text-emerald-400 font-black uppercase tracking-widest text-xl">
-             <span className="w-4 h-4 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_15px_rgba(16,185,129,0.8)]"></span>
+         <div className="flex flex-col items-end shrink-0">
+           <span className="flex items-center gap-2 text-emerald-400 font-black uppercase tracking-widest text-xs sm:text-base lg:text-xl">
+             <span className="w-3 h-3 sm:w-4 sm:h-4 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_15px_rgba(16,185,129,0.8)]"></span>
              Transmisión en Vivo
            </span>
          </div>
       </div>
 
       {/* ZONA CENTRAL DEL MARCADOR */}
-      <div className="flex-1 relative z-10 flex items-center justify-center px-12 w-full transition-transform duration-700">
-        <div className="w-full max-w-[90%] flex items-center justify-between gap-12">
+      <div className="flex-1 relative z-10 flex items-center justify-center px-4 sm:px-8 lg:px-12 w-full transition-transform duration-700">
+        <div className="w-full max-w-[96%] lg:max-w-[90%] flex flex-col lg:flex-row items-center justify-between gap-6 lg:gap-12">
           
           {/* EQUIPO LOCAL */}
-          <div className="flex flex-col items-center flex-1">
-            <div className="w-64 h-64 bg-white/5 rounded-[3rem] border border-white/10 flex items-center justify-center p-8 shadow-2xl mb-8">
+          <div className="flex flex-col items-center flex-1 min-w-0">
+            <div className="w-24 h-24 sm:w-36 sm:h-36 lg:w-64 lg:h-64 bg-white/5 rounded-[1.5rem] lg:rounded-[3rem] border border-white/10 flex items-center justify-center p-4 lg:p-8 shadow-2xl mb-3 lg:mb-8">
               {matchData.home_team?.schools?.logo_url && (
-                <img src={matchData.home_team.schools.logo_url} className="w-full h-full object-contain drop-shadow-xl" />
+                <img src={matchData.home_team.schools.logo_url} alt={`Logo de ${matchData.home_team?.name || 'local'}`} className="w-full h-full object-contain drop-shadow-xl" />
               )}
             </div>
-            <h2 className="text-5xl lg:text-7xl font-black uppercase tracking-tighter text-center text-white drop-shadow-lg leading-tight">
+            <h2 className="text-2xl sm:text-3xl lg:text-7xl font-black uppercase tracking-tighter text-center text-white drop-shadow-lg leading-tight break-words max-w-full">
               {matchData.home_team?.name}
             </h2>
           </div>
@@ -266,47 +315,47 @@ export default function TvScoreboardPage() {
             
             {isVolleyball && (
               <div className="flex items-center gap-8 mb-8 bg-black/60 px-8 py-3 rounded-full border border-white/10">
-                 <span className="text-5xl font-black text-amber-400">{matchData.home_sets}</span>
-                 <span className="text-xl font-bold text-white/50 uppercase tracking-widest">Sets Globales</span>
-                 <span className="text-5xl font-black text-amber-400">{matchData.away_sets}</span>
+                 <span className="text-3xl lg:text-5xl font-black text-amber-400">{matchData.home_sets}</span>
+                 <span className="text-xs lg:text-xl font-bold text-white/50 uppercase tracking-widest">Sets Globales</span>
+                 <span className="text-3xl lg:text-5xl font-black text-amber-400">{matchData.away_sets}</span>
               </div>
             )}
 
-            <div className="flex items-center justify-center gap-8 md:gap-16">
-              <span className="text-[15rem] lg:text-[20rem] font-black tabular-nums leading-none tracking-tighter drop-shadow-2xl">
+            <div className="flex items-center justify-center gap-4 md:gap-8 lg:gap-16">
+              <span className="text-7xl sm:text-9xl lg:text-[20rem] font-black tabular-nums leading-none tracking-tighter drop-shadow-2xl">
                 {matchData.home_score}
               </span>
               
-              <div className="flex flex-col items-center gap-4">
-                <span className="text-4xl text-white/30 font-black">-</span>
-                <div className="bg-blue-600 px-8 py-3 rounded-full border-2 border-blue-400 shadow-[0_0_20px_rgba(37,99,235,0.3)]">
-                  <span className="text-2xl lg:text-4xl font-black uppercase tracking-widest text-white">
+              <div className="flex flex-col items-center gap-2 lg:gap-4">
+                <span className="text-2xl lg:text-4xl text-white/30 font-black">-</span>
+                <div className="bg-blue-600 px-4 lg:px-8 py-2 lg:py-3 rounded-full border-2 border-blue-400 shadow-[0_0_20px_rgba(37,99,235,0.3)]">
+                  <span className="text-sm sm:text-xl lg:text-4xl font-black uppercase tracking-widest text-white">
                     {matchData.current_period}
                   </span>
                 </div>
-                <span className="text-4xl text-white/30 font-black">-</span>
+                <span className="text-2xl lg:text-4xl text-white/30 font-black">-</span>
               </div>
 
-              <span className="text-[15rem] lg:text-[20rem] font-black tabular-nums leading-none tracking-tighter drop-shadow-2xl">
+              <span className="text-7xl sm:text-9xl lg:text-[20rem] font-black tabular-nums leading-none tracking-tighter drop-shadow-2xl">
                 {matchData.away_score}
               </span>
             </div>
 
             {(isVolleyball || isSoftball) && (
-              <p className="text-2xl font-bold uppercase tracking-[0.3em] text-white/50 mt-8">
+              <p className="text-xs sm:text-base lg:text-2xl font-bold uppercase tracking-[0.2em] lg:tracking-[0.3em] text-white/50 mt-4 lg:mt-8 text-center">
                 {isVolleyball ? 'Puntos del Set' : 'Carreras Totales'}
               </p>
             )}
           </div>
 
           {/* EQUIPO VISITANTE */}
-          <div className="flex flex-col items-center flex-1">
-            <div className="w-64 h-64 bg-white/5 rounded-[3rem] border border-white/10 flex items-center justify-center p-8 shadow-2xl mb-8">
+          <div className="flex flex-col items-center flex-1 min-w-0">
+            <div className="w-24 h-24 sm:w-36 sm:h-36 lg:w-64 lg:h-64 bg-white/5 rounded-[1.5rem] lg:rounded-[3rem] border border-white/10 flex items-center justify-center p-4 lg:p-8 shadow-2xl mb-3 lg:mb-8">
               {matchData.away_team?.schools?.logo_url && (
-                <img src={matchData.away_team.schools.logo_url} className="w-full h-full object-contain drop-shadow-xl" />
+                <img src={matchData.away_team.schools.logo_url} alt={`Logo de ${matchData.away_team?.name || 'visitante'}`} className="w-full h-full object-contain drop-shadow-xl" />
               )}
             </div>
-            <h2 className="text-5xl lg:text-7xl font-black uppercase tracking-tighter text-center text-white drop-shadow-lg leading-tight">
+            <h2 className="text-2xl sm:text-3xl lg:text-7xl font-black uppercase tracking-tighter text-center text-white drop-shadow-lg leading-tight break-words max-w-full">
               {matchData.away_team?.name}
             </h2>
           </div>

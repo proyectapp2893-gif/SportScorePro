@@ -6,12 +6,16 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "vitest run",
+    "audit:ops": "node scripts/audit-operational-smoke.mjs",
+    "audit:delegates": "node scripts/audit-delegate-portal.mjs",
+    "sync:standings": "node scripts/sync-category-standings.mjs",
     "lint": "eslint"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.2",
     "lucide-react": "^1.8.0",
-    "next": "16.2.4",
+    "next": "^16.2.10",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-hot-toast": "^2.6.0",
@@ -26,6 +30,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.10"
   }
 }
