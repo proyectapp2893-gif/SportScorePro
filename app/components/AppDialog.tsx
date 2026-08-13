@@ -87,8 +87,8 @@ export function AppDialogHost() {
   const promptInvalid = current.kind === 'prompt' && inputValue.trim().length < (current.minLength || 0);
 
   return (
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
-      <section role="dialog" aria-modal="true" aria-labelledby="app-dialog-title" className="relative w-full max-w-md overflow-hidden rounded-[2rem] border border-slate-200 bg-white p-6 shadow-2xl sm:p-8">
+    <div className="fixed inset-0 z-[10000] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
+      <section role="dialog" aria-modal="true" aria-labelledby="app-dialog-title" className="relative w-full max-w-md max-h-[92dvh] overflow-y-auto rounded-t-[2rem] border border-slate-200 bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl sm:rounded-[2rem] sm:p-8">
         <div className={`absolute inset-x-0 top-0 h-1.5 ${isDanger ? 'bg-red-600' : 'bg-blue-600'}`} />
         <button type="button" onClick={close} aria-label="Cerrar" className="absolute right-5 top-5 rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-900">
           <X size={18} />

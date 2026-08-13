@@ -1,17 +1,18 @@
-import { redirect } from 'next/navigation';
-import { hasAdminSession } from '@/app/lib/auth';
+import { getScorekeeperSession, hasAdminSession } from '@/app/lib/auth';
 import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import { getClientIdBySlug } from '@/app/lib/tenant';
 import PlanilleroPortalClient from './PlanilleroPortalClient';
 
 async function loadOperationalData(slug: string) {
-  if (!(await hasAdminSession(slug))) return null;
+  const adminSession = await hasAdminSession(slug);
+  const scorekeeperId = adminSession ? null : await getScorekeeperSession(slug);
+  if (!adminSession && !scorekeeperId) return null;
 
   const clientId = await getClientIdBySlug(slug);
   if (!clientId) return null;
 
   const supabase = createServerSupabaseAdminClient();
-  const scorekeepersQuery = await supabase
+  let scorekeepersQueryBuilder = supabase
     .from('scorekeeper_users')
     .select(`
       id,
@@ -62,8 +63,10 @@ async function loadOperationalData(slug: string) {
       )
     `)
     .eq('client_id', clientId)
-    .eq('is_active', true)
-    .order('name', { ascending: true });
+    .eq('is_active', true);
+
+  if (scorekeeperId) scorekeepersQueryBuilder = scorekeepersQueryBuilder.eq('id', scorekeeperId);
+  const scorekeepersQuery = await scorekeepersQueryBuilder.order('name', { ascending: true });
 
   if (scorekeepersQuery.error) {
     return { scorekeepers: [], schemaReady: false };
@@ -87,7 +90,5 @@ async function loadOperationalData(slug: string) {
 export default async function PlanilleroPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const initialData = await loadOperationalData(slug);
-  if (!initialData) redirect(`/${slug}/login`);
-
   return <PlanilleroPortalClient slug={slug} initialData={initialData} />;
 }

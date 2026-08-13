@@ -1,14 +1,29 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Activity, CalendarDays, Eye, FileCheck2, KeyRound, Lock, LogOut, Plus, ShieldCheck, Square, Trash2, Trophy, Upload, Users } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { Activity, CalendarDays, Download, Eye, FileCheck2, FileSpreadsheet, KeyRound, Lock, LogOut, Plus, ShieldCheck, Square, Trash2, Trophy, Upload, Users, X } from 'lucide-react';
 import toast from 'react-hot-toast';
+import * as XLSX from 'xlsx';
+import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '@/app/lib/sports/rules';
 import { addDelegatePlayers, changeDelegatePassword, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, uploadDelegateSchoolLogo, uploadPlayerIdentityDocument } from './actions';
 
 type DelegatePortalClientProps = {
   slug: string;
   initialData: any | null;
 };
+
+type BulkPlayerRow = {
+  name: string;
+  identityNumber: string;
+  shirtNumber: number | null;
+  birthYear: number | null;
+  vinculo: string;
+  error?: string;
+};
+
+const ALLOWED_RELATIONSHIPS = ['PADRE DE FAMILIA', 'EX-ALUMNO', 'COLABORADOR'] as const;
+const emptyBulkRow = (): BulkPlayerRow => ({ name: '', identityNumber: '', shirtNumber: null, birthYear: null, vinculo: '' });
 
 function isRegistrationOpen(category: any) {
   if (!category?.registration_open) return false;
@@ -27,17 +42,6 @@ function initialsForTeam(team: any) {
     .toUpperCase();
 }
 
-function fallbackColor(team: any) {
-  const logoUrl = String(team?.schools?.logo_url || '');
-  const background = logoUrl.match(/[?&]background=([^&]+)/)?.[1];
-  if (background && /^[a-fA-F0-9]{6}$/.test(background)) return `#${background}`;
-
-  const palette = ['#1d4ed8', '#dc2626', '#334155', '#7c3aed', '#be123c', '#0891b2', '#059669', '#ea580c'];
-  const source = String(team?.name || team?.schools?.name || '');
-  const index = source.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0) % palette.length;
-  return palette[index];
-}
-
 function matchStatusLabel(status: string) {
   if (status === 'LIVE') return 'En vivo';
   if (status === 'FINISHED') return 'Finalizado';
@@ -51,10 +55,9 @@ function TeamLogo({ team, className = 'w-10 h-10' }: { team: any; className?: st
 
   return (
     <div
-      className={`${className} rounded-xl border border-slate-100 flex items-center justify-center p-1.5 shrink-0 overflow-hidden relative shadow-sm`}
-      style={{ backgroundColor: fallbackColor(team) }}
+      className={`${className} rounded-xl border border-slate-200 bg-white flex items-center justify-center p-1.5 shrink-0 overflow-hidden relative shadow-sm`}
     >
-      <span className="absolute inset-0 flex items-center justify-center text-white text-xs font-black">
+      <span className="absolute inset-0 flex items-center justify-center text-slate-700 text-xs font-black">
         {initialsForTeam(team)}
       </span>
       {logoUrl && !failed && (
@@ -71,20 +74,24 @@ function TeamLogo({ team, className = 'w-10 h-10' }: { team: any; className?: st
 }
 
 export default function DelegatePortalClient({ slug, initialData }: DelegatePortalClientProps) {
+  const router = useRouter();
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [data, setData] = useState<any | null>(initialData);
   const [selectedTeamId, setSelectedTeamId] = useState(initialData?.teams?.[0]?.id || '');
-  const [newPlayer, setNewPlayer] = useState({ name: '', shirtNumber: '', birthYear: '', vinculo: '' });
+  const [newPlayer, setNewPlayer] = useState({ name: '', identityNumber: '', shirtNumber: '', birthYear: '', vinculo: '' });
   const [logoUrl, setLogoUrl] = useState('');
   const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' });
   const [activeRound, setActiveRound] = useState('');
   const [selectedHistoryMatch, setSelectedHistoryMatch] = useState<any | null>(null);
+  const [showBulkUpload, setShowBulkUpload] = useState(false);
+  const [bulkRows, setBulkRows] = useState<BulkPlayerRow[]>([]);
   const [loading, setLoading] = useState(false);
 
   const selectedTeam = data?.teams?.find((team: any) => team.id === selectedTeamId) || data?.teams?.[0];
   const selectedCategory = selectedTeam?.categories;
   const canEditRoster = selectedTeam && isRegistrationOpen(selectedCategory);
   const players = data?.playersByTeam?.[selectedTeam?.id] || [];
+  const bulkFilledRows = bulkRows.filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthYear || row.vinculo);
   const events = data?.eventsByTeam?.[selectedTeam?.id] || [];
   const matches = data?.matchesByTeam?.[selectedTeam?.id] || [];
   const fullSchedule = data?.schedulesByTeam?.[selectedTeam?.id] || [];
@@ -102,13 +109,24 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const selectedRound = activeRound && scheduleRounds[activeRound] ? activeRound : roundEntries[0]?.[0] || '';
 
   useEffect(() => {
+    setData(initialData);
+  }, [initialData]);
+
+  useEffect(() => {
     setActiveRound('');
   }, [selectedTeam?.id]);
+
+  useEffect(() => {
+    if (!fullSchedule.some((match: any) => match.status === 'LIVE')) return;
+    const interval = window.setInterval(() => router.refresh(), 15000);
+    return () => window.clearInterval(interval);
+  }, [fullSchedule, router]);
 
   const eventSummary = events.reduce((acc: any, event: any) => {
     acc[event.event_type] = (acc[event.event_type] || 0) + 1;
     return acc;
   }, {});
+  const totalScoring = (eventSummary.GOAL || 0) + (eventSummary.BASKET_1 || 0) + ((eventSummary.BASKET_2 || 0) * 2) + ((eventSummary.BASKET_3 || 0) * 3);
   const eventFineAmount = (event: any) => {
     if (event.fine_status === 'PAID') return 0;
     if (typeof event.fine_amount === 'number' && event.fine_amount > 0) return event.fine_amount;
@@ -121,6 +139,45 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     return 0;
   };
   const debt = events.reduce((sum: number, event: any) => sum + eventFineAmount(event), 0);
+
+  const sportRules = getSportRules(selectedCategory?.sports?.name);
+  const standings = useMemo(() => {
+    const teamsById: Record<string, any> = {};
+    fullSchedule.forEach((match: any) => {
+      [match.home_team, match.away_team].forEach((team: any) => {
+        if (team?.id && !teamsById[team.id]) teamsById[team.id] = { ...team, played: 0, won: 0, drawn: 0, lost: 0, goals_for: 0, goals_against: 0, points: 0 };
+      });
+    });
+    fullSchedule.filter((match: any) => match.status === 'FINISHED').forEach((match: any) => {
+      const home = teamsById[match.home_team_id];
+      const away = teamsById[match.away_team_id];
+      if (!home || !away) return;
+      const score = getMatchScoreForStandings(match, sportRules);
+      const resultPoints = getResultPoints(score.home, score.away, sportRules);
+      home.played += 1; away.played += 1;
+      home.points += resultPoints.home; away.points += resultPoints.away;
+      if (score.countsForScoreColumns) {
+        home.goals_for += score.home; home.goals_against += score.away;
+        away.goals_for += score.away; away.goals_against += score.home;
+      }
+      if (score.home > score.away) { home.won += 1; away.lost += 1; }
+      else if (score.away > score.home) { away.won += 1; home.lost += 1; }
+      else { home.drawn += 1; away.drawn += 1; }
+    });
+    return Object.values(teamsById).sort((a: any, b: any) => compareTeamsForStandings(a, b, sportRules));
+  }, [fullSchedule, sportRules]);
+
+  const selectedStanding = standings.find((team: any) => team.id === selectedTeam?.id);
+  const scorers = useMemo(() => {
+    const byPlayer: Record<string, any> = {};
+    events.filter((event: any) => ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3'].includes(event.event_type)).forEach((event: any) => {
+      if (!event.player_id) return;
+      if (!byPlayer[event.player_id]) byPlayer[event.player_id] = { id: event.player_id, name: event.players?.name || 'JUGADOR', shirtNumber: event.players?.shirt_number, total: 0 };
+      byPlayer[event.player_id].total += event.event_type === 'BASKET_3' ? 3 : event.event_type === 'BASKET_2' ? 2 : 1;
+    });
+    return Object.values(byPlayer).sort((a: any, b: any) => b.total - a.total);
+  }, [events]);
+  const cardEvents = events.filter((event: any) => event.event_type === 'YELLOW' || event.event_type === 'RED');
 
   const handleLogin = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -164,6 +221,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     setLoading(true);
     const result = await addDelegatePlayers(slug, selectedTeam.id, [{
       name: newPlayer.name,
+      identityNumber: newPlayer.identityNumber,
       shirtNumber: newPlayer.shirtNumber ? Number(newPlayer.shirtNumber) : null,
       birthYear: newPlayer.birthYear ? Number(newPlayer.birthYear) : null,
       vinculo: newPlayer.vinculo,
@@ -171,10 +229,131 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     if (!result.success) toast.error(result.error);
     else {
       toast.success('Jugador inscrito');
-      setNewPlayer({ name: '', shirtNumber: '', birthYear: '', vinculo: '' });
+      setNewPlayer({ name: '', identityNumber: '', shirtNumber: '', birthYear: '', vinculo: '' });
       window.location.reload();
     }
     setLoading(false);
+  };
+
+  const normalizeExcelHeader = (value: string) => value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase();
+
+  const validateBulkRows = (rows: BulkPlayerRow[]) => {
+    const currentYear = new Date().getFullYear();
+    const normalized = rows.map((row) => ({
+      ...row,
+      name: row.name.trim().toUpperCase(),
+      identityNumber: row.identityNumber.trim().replace(/\D/g, ''),
+      vinculo: row.vinculo.trim().toUpperCase(),
+      error: undefined,
+    }));
+    const meaningfulRows = normalized.filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthYear || row.vinculo);
+
+    return normalized.map((row) => {
+      if (!row.name && !row.identityNumber && !row.shirtNumber && !row.birthYear && !row.vinculo) return row;
+      const errors: string[] = [];
+      if (!row.name) errors.push('Falta nombre');
+      if (row.identityNumber.length < 5 || row.identityNumber.length > 30) errors.push('Identidad inválida');
+      if (!Number.isInteger(row.shirtNumber) || Number(row.shirtNumber) < 1 || Number(row.shirtNumber) > 999) errors.push('Dorsal inválido');
+      if (!Number.isInteger(row.birthYear) || Number(row.birthYear) < 1900 || Number(row.birthYear) > currentYear) errors.push('Año inválido');
+      if (!ALLOWED_RELATIONSHIPS.includes(row.vinculo as typeof ALLOWED_RELATIONSHIPS[number])) errors.push('Vínculo inválido');
+      if (row.shirtNumber && meaningfulRows.filter((item) => item.shirtNumber === row.shirtNumber).length > 1) errors.push('Dorsal repetido');
+      if (row.identityNumber && meaningfulRows.filter((item) => item.identityNumber === row.identityNumber).length > 1) errors.push('Identidad repetida');
+      return { ...row, error: errors.join(' · ') || undefined };
+    });
+  };
+
+  const updateBulkRow = (index: number, field: keyof BulkPlayerRow, value: string) => {
+    const normalizedValue = field === 'identityNumber' ? value.replace(/\D/g, '') : value;
+    const rows = bulkRows.map((row, rowIndex) => rowIndex === index ? {
+      ...row,
+      [field]: field === 'shirtNumber' || field === 'birthYear' ? (normalizedValue ? Number(normalizedValue) : null) : normalizedValue,
+    } : row);
+    setBulkRows(validateBulkRows(rows));
+  };
+
+  const handleBulkPaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
+    const text = event.clipboardData.getData('text/plain');
+    if (!text.includes('\t') && !text.includes('\n')) return;
+    event.preventDefault();
+    const rows = text.split(/\r?\n/).filter((line) => line.trim()).map((line): BulkPlayerRow => {
+      const [name = '', identityNumber = '', shirtNumber = '', birthYear = '', vinculo = ''] = line.split('\t');
+      return {
+        name,
+        identityNumber,
+        shirtNumber: shirtNumber ? Number(shirtNumber) : null,
+        birthYear: birthYear ? Number(birthYear) : null,
+        vinculo,
+      };
+    });
+    setBulkRows(validateBulkRows([...rows, ...Array.from({ length: Math.max(0, 8 - rows.length) }, emptyBulkRow)]));
+    toast.success(`${rows.length} filas pegadas desde Excel`);
+  };
+
+  const downloadBulkTemplate = () => {
+    const worksheet = XLSX.utils.json_to_sheet([
+      {
+        'NOMBRE COMPLETO': 'MANUEL RAMIREZ',
+        'NUMERO DE IDENTIDAD': '1234567890',
+        DORSAL: 10,
+        'ANO NACIMIENTO': 1985,
+        'VINCULO CON EL COLEGIO': 'EX-ALUMNO',
+      },
+    ]);
+    worksheet['!cols'] = [{ wch: 32 }, { wch: 24 }, { wch: 12 }, { wch: 20 }, { wch: 28 }];
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'JUGADORES');
+    XLSX.writeFile(workbook, `Plantilla_${selectedTeam?.name || 'EQUIPO'}_Jugadores.xlsx`);
+    toast.success('Plantilla descargada');
+  };
+
+  const handleBulkFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!/\.(xlsx|xls)$/i.test(file.name)) return toast.error('Selecciona un archivo Excel .xlsx o .xls.');
+
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: '' });
+      const parsedRows = rawRows.map((rawRow): BulkPlayerRow => {
+        const row = Object.fromEntries(Object.entries(rawRow).map(([key, value]) => [normalizeExcelHeader(key), value]));
+        const name = String(row['NOMBRE COMPLETO'] || '').trim().toUpperCase();
+        const identityNumber = String(row['NUMERO DE IDENTIDAD'] || '').trim().replace(/\D/g, '');
+        const shirtNumber = Number(String(row.DORSAL || '').trim());
+        const birthYear = Number(String(row['ANO NACIMIENTO'] || '').trim());
+        const vinculo = String(row['VINCULO CON EL COLEGIO'] || '').trim().toUpperCase();
+        return { name, identityNumber, shirtNumber: shirtNumber || null, birthYear: birthYear || null, vinculo };
+      }).filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthYear || row.vinculo);
+
+      if (parsedRows.length === 0) return toast.error('El archivo no contiene jugadores.');
+      setBulkRows(validateBulkRows([...parsedRows, ...Array.from({ length: Math.max(0, 8 - parsedRows.length) }, emptyBulkRow)]));
+    } catch {
+      toast.error('No se pudo leer el archivo Excel.');
+    }
+  };
+
+  const submitBulkPlayers = async () => {
+    const playersToInsert = bulkRows.filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthYear || row.vinculo);
+    if (!selectedTeam || playersToInsert.length === 0 || playersToInsert.some((row) => row.error)) return;
+    setLoading(true);
+    const result = await addDelegatePlayers(slug, selectedTeam.id, playersToInsert.map((row) => ({
+      name: row.name,
+      identityNumber: row.identityNumber,
+      shirtNumber: row.shirtNumber,
+      birthYear: row.birthYear,
+      vinculo: row.vinculo,
+    })));
+    setLoading(false);
+    if (!result.success) return toast.error(result.error);
+    toast.success(`${result.data.inserted} jugadores inscritos`);
+    setShowBulkUpload(false);
+    setBulkRows([]);
+    window.location.reload();
   };
 
   const handleDeletePlayer = async (playerId: string) => {
@@ -324,20 +503,132 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="bg-slate-950 text-white px-4 py-8">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <p className="text-blue-400 text-[10px] font-black uppercase tracking-[0.25em]">Portal Delegado</p>
-            <h1 className="text-3xl md:text-5xl font-black uppercase tracking-tighter">{data.delegate.name}</h1>
+    <main className="relative min-h-screen overflow-hidden bg-slate-50 text-slate-900">
+      {selectedTeam?.schools?.logo_url && (
+        <div className="pointer-events-none absolute inset-x-0 top-40 z-0 flex justify-center overflow-hidden" aria-hidden="true">
+          <img
+            src={selectedTeam.schools.logo_url}
+            alt=""
+            className="h-auto w-[min(78vw,760px)] select-none object-contain opacity-[0.035] grayscale"
+            referrerPolicy="no-referrer"
+          />
+        </div>
+      )}
+      <header className="relative z-10 overflow-hidden bg-slate-950 px-4 py-6 text-white sm:py-8">
+        {selectedTeam?.schools?.logo_url && (
+          <img
+            src={selectedTeam.schools.logo_url}
+            alt=""
+            className="pointer-events-none absolute -bottom-28 left-1/2 h-80 w-80 -translate-x-1/2 object-contain opacity-[0.045] grayscale sm:left-auto sm:right-20 sm:translate-x-0"
+            aria-hidden="true"
+            referrerPolicy="no-referrer"
+          />
+        )}
+        <div className="relative mx-auto flex max-w-6xl items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-4 sm:gap-6">
+            {selectedTeam && (
+              <TeamLogo team={selectedTeam} className="h-20 w-20 rounded-2xl sm:h-28 sm:w-28 sm:rounded-[1.75rem]" />
+            )}
+            <div className="min-w-0">
+              <p className="text-blue-400 text-[9px] font-black uppercase tracking-[0.25em] sm:text-[10px]">Portal Delegado</p>
+              <h1 className="truncate text-2xl font-black uppercase tracking-tighter sm:text-4xl md:text-5xl">{data.delegate.name}</h1>
+              {selectedTeam && (
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[9px] font-black uppercase tracking-widest text-slate-400 sm:text-[10px]">
+                  <span className="text-white">{selectedTeam.name}</span>
+                  <span className="text-blue-500">•</span>
+                  <span>{selectedTeam.categories?.sports?.name} / {selectedTeam.categories?.name}</span>
+                </div>
+              )}
+            </div>
           </div>
-          <button onClick={handleLogout} className="w-fit flex items-center gap-2 bg-white/10 hover:bg-white/15 rounded-xl px-4 py-3 text-xs font-black uppercase tracking-widest">
-            <LogOut size={16} /> Salir
+          <button onClick={handleLogout} aria-label="Salir" className="flex w-fit shrink-0 items-center gap-2 rounded-xl bg-white/10 p-3 text-xs font-black uppercase tracking-widest hover:bg-white/15 sm:px-4">
+            <LogOut size={16} /> <span className="hidden sm:inline">Salir</span>
           </button>
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto px-4 py-8 space-y-6">
+      <div className="relative z-10 max-w-6xl mx-auto px-4 py-8 space-y-6">
+        {showBulkUpload && (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+            <section role="dialog" aria-modal="true" aria-labelledby="bulk-upload-title" className="flex h-[100dvh] w-full max-w-5xl flex-col overflow-hidden bg-white shadow-2xl sm:h-auto sm:max-h-[94dvh] sm:rounded-[2rem] sm:border sm:border-slate-200">
+              <header className="flex items-start justify-between gap-4 border-b border-slate-100 p-5 sm:p-6">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-600">Carga masiva</p>
+                  <h2 id="bulk-upload-title" className="text-xl font-black uppercase tracking-tight sm:text-2xl">Importar jugadores desde Excel</h2>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Equipo: {selectedTeam?.name}</p>
+                </div>
+                <button type="button" onClick={() => { setShowBulkUpload(false); setBulkRows([]); }} className="rounded-xl bg-slate-100 p-3 text-slate-500 hover:text-slate-900" aria-label="Cerrar"><X size={18} /></button>
+              </header>
+
+              <div className="flex-1 space-y-5 overflow-y-auto overscroll-contain p-4 sm:p-6">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <button type="button" onClick={downloadBulkTemplate} className="flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-4 text-xs font-black uppercase tracking-widest text-blue-700">
+                    <Download size={16} /> Descargar plantilla
+                  </button>
+                  <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-4 text-xs font-black uppercase tracking-widest text-white">
+                    <FileSpreadsheet size={16} /> Seleccionar Excel
+                    <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleBulkFile} />
+                  </label>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-[10px] font-bold uppercase leading-relaxed tracking-wider text-slate-500">
+                  Escribe directamente o pega cinco columnas desde Excel: Nombre completo, Número de identidad, Dorsal, Año de nacimiento y Vínculo. Vínculos permitidos: Padre de familia, Ex-alumno o Colaborador.
+                </div>
+
+                {bulkRows.length > 0 && (
+                  <div onPaste={handleBulkPaste} className="hidden overflow-x-auto rounded-2xl border border-slate-200 md:block">
+                    <table className="min-w-full text-left text-xs">
+                      <thead className="bg-slate-950 text-[9px] font-black uppercase tracking-widest text-white">
+                        <tr><th className="p-3">#</th><th className="min-w-56 p-3">Nombre completo</th><th className="min-w-52 p-3">Número de identidad</th><th className="min-w-24 p-3">Dorsal</th><th className="min-w-44 p-3">Año de nacimiento</th><th className="min-w-52 p-3">Vínculo</th><th className="min-w-40 p-3">Validación</th><th className="p-3"></th></tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {bulkRows.map((row, index) => (
+                          <tr key={`${row.name}-${index}`} className={row.error ? 'bg-red-50' : 'bg-white'}>
+                            <td className="p-3 font-black text-slate-400">{index + 1}</td>
+                            <td className="p-2"><input value={row.name} onChange={(event) => updateBulkRow(index, 'name', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-black uppercase outline-none focus:border-blue-500" /></td>
+                            <td className="p-2"><input type="text" inputMode="numeric" pattern="[0-9]*" value={row.identityNumber} onChange={(event) => updateBulkRow(index, 'identityNumber', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500" /></td>
+                            <td className="p-2"><input type="number" inputMode="numeric" min="1" max="999" value={row.shirtNumber ?? ''} onChange={(event) => updateBulkRow(index, 'shirtNumber', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500" /></td>
+                            <td className="p-2"><input type="number" inputMode="numeric" min="1900" max={new Date().getFullYear()} value={row.birthYear ?? ''} onChange={(event) => updateBulkRow(index, 'birthYear', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500" /></td>
+                            <td className="p-2"><select value={row.vinculo} onChange={(event) => updateBulkRow(index, 'vinculo', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500"><option value="">Seleccionar</option>{ALLOWED_RELATIONSHIPS.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}</select></td>
+                            <td className={`p-3 text-[10px] font-black uppercase ${row.error ? 'text-red-600' : row.name ? 'text-emerald-600' : 'text-slate-300'}`}>{row.error || (row.name ? 'LISTO' : 'FILA VACÍA')}</td>
+                            <td className="p-2"><button type="button" onClick={() => setBulkRows(validateBulkRows(bulkRows.filter((_, rowIndex) => rowIndex !== index)))} className="rounded-lg p-2 text-red-500 hover:bg-red-50" aria-label={`Eliminar fila ${index + 1}`}><Trash2 size={14} /></button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {bulkRows.length > 0 && (
+                  <div onPaste={handleBulkPaste} className="space-y-3 md:hidden">
+                    {bulkRows.map((row, index) => (
+                      <article key={`mobile-${index}`} className={`rounded-2xl border p-4 ${row.error ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-white'}`}>
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Jugador {index + 1}</p>
+                          <button type="button" onClick={() => setBulkRows(validateBulkRows(bulkRows.filter((_, rowIndex) => rowIndex !== index)))} className="rounded-lg p-2 text-red-500 hover:bg-red-100" aria-label={`Eliminar fila ${index + 1}`}><Trash2 size={15} /></button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className="col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Nombre completo<input value={row.name} onChange={(event) => updateBulkRow(index, 'name', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-black uppercase text-slate-900 outline-none focus:border-blue-500" /></label>
+                          <label className="col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Número de identidad<input type="text" inputMode="numeric" pattern="[0-9]*" value={row.identityNumber} onChange={(event) => updateBulkRow(index, 'identityNumber', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-900 outline-none focus:border-blue-500" /></label>
+                          <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Dorsal<input type="number" inputMode="numeric" min="1" max="999" value={row.shirtNumber ?? ''} onChange={(event) => updateBulkRow(index, 'shirtNumber', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-900 outline-none focus:border-blue-500" /></label>
+                          <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Año de nacimiento<input type="number" inputMode="numeric" min="1900" max={new Date().getFullYear()} value={row.birthYear ?? ''} onChange={(event) => updateBulkRow(index, 'birthYear', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-900 outline-none focus:border-blue-500" /></label>
+                          <label className="col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Vínculo<select value={row.vinculo} onChange={(event) => updateBulkRow(index, 'vinculo', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-bold uppercase text-slate-900 outline-none focus:border-blue-500"><option value="">Seleccionar</option>{ALLOWED_RELATIONSHIPS.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}</select></label>
+                        </div>
+                        <p className={`mt-3 rounded-xl px-3 py-2 text-[10px] font-black uppercase ${row.error ? 'bg-red-100 text-red-600' : row.name ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-50 text-slate-400'}`}>{row.error || (row.name ? 'Registro listo' : 'Fila vacía')}</p>
+                      </article>
+                    ))}
+                  </div>
+                )}
+                <button type="button" onClick={() => setBulkRows(validateBulkRows([...bulkRows, emptyBulkRow()]))} className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500 hover:border-blue-400 hover:text-blue-600"><Plus size={14} /> Agregar fila</button>
+              </div>
+
+              <footer className="flex flex-col-reverse gap-3 border-t border-slate-100 bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:justify-end sm:p-6">
+                <button type="button" onClick={() => { setShowBulkUpload(false); setBulkRows([]); }} className="rounded-xl bg-slate-100 px-5 py-3 text-xs font-black uppercase tracking-widest text-slate-600">Cancelar</button>
+                <button type="button" disabled={loading || bulkFilledRows.length === 0 || bulkFilledRows.some((row) => row.error)} onClick={submitBulkPlayers} className="rounded-xl bg-blue-600 px-5 py-3 text-xs font-black uppercase tracking-widest text-white disabled:opacity-40">Confirmar carga ({bulkFilledRows.length})</button>
+              </footer>
+            </section>
+          </div>
+        )}
+
         {selectedHistoryMatch && (
           <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white rounded-[2rem] border border-slate-200 shadow-2xl w-full max-w-3xl max-h-[88vh] overflow-hidden">
@@ -417,6 +708,18 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
           </div>
         )}
 
+        {data.teams.length === 0 && (
+          <section className="rounded-[2rem] border border-amber-200 bg-white p-8 text-center shadow-sm sm:p-12">
+            <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
+              <ShieldCheck size={30} />
+            </div>
+            <h2 className="text-2xl font-black uppercase tracking-tight text-slate-900">Sin equipos asignados</h2>
+            <p className="mx-auto mt-3 max-w-xl text-sm font-semibold leading-relaxed text-slate-500">
+              Tu perfil está activo, pero todavía no tiene un equipo asociado. Comunícate con el administrador del torneo para completar la asignación.
+            </p>
+          </section>
+        )}
+
         <div className="flex overflow-x-auto gap-3 pb-2">
           {data.teams.map((team: any) => (
             <button key={team.id} onClick={() => setSelectedTeamId(team.id)} className={`shrink-0 flex items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-all ${selectedTeam?.id === team.id ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-100' : 'bg-white text-slate-700 border-slate-200 hover:border-blue-300'}`}>
@@ -432,50 +735,105 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
         {selectedTeam && (
           <>
             <section className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <div className="bg-white border border-slate-200 rounded-2xl p-4">
+              <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
                 <Users className="text-blue-600 mb-2" size={20} />
                 <p className="text-2xl font-black">{players.length}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Inscritos</p>
               </div>
-              <div className="bg-white border border-slate-200 rounded-2xl p-4">
+              <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
                 <Trophy className="text-emerald-600 mb-2" size={20} />
-                <p className="text-2xl font-black">{eventSummary.GOAL || eventSummary.BASKET_1 || 0}</p>
+                <p className="text-2xl font-black">{totalScoring}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Goles/Puntos</p>
               </div>
-              <div className="bg-white border border-slate-200 rounded-2xl p-4">
+              <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
                 <Square className="text-yellow-400 fill-yellow-400 mb-2" size={20} />
                 <p className="text-2xl font-black">{eventSummary.YELLOW || 0}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Amarillas</p>
               </div>
-              <div className="bg-white border border-slate-200 rounded-2xl p-4">
+              <div className="rounded-2xl border border-red-100 bg-red-50/70 p-4">
                 <Square className="text-red-600 fill-red-600 mb-2" size={20} />
                 <p className="text-2xl font-black">{eventSummary.RED || 0}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Rojas</p>
               </div>
-              <div className="bg-white border border-slate-200 rounded-2xl p-4">
+              <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-4">
                 <Activity className="text-slate-700 mb-2" size={20} />
                 <p className="text-2xl font-black">${debt.toLocaleString('es-CO')}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Multas</p>
               </div>
             </section>
 
+            <section className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
+              <div className="overflow-hidden rounded-[2rem] border border-blue-100 bg-blue-50/35">
+                <div className="flex items-center justify-between border-b border-blue-100 bg-blue-50/80 p-5">
+                  <div>
+                    <h2 className="text-lg font-black uppercase">Tabla de posiciones</h2>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Actualizada con partidos finalizados</p>
+                  </div>
+                  {fullSchedule.some((match: any) => match.status === 'LIVE') && <span className="rounded-full bg-red-50 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-red-600">En vivo · actualiza cada 15 s</span>}
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-[650px] w-full text-xs">
+                    <thead className="bg-slate-950 text-[9px] font-black uppercase tracking-widest text-white"><tr><th className="p-3 text-left">Pos.</th><th className="p-3 text-left">Equipo</th><th className="p-3">PJ</th><th className="p-3">G</th><th className="p-3">E</th><th className="p-3">P</th><th className="p-3">{sportRules.scoreLabels.for}</th><th className="p-3">{sportRules.scoreLabels.against}</th><th className="p-3">DG</th><th className="p-3">PTS</th></tr></thead>
+                    <tbody className="divide-y divide-blue-100 bg-white/85">
+                      {standings.map((team: any, index: number) => <tr key={team.id} className={team.id === selectedTeam.id ? 'bg-blue-100/70' : ''}><td className="p-3 font-black text-slate-400">{index + 1}</td><td className="p-3 font-black uppercase">{team.name}</td><td className="p-3 text-center font-bold">{team.played}</td><td className="p-3 text-center font-bold">{team.won}</td><td className="p-3 text-center font-bold">{team.drawn}</td><td className="p-3 text-center font-bold">{team.lost}</td><td className="p-3 text-center font-bold">{team.goals_for}</td><td className="p-3 text-center font-bold">{team.goals_against}</td><td className="p-3 text-center font-bold">{team.goals_for - team.goals_against}</td><td className="p-3 text-center font-black text-blue-600">{team.points}</td></tr>)}
+                    </tbody>
+                  </table>
+                  {standings.length === 0 && <p className="p-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">No hay equipos programados</p>}
+                </div>
+              </div>
+
+              <div className="rounded-[2rem] border border-indigo-100 bg-indigo-50/45 p-5">
+                <h2 className="text-lg font-black uppercase">Estadísticas del equipo</h2>
+                <p className="mb-5 text-[9px] font-black uppercase tracking-widest text-slate-400">Rendimiento oficial</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {[['Posición', selectedStanding ? `${standings.indexOf(selectedStanding) + 1}°` : '-'], ['Partidos', selectedStanding?.played || 0], ['Ganados', selectedStanding?.won || 0], ['Empatados', selectedStanding?.drawn || 0], ['Perdidos', selectedStanding?.lost || 0], ['Diferencia', selectedStanding ? selectedStanding.goals_for - selectedStanding.goals_against : 0]].map(([label, value]) => <div key={String(label)} className="rounded-2xl border border-indigo-100 bg-white/75 p-4"><p className="text-xl font-black">{value}</p><p className="text-[9px] font-black uppercase tracking-widest text-indigo-400">{label}</p></div>)}
+                </div>
+              </div>
+            </section>
+
+            <section className="grid gap-6 lg:grid-cols-2">
+              <div className="rounded-[2rem] border border-emerald-100 bg-emerald-50/45 p-5">
+                <h2 className="text-lg font-black uppercase">{sportRules.scoreLabels.scorerPlural} y goleadores</h2>
+                <div className="mt-4 divide-y divide-slate-100">
+                  {scorers.map((player: any, index: number) => <div key={player.id} className="flex items-center justify-between py-3"><div className="flex items-center gap-3"><span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-xs font-black text-emerald-700">{index + 1}</span><div><p className="text-xs font-black uppercase">{player.name}</p><p className="text-[9px] font-bold uppercase text-slate-400">Dorsal #{player.shirtNumber || '-'}</p></div></div><span className="text-xl font-black text-emerald-600">{player.total}</span></div>)}
+                  {scorers.length === 0 && <p className="py-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Sin anotaciones registradas</p>}
+                </div>
+              </div>
+              <div className="rounded-[2rem] border border-amber-100 bg-amber-50/45 p-5">
+                <h2 className="text-lg font-black uppercase">Tarjetas y sanciones</h2>
+                <div className="mt-4 divide-y divide-slate-100">
+                  {cardEvents.map((event: any) => <div key={event.id} className="flex items-center justify-between gap-3 py-3"><div className="flex min-w-0 items-center gap-3"><Square size={18} className={event.event_type === 'RED' ? 'fill-red-600 text-red-600' : 'fill-yellow-400 text-yellow-400'} /><div className="min-w-0"><p className="truncate text-xs font-black uppercase">{event.players?.name || 'Jugador sin asignar'}</p><p className="text-[9px] font-bold uppercase text-slate-400">{eventLabel(event.event_type)} · {event.fine_status === 'PAID' ? 'Pagada' : 'Pendiente'}</p></div></div><span className="shrink-0 text-xs font-black">${eventFineAmount(event).toLocaleString('es-CO')}</span></div>)}
+                  {cardEvents.length === 0 && <p className="py-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Sin tarjetas ni sanciones</p>}
+                </div>
+              </div>
+            </section>
+
             <section className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.9fr)] gap-6">
               <div className="bg-white border border-slate-200 rounded-[2rem] overflow-hidden">
-                <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+                <div className="p-5 border-b border-slate-100 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <h2 className="font-black uppercase text-xl">Nómina</h2>
                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
                       {canEditRoster ? 'Inscripción abierta' : 'Inscripción cerrada'}
                     </p>
                   </div>
-                  {!canEditRoster && <Lock className="text-red-500" />}
+                  {canEditRoster ? (
+                    <button type="button" onClick={() => { setBulkRows(Array.from({ length: 8 }, emptyBulkRow)); setShowBulkUpload(true); }} className="flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white hover:bg-emerald-700">
+                      <FileSpreadsheet size={15} /> Carga masiva
+                    </button>
+                  ) : <Lock className="text-red-500" />}
                 </div>
                 {canEditRoster && (
-                  <form onSubmit={handleAddPlayer} className="grid grid-cols-1 md:grid-cols-5 gap-2 p-4 bg-slate-50 border-b border-slate-100">
-                    <input value={newPlayer.name} onChange={(e) => setNewPlayer({ ...newPlayer, name: e.target.value.toUpperCase() })} placeholder="Nombre" className="md:col-span-2 bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold uppercase outline-none" />
-                    <input value={newPlayer.shirtNumber} onChange={(e) => setNewPlayer({ ...newPlayer, shirtNumber: e.target.value })} placeholder="Dorsal" className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none" />
-                    <input value={newPlayer.birthYear} onChange={(e) => setNewPlayer({ ...newPlayer, birthYear: e.target.value })} placeholder="Año" className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none" />
-                    <button disabled={loading} className="bg-blue-600 text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-1"><Plus size={14} /> Agregar</button>
+                  <form onSubmit={handleAddPlayer} className="grid grid-cols-1 gap-3 border-b border-slate-100 bg-slate-50 p-4 sm:grid-cols-2 lg:grid-cols-6">
+                    <input required value={newPlayer.name} onChange={(e) => setNewPlayer({ ...newPlayer, name: e.target.value.toUpperCase() })} placeholder="Nombre completo" className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold uppercase outline-none focus:border-blue-500 sm:col-span-1 lg:col-span-3" />
+                    <input required type="text" inputMode="numeric" pattern="[0-9]*" value={newPlayer.identityNumber} onChange={(e) => setNewPlayer({ ...newPlayer, identityNumber: e.target.value.replace(/\D/g, '') })} placeholder="Número de identidad" minLength={5} maxLength={30} className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold outline-none focus:border-blue-500 sm:col-span-1 lg:col-span-3" />
+                    <input required type="number" inputMode="numeric" min="1" max="999" value={newPlayer.shirtNumber} onChange={(e) => setNewPlayer({ ...newPlayer, shirtNumber: e.target.value })} placeholder="Dorsal" className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold outline-none focus:border-blue-500 lg:col-span-1" />
+                    <input required type="number" inputMode="numeric" min="1900" max={new Date().getFullYear()} value={newPlayer.birthYear} onChange={(e) => setNewPlayer({ ...newPlayer, birthYear: e.target.value })} placeholder="Año de nacimiento" className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold outline-none focus:border-blue-500 lg:col-span-2" />
+                    <select required value={newPlayer.vinculo} onChange={(e) => setNewPlayer({ ...newPlayer, vinculo: e.target.value })} className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold uppercase outline-none focus:border-blue-500 lg:col-span-2">
+                      <option value="">Vínculo con el colegio</option>
+                      {ALLOWED_RELATIONSHIPS.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}
+                    </select>
+                    <button disabled={loading} className="flex items-center justify-center gap-1 rounded-xl bg-blue-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white disabled:opacity-50 lg:col-span-1"><Plus size={14} /> Agregar</button>
                   </form>
                 )}
                 <div className="divide-y divide-slate-50">
@@ -484,7 +842,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                       <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
                         <p className="font-black uppercase text-sm">{player.name}</p>
-                        <p className="text-[10px] font-bold text-slate-400">#{player.shirt_number || '-'} / {player.birth_year || 'Sin año'}</p>
+                        <p className="text-[10px] font-bold text-slate-400">ID {player.identity_number || 'SIN REGISTRAR'} / #{player.shirt_number || '-'} / {player.birth_year || 'Sin año'} / {player.vinculo || 'Sin vínculo'}</p>
                       </div>
                       {canEditRoster && <button onClick={() => handleDeletePlayer(player.id)} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><Trash2 size={16} /></button>}
                       </div>

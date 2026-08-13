@@ -2,8 +2,10 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Activity, ArrowLeft, CalendarDays, ExternalLink, MonitorPlay, Play, ShieldCheck, Trophy, UserCheck } from 'lucide-react';
+import { Activity, ArrowLeft, CalendarDays, ExternalLink, Lock, MonitorPlay, Play, ShieldCheck, Trophy, User, UserCheck } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { getSportKind } from '@/app/lib/sports/rules';
+import { loginScorekeeper } from './actions';
 import MesaFutbol from '../admin/mesa/components/MesaFutbol';
 import MesaBaloncesto from '../admin/mesa/components/MesaBaloncesto';
 import MesaVoleibol from '../admin/mesa/components/MesaVoleibol';
@@ -39,12 +41,14 @@ function matchDateTime(match: any) {
   return `${match.matchdays?.scheduled_date || 'Sin fecha'} / ${match.scheduled_time?.slice(0, 5) || '--:--'}`;
 }
 
-export default function PlanilleroPortalClient({ slug, initialData }: { slug: string; initialData: any }) {
+export default function PlanilleroPortalClient({ slug, initialData }: { slug: string; initialData: any | null }) {
+  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
+  const [loginLoading, setLoginLoading] = useState(false);
   const [selectedSport, setSelectedSport] = useState('');
   const [selectedScorekeeperId, setSelectedScorekeeperId] = useState('');
   const [activeMatch, setActiveMatch] = useState<any | null>(null);
 
-  const scorekeepers = initialData.scorekeepers || [];
+  const scorekeepers = initialData?.scorekeepers || [];
   const selectedScorekeeper = scorekeepers.find((user: any) => user.id === selectedScorekeeperId);
 
   const sports = useMemo(() => {
@@ -87,6 +91,54 @@ export default function PlanilleroPortalClient({ slug, initialData }: { slug: st
     if (sportKind === 'baseball') return <MesaSoftbol {...commonProps} />;
     return <MesaFutbol {...commonProps} />;
   };
+
+  const handleLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setLoginLoading(true);
+    const result = await loginScorekeeper(slug, loginForm.username, loginForm.password);
+    setLoginLoading(false);
+    if (!result.success) return toast.error(result.error);
+    window.location.reload();
+  };
+
+  if (!initialData) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-4">
+        <form onSubmit={handleLogin} className="w-full max-w-md rounded-[2rem] border border-slate-800 bg-slate-900 p-6 shadow-2xl sm:p-8 space-y-5">
+          <div className="text-center">
+            <ShieldCheck size={42} className="mx-auto mb-3 text-blue-500" />
+            <p className="text-blue-400 text-[10px] font-black uppercase tracking-[0.25em]">Portal operativo</p>
+            <h1 className="text-3xl font-black uppercase tracking-tighter">Jueces y Planilleros</h1>
+            <p className="mt-2 text-[10px] font-black uppercase tracking-widest text-slate-500">Ingresa con el usuario asignado</p>
+          </div>
+          <label className="relative block">
+            <User size={17} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              required
+              value={loginForm.username}
+              onChange={(event) => setLoginForm({ ...loginForm, username: event.target.value })}
+              placeholder="Usuario"
+              className="w-full rounded-xl border border-slate-700 bg-slate-950 py-3 pl-12 pr-4 text-sm font-bold outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="relative block">
+            <Lock size={17} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              required
+              type="password"
+              value={loginForm.password}
+              onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })}
+              placeholder="Contraseña"
+              className="w-full rounded-xl border border-slate-700 bg-slate-950 py-3 pl-12 pr-4 text-sm font-bold outline-none focus:border-blue-500"
+            />
+          </label>
+          <button disabled={loginLoading} className="w-full rounded-xl bg-blue-600 py-4 text-xs font-black uppercase tracking-widest hover:bg-blue-500 disabled:opacity-50">
+            {loginLoading ? 'Validando acceso...' : 'Ingresar al portal'}
+          </button>
+        </form>
+      </main>
+    );
+  }
 
   if (activeMatch) return renderMesa();
 

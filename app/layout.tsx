@@ -21,8 +21,9 @@ export default function RootLayout({
       <body className={`${inter.className} min-h-screen antialiased`}>
         <Toaster 
           position="top-center"
+          containerStyle={{ inset: 'max(12px, env(safe-area-inset-top)) 12px auto' }}
           toastOptions={{
-            style: { background: '#0f172a', color: '#fff', border: '1px solid #1e293b', borderRadius: '16px', fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase' },
+            style: { width: 'min(92vw, 440px)', maxWidth: '440px', background: '#0f172a', color: '#fff', border: '1px solid #1e293b', borderRadius: '16px', fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase' },
             success: { iconTheme: { primary: '#84cc16', secondary: '#0f172a' } },
             error: { iconTheme: { primary: '#ef4444', secondary: '#0f172a' } },
           }}

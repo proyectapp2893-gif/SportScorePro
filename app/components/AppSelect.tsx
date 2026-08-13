@@ -54,7 +54,7 @@ export default function AppSelect({
       {open && (
         <>
           <button type="button" aria-label="Cerrar selector" className="fixed inset-0 z-30 cursor-default" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-40 max-h-80 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl shadow-slate-300/40">
+          <div className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-40 max-h-[50dvh] overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl shadow-slate-300/40 sm:max-h-80">
             {options.map((option) => {
               const active = option.value === value;
               return (

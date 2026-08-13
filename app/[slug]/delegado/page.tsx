@@ -93,7 +93,7 @@ async function loadDelegatePortalData(slug: string) {
   if (teamIds.length > 0) {
     const { data: players } = await supabase
       .from('players')
-      .select('id, team_id, name, shirt_number, birth_year, vinculo, player_documents(id, document_type, status, rejection_reason, original_filename, updated_at)')
+      .select('id, team_id, name, identity_number, shirt_number, birth_year, vinculo, player_documents(id, document_type, status, rejection_reason, original_filename, updated_at)')
       .in('team_id', teamIds)
       .order('name');
 
@@ -122,7 +122,7 @@ async function loadDelegatePortalData(slug: string) {
     const { data: matches } = await supabase
       .from('matches')
       .select(`
-        id, status, home_score, away_score, scheduled_time,
+        id, status, home_score, away_score, home_sets, away_sets, scheduled_time,
         home_team_id,
         away_team_id,
         home_team:teams!home_team_id(id, name, schools(name, logo_url)),
@@ -160,7 +160,7 @@ async function loadDelegatePortalData(slug: string) {
     const { data: categoryMatches } = await supabase
       .from('matches')
       .select(`
-        id, status, home_score, away_score, scheduled_time,
+        id, status, home_score, away_score, home_sets, away_sets, scheduled_time,
         home_team_id,
         away_team_id,
         home_team:teams!home_team_id(id, name, schools(name, logo_url)),

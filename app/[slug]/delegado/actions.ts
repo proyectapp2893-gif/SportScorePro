@@ -12,6 +12,7 @@ type DelegateActionResult<T = undefined> =
 
 type PlayerInput = {
   name: string;
+  identityNumber?: string | null;
   shirtNumber?: number | null;
   birthYear?: number | null;
   vinculo?: string | null;
@@ -60,7 +61,7 @@ async function assertDelegateTeam(slug: string, teamId: string) {
       team_id,
       teams!inner(
         id, school_id, category_id,
-        categories!inner(id, registration_open, registration_deadline, min_roster_size, max_roster_size, roster_locked_message, tournaments(tournament_format))
+        categories!inner(id, tournament_id, registration_open, registration_deadline, min_roster_size, max_roster_size, roster_locked_message, tournaments(id, tournament_format))
       )
     `)
     .eq('delegate_user_id', delegate.id)
@@ -140,11 +141,31 @@ export async function addDelegatePlayers(slug: string, teamId: string, players: 
     .map((player) => ({
       team_id: teamId,
       name: player.name.trim().toUpperCase(),
+      identity_number: player.identityNumber?.trim().replace(/\D/g, '') || null,
       shirt_number: player.shirtNumber ?? null,
       birth_year: player.birthYear ?? null,
       vinculo: player.vinculo?.trim().toUpperCase() || null,
     }))
     .filter((player) => player.name);
+
+  if (formattedPlayers.some((player) => !player.identity_number || player.identity_number.length < 5 || player.identity_number.length > 30)) {
+    return { success: false, error: 'Todos los jugadores deben tener un número de identidad válido.' };
+  }
+  if (new Set(formattedPlayers.map((player) => player.identity_number)).size !== formattedPlayers.length) {
+    return { success: false, error: 'Hay números de identidad repetidos en la carga.' };
+  }
+
+  const allowedRelationships = new Set(['PADRE DE FAMILIA', 'EX-ALUMNO', 'COLABORADOR']);
+  if (formattedPlayers.some((player) => player.vinculo && !allowedRelationships.has(player.vinculo))) {
+    return { success: false, error: 'El vínculo debe ser PADRE DE FAMILIA, EX-ALUMNO o COLABORADOR.' };
+  }
+  if (formattedPlayers.some((player) => player.shirt_number !== null && (!Number.isInteger(player.shirt_number) || player.shirt_number < 1 || player.shirt_number > 999))) {
+    return { success: false, error: 'Los dorsales deben ser números enteros entre 1 y 999.' };
+  }
+  const currentYear = new Date().getFullYear();
+  if (formattedPlayers.some((player) => player.birth_year !== null && (!Number.isInteger(player.birth_year) || player.birth_year < 1900 || player.birth_year > currentYear))) {
+    return { success: false, error: 'Uno o más años de nacimiento no son válidos.' };
+  }
 
   if ((category?.tournaments as any)?.tournament_format === 'THREE_STAGE_35') {
     const youngestAllowedYear = new Date().getFullYear() - 35;
@@ -156,6 +177,21 @@ export async function addDelegatePlayers(slug: string, teamId: string, players: 
   if (formattedPlayers.length === 0) return { success: false, error: 'No hay jugadores válidos.' };
 
   const supabase = createServerSupabaseAdminClient();
+  const tournamentId = category?.tournament_id || category?.tournaments?.id;
+  if (tournamentId) {
+    const identityNumbers = formattedPlayers.map((player) => player.identity_number as string);
+    const { data: existingPlayers, error: identityCheckError } = await supabase
+      .from('players')
+      .select('id, name, identity_number, team_id, teams!inner(categories!inner(tournament_id))')
+      .in('identity_number', identityNumbers)
+      .eq('teams.categories.tournament_id', tournamentId)
+      .limit(1);
+
+    if (identityCheckError) return { success: false, error: 'No se pudo validar la identidad de los jugadores.' };
+    if (existingPlayers?.length) {
+      return { success: false, error: `La identidad ${existingPlayers[0].identity_number} ya está inscrita en otro registro de este torneo.` };
+    }
+  }
   if (category?.max_roster_size) {
     const { count } = await supabase
       .from('players')
@@ -168,7 +204,12 @@ export async function addDelegatePlayers(slug: string, teamId: string, players: 
   }
 
   const { error } = await supabase.from('players').insert(formattedPlayers);
-  if (error) return { success: false, error: 'No se pudieron registrar jugadores.' };
+  if (error) return {
+    success: false,
+    error: error.code === '23505'
+      ? 'Uno de los números de identidad ya está inscrito en otro equipo de este torneo.'
+      : 'No se pudieron registrar jugadores.',
+  };
 
   await logAuditEvent({
     action: 'delegate.roster.players_create',
