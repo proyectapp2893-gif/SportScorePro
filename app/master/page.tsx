@@ -56,7 +56,7 @@ export default function MasterBunkerPage() {
 
   // Generador automático de Slugs y Usuario
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const name = e.target.value;
+    const name = e.target.value.toUpperCase();
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
     const username = `admin_${slug.replace(/-/g, '')}`;
     setNewClient({ ...newClient, name, slug, username });

@@ -92,7 +92,7 @@ export async function createMasterClient(input: {
   const auth = await requireMasterAction();
   if (!auth.success) return { success: false, error: auth.error };
 
-  const name = input.name.trim();
+  const name = input.name.trim().toUpperCase();
   const slug = input.slug.toLowerCase().trim();
   const username = input.username.toLowerCase().trim();
   const accessCode = input.accessCode.trim();

@@ -161,7 +161,7 @@ export default function PlanillerosClient({ slug, initialData }: { slug: string;
               <UserCheck className="text-blue-600" />
               <h2 className="font-black uppercase text-xl">Crear usuario</h2>
             </div>
-            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Nombre" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none" />
+            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value.toUpperCase() })} placeholder="Nombre" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold uppercase outline-none" />
             <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="Usuario" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none" />
             <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email opcional" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none" />
             <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Contraseña inicial opcional" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none" />

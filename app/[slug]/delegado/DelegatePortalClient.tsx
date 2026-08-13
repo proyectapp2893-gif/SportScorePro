@@ -472,7 +472,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 </div>
                 {canEditRoster && (
                   <form onSubmit={handleAddPlayer} className="grid grid-cols-1 md:grid-cols-5 gap-2 p-4 bg-slate-50 border-b border-slate-100">
-                    <input value={newPlayer.name} onChange={(e) => setNewPlayer({ ...newPlayer, name: e.target.value })} placeholder="Nombre" className="md:col-span-2 bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none" />
+                    <input value={newPlayer.name} onChange={(e) => setNewPlayer({ ...newPlayer, name: e.target.value.toUpperCase() })} placeholder="Nombre" className="md:col-span-2 bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold uppercase outline-none" />
                     <input value={newPlayer.shirtNumber} onChange={(e) => setNewPlayer({ ...newPlayer, shirtNumber: e.target.value })} placeholder="Dorsal" className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none" />
                     <input value={newPlayer.birthYear} onChange={(e) => setNewPlayer({ ...newPlayer, birthYear: e.target.value })} placeholder="Año" className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none" />
                     <button disabled={loading} className="bg-blue-600 text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-1"><Plus size={14} /> Agregar</button>

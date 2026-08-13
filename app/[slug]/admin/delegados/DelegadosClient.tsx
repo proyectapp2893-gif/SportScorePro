@@ -341,7 +341,7 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
               <Users className="text-blue-600" />
               <h2 className="font-black uppercase text-xl">Crear Delegado</h2>
             </div>
-            <input value={delegateForm.name} onChange={(e) => setDelegateForm({ ...delegateForm, name: e.target.value })} placeholder="Nombre" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none" />
+            <input value={delegateForm.name} onChange={(e) => setDelegateForm({ ...delegateForm, name: e.target.value.toUpperCase() })} placeholder="Nombre" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold uppercase outline-none" />
             <input value={delegateForm.username} onChange={(e) => setDelegateForm({ ...delegateForm, username: e.target.value })} placeholder="Usuario" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none" />
             <input value={delegateForm.email} onChange={(e) => setDelegateForm({ ...delegateForm, email: e.target.value })} placeholder="Email opcional" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none" />
             <input type="tel" value={delegateForm.whatsappPhone} onChange={(e) => setDelegateForm({ ...delegateForm, whatsappPhone: e.target.value })} placeholder="WhatsApp con código de país" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none" />
