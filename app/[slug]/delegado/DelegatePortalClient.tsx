@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Activity, CalendarDays, Download, Eye, FileCheck2, FileSpreadsheet, KeyRound, Lock, LogOut, Plus, ShieldCheck, Square, Trash2, Trophy, Upload, Users, X } from 'lucide-react';
+import { Activity, CalendarDays, ClipboardCopy, Download, ExternalLink, Eye, FileCheck2, FileSpreadsheet, KeyRound, Lock, LogOut, Plus, ShieldCheck, Square, Trash2, Trophy, Upload, Users, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '@/app/lib/sports/rules';
+import { toTeamSlug } from '@/app/lib/team-slug';
 import { addDelegatePlayers, changeDelegatePassword, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, uploadDelegateSchoolLogo, uploadPlayerIdentityDocument } from './actions';
 
 type DelegatePortalClientProps = {
@@ -24,6 +25,13 @@ type BulkPlayerRow = {
 
 const ALLOWED_RELATIONSHIPS = ['PADRE DE FAMILIA', 'EX-ALUMNO', 'COLABORADOR'] as const;
 const emptyBulkRow = (): BulkPlayerRow => ({ name: '', identityNumber: '', shirtNumber: null, birthYear: null, vinculo: '' });
+const MOBILE_ROW_COLORS = [
+  'border-blue-200 bg-blue-50/80',
+  'border-emerald-200 bg-emerald-50/80',
+  'border-amber-200 bg-amber-50/80',
+  'border-violet-200 bg-violet-50/80',
+  'border-cyan-200 bg-cyan-50/80',
+] as const;
 
 function isRegistrationOpen(category: any) {
   if (!category?.registration_open) return false;
@@ -85,6 +93,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const [selectedHistoryMatch, setSelectedHistoryMatch] = useState<any | null>(null);
   const [showBulkUpload, setShowBulkUpload] = useState(false);
   const [bulkRows, setBulkRows] = useState<BulkPlayerRow[]>([]);
+  const [draftSavedAt, setDraftSavedAt] = useState<Date | null>(null);
   const [loading, setLoading] = useState(false);
 
   const selectedTeam = data?.teams?.find((team: any) => team.id === selectedTeamId) || data?.teams?.[0];
@@ -115,6 +124,21 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   useEffect(() => {
     setActiveRound('');
   }, [selectedTeam?.id]);
+
+  const bulkDraftKey = selectedTeam?.id ? `sportscore:delegate:${slug}:bulk-roster:${selectedTeam.id}` : '';
+
+  useEffect(() => {
+    if (!showBulkUpload || !bulkDraftKey || bulkRows.length === 0) return;
+    const timeout = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(bulkDraftKey, JSON.stringify({ version: 1, updatedAt: Date.now(), rows: bulkRows }));
+        setDraftSavedAt(new Date());
+      } catch {
+        toast.error('El navegador no permitió guardar el borrador local.');
+      }
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [bulkDraftKey, bulkRows, showBulkUpload]);
 
   useEffect(() => {
     if (!fullSchedule.some((match: any) => match.status === 'LIVE')) return;
@@ -351,9 +375,48 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     setLoading(false);
     if (!result.success) return toast.error(result.error);
     toast.success(`${result.data.inserted} jugadores inscritos`);
+    if (bulkDraftKey) window.localStorage.removeItem(bulkDraftKey);
     setShowBulkUpload(false);
     setBulkRows([]);
+    setDraftSavedAt(null);
     window.location.reload();
+  };
+
+  const openBulkUpload = () => {
+    let restoredRows: BulkPlayerRow[] | null = null;
+    if (bulkDraftKey) {
+      try {
+        const savedDraft = JSON.parse(window.localStorage.getItem(bulkDraftKey) || 'null');
+        if (Array.isArray(savedDraft?.rows)) {
+          restoredRows = validateBulkRows(savedDraft.rows);
+          setDraftSavedAt(savedDraft.updatedAt ? new Date(savedDraft.updatedAt) : new Date());
+        }
+      } catch {
+        window.localStorage.removeItem(bulkDraftKey);
+      }
+    }
+    setBulkRows(restoredRows || Array.from({ length: 8 }, emptyBulkRow));
+    setShowBulkUpload(true);
+    if (restoredRows) toast.success('Borrador local recuperado');
+  };
+
+  const discardBulkDraft = () => {
+    if (bulkDraftKey) window.localStorage.removeItem(bulkDraftKey);
+    setBulkRows(Array.from({ length: 8 }, emptyBulkRow));
+    setDraftSavedAt(null);
+    toast.success('Borrador eliminado');
+  };
+
+  const closeBulkUpload = () => {
+    if (bulkDraftKey && bulkRows.length > 0) {
+      try {
+        window.localStorage.setItem(bulkDraftKey, JSON.stringify({ version: 1, updatedAt: Date.now(), rows: bulkRows }));
+      } catch {
+        toast.error('No se pudo guardar el último cambio local.');
+      }
+    }
+    setShowBulkUpload(false);
+    setBulkRows([]);
   };
 
   const handleDeletePlayer = async (playerId: string) => {
@@ -383,6 +446,17 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       window.location.reload();
     }
     setLoading(false);
+  };
+
+  const copyPublicTeamLink = async () => {
+    if (!selectedTeam) return;
+    const publicUrl = `${window.location.origin}/${slug}/equipo/${toTeamSlug(selectedTeam.name)}`;
+    try {
+      await navigator.clipboard.writeText(publicUrl);
+      toast.success('Enlace copiado. Ya puedes enviarlo al equipo.');
+    } catch {
+      toast.error('No se pudo copiar el enlace en este navegador.');
+    }
   };
 
   const handlePlayerDocumentUpload = async (playerId: string, documentType: 'IDENTITY_FRONT' | 'IDENTITY_BACK', file?: File) => {
@@ -556,8 +630,11 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-600">Carga masiva</p>
                   <h2 id="bulk-upload-title" className="text-xl font-black uppercase tracking-tight sm:text-2xl">Importar jugadores desde Excel</h2>
                   <p className="mt-1 text-xs font-semibold text-slate-500">Equipo: {selectedTeam?.name}</p>
+                  <p className="mt-2 text-[9px] font-black uppercase tracking-widest text-emerald-600">
+                    {draftSavedAt ? `Borrador guardado localmente · ${draftSavedAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}` : 'Guardado local automático activo'}
+                  </p>
                 </div>
-                <button type="button" onClick={() => { setShowBulkUpload(false); setBulkRows([]); }} className="rounded-xl bg-slate-100 p-3 text-slate-500 hover:text-slate-900" aria-label="Cerrar"><X size={18} /></button>
+                <button type="button" onClick={closeBulkUpload} className="rounded-xl bg-slate-100 p-3 text-slate-500 hover:text-slate-900" aria-label="Cerrar y continuar después"><X size={18} /></button>
               </header>
 
               <div className="flex-1 space-y-5 overflow-y-auto overscroll-contain p-4 sm:p-6">
@@ -601,7 +678,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 {bulkRows.length > 0 && (
                   <div onPaste={handleBulkPaste} className="space-y-3 md:hidden">
                     {bulkRows.map((row, index) => (
-                      <article key={`mobile-${index}`} className={`rounded-2xl border p-4 ${row.error ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-white'}`}>
+                      <article key={`mobile-${index}`} className={`rounded-2xl border p-4 shadow-sm ${row.error ? 'border-red-300 bg-red-50' : MOBILE_ROW_COLORS[index % MOBILE_ROW_COLORS.length]}`}>
                         <div className="mb-3 flex items-center justify-between gap-3">
                           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Jugador {index + 1}</p>
                           <button type="button" onClick={() => setBulkRows(validateBulkRows(bulkRows.filter((_, rowIndex) => rowIndex !== index)))} className="rounded-lg p-2 text-red-500 hover:bg-red-100" aria-label={`Eliminar fila ${index + 1}`}><Trash2 size={15} /></button>
@@ -621,9 +698,12 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 <button type="button" onClick={() => setBulkRows(validateBulkRows([...bulkRows, emptyBulkRow()]))} className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500 hover:border-blue-400 hover:text-blue-600"><Plus size={14} /> Agregar fila</button>
               </div>
 
-              <footer className="flex flex-col-reverse gap-3 border-t border-slate-100 bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:justify-end sm:p-6">
-                <button type="button" onClick={() => { setShowBulkUpload(false); setBulkRows([]); }} className="rounded-xl bg-slate-100 px-5 py-3 text-xs font-black uppercase tracking-widest text-slate-600">Cancelar</button>
-                <button type="button" disabled={loading || bulkFilledRows.length === 0 || bulkFilledRows.some((row) => row.error)} onClick={submitBulkPlayers} className="rounded-xl bg-blue-600 px-5 py-3 text-xs font-black uppercase tracking-widest text-white disabled:opacity-40">Confirmar carga ({bulkFilledRows.length})</button>
+              <footer className="flex flex-col gap-3 border-t border-slate-100 bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between sm:p-6">
+                <button type="button" onClick={discardBulkDraft} className="rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-widest text-red-500 hover:bg-red-50">Eliminar borrador</button>
+                <div className="flex flex-col-reverse gap-3 sm:flex-row">
+                  <button type="button" onClick={closeBulkUpload} className="rounded-xl bg-slate-100 px-5 py-3 text-xs font-black uppercase tracking-widest text-slate-600">Continuar después</button>
+                  <button type="button" disabled={loading || bulkFilledRows.length === 0 || bulkFilledRows.some((row) => row.error)} onClick={submitBulkPlayers} className="rounded-xl bg-blue-600 px-5 py-3 text-xs font-black uppercase tracking-widest text-white disabled:opacity-40">Sincronizar jugadores ({bulkFilledRows.length})</button>
+                </div>
               </footer>
             </section>
           </div>
@@ -818,7 +898,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                     </p>
                   </div>
                   {canEditRoster ? (
-                    <button type="button" onClick={() => { setBulkRows(Array.from({ length: 8 }, emptyBulkRow)); setShowBulkUpload(true); }} className="flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white hover:bg-emerald-700">
+                    <button type="button" onClick={openBulkUpload} className="flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white hover:bg-emerald-700">
                       <FileSpreadsheet size={15} /> Carga masiva
                     </button>
                   ) : <Lock className="text-red-500" />}
@@ -897,6 +977,10 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                     Subir imagen
                     <input type="file" accept="image/*" onChange={handleLogoUpload} disabled={loading} className="hidden" />
                   </label>
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                    <button type="button" onClick={copyPublicTeamLink} className="flex w-full items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-[9px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100"><ClipboardCopy size={14} /> Copiar enlace para compartir</button>
+                    <a href={`/${slug}/equipo/${toTeamSlug(selectedTeam.name)}`} target="_blank" rel="noopener noreferrer" className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-3 text-[9px] font-black uppercase tracking-widest text-slate-700 hover:bg-slate-50"><ExternalLink size={14} /> Abrir resultados del equipo</a>
+                  </div>
                   <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Máximo 800 KB. Formatos de imagen.</p>
                 </div>
 
