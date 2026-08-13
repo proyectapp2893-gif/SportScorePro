@@ -12,6 +12,7 @@ async function loadDelegateRows(supabase: ReturnType<typeof createServerSupabase
       name,
       username,
       email,
+      whatsapp_phone,
       assigned_password,
       must_change_password,
       password_changed_at,
@@ -67,6 +68,7 @@ async function loadDelegateRows(supabase: ReturnType<typeof createServerSupabase
   return (fallbackQuery.data || []).map((delegate: any) => ({
     ...delegate,
     assigned_password: null,
+    whatsapp_phone: null,
     must_change_password: false,
     password_changed_at: null,
   }));

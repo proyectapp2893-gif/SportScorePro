@@ -3,17 +3,17 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { ArrowLeft, Copy, KeyRound, Link2, Lock, Plus, RefreshCcw, ShieldCheck, Trash2, UserCheck, Users } from 'lucide-react';
+import { ArrowLeft, Copy, KeyRound, Link2, Lock, MessageCircle, Plus, RefreshCcw, ShieldCheck, Trash2, UserCheck, Users } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AppSelect from '@/app/components/AppSelect';
 import { confirmDialog, promptDialog } from '@/app/components/AppDialog';
-import { assignDelegateTeam, createDelegateUser, deleteDelegateUsers, removeDelegateTeam, resetDelegatePassword, syncDelegatesFromTournament, toggleDelegateStatus, updateCategoryRegistrationSettings } from './actions';
+import { assignDelegateTeam, createDelegateUser, deleteDelegateUsers, removeDelegateTeam, resetDelegatePassword, syncDelegatesFromTournament, toggleDelegateStatus, updateCategoryRegistrationSettings, updateDelegateWhatsapp } from './actions';
 
 export default function DelegadosClient({ slug, initialData }: { slug: string; initialData: any }) {
   const searchParams = useSearchParams();
   const initialTournamentId = searchParams.get('tournament') || initialData.tournaments?.[0]?.id || '';
   const [delegates, setDelegates] = useState<any[]>(initialData.delegates || []);
-  const [delegateForm, setDelegateForm] = useState({ name: '', username: '', password: '', email: '', schoolId: '' });
+  const [delegateForm, setDelegateForm] = useState({ name: '', username: '', password: '', email: '', whatsappPhone: '', schoolId: '' });
   const [selectedDelegateId, setSelectedDelegateId] = useState(initialData.delegates?.[0]?.id || '');
   const [selectedDelegateIds, setSelectedDelegateIds] = useState<string[]>([]);
   const [deleteMode, setDeleteMode] = useState(false);
@@ -66,6 +66,7 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
       username: delegateForm.username,
       password: delegateForm.password,
       email: delegateForm.email,
+      whatsappPhone: delegateForm.whatsappPhone,
       schoolId: delegateForm.schoolId || undefined,
     }), 'Delegado creado');
   };
@@ -95,6 +96,45 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
   const closeDeleteMode = () => {
     setDeleteMode(false);
     setSelectedDelegateIds([]);
+  };
+
+  const sendDelegateWhatsapp = async (delegate: any) => {
+    let phone = delegate.whatsapp_phone || '';
+    if (!phone) {
+      const enteredPhone = await promptDialog({
+        title: 'WhatsApp del delegado',
+        description: `Ingresa el número de ${delegate.name} con código de país. Ejemplo Colombia: 573001234567.`,
+        placeholder: '573001234567',
+        inputType: 'text',
+        minLength: 10,
+        confirmLabel: 'Guardar y enviar',
+      });
+      if (!enteredPhone) return;
+
+      setLoading(true);
+      const result = await updateDelegateWhatsapp(slug, delegate.id, enteredPhone);
+      setLoading(false);
+      if (!result.success) return toast.error(result.error);
+      phone = result.data.phone;
+      setDelegates((current) => current.map((item) => item.id === delegate.id ? { ...item, whatsapp_phone: phone } : item));
+    }
+
+    const portalUrl = `${window.location.origin}/${slug}/delegado`;
+    const passwordLine = delegate.must_change_password && delegate.assigned_password
+      ? `Contraseña inicial: ${delegate.assigned_password}`
+      : 'Contraseña: usa la clave que configuraste actualmente.';
+    const message = [
+      `Hola ${delegate.name},`,
+      '',
+      'Estos son tus datos de acceso a SportScore Pro:',
+      `Usuario: ${delegate.username}`,
+      passwordLine,
+      `Portal: ${portalUrl}`,
+      '',
+      'Por seguridad, cambia tu contraseña en el primer ingreso y no compartas estas credenciales.',
+    ].join('\n');
+
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
   };
 
   const handleSaveCategory = (categoryId: string) => {
@@ -252,6 +292,7 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
             <input value={delegateForm.name} onChange={(e) => setDelegateForm({ ...delegateForm, name: e.target.value })} placeholder="Nombre" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none" />
             <input value={delegateForm.username} onChange={(e) => setDelegateForm({ ...delegateForm, username: e.target.value })} placeholder="Usuario" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none" />
             <input value={delegateForm.email} onChange={(e) => setDelegateForm({ ...delegateForm, email: e.target.value })} placeholder="Email opcional" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none" />
+            <input type="tel" value={delegateForm.whatsappPhone} onChange={(e) => setDelegateForm({ ...delegateForm, whatsappPhone: e.target.value })} placeholder="WhatsApp con código de país" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none" />
             <input type="password" value={delegateForm.password} onChange={(e) => setDelegateForm({ ...delegateForm, password: e.target.value })} placeholder="Contraseña inicial" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none" />
             <AppSelect
               value={delegateForm.schoolId}
@@ -310,6 +351,7 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
                     <p className="font-black uppercase break-words">{delegate.name}</p>
                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Usuario: {delegate.username}</p>
                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Clave: {delegatePasswordLabel(delegate)}</p>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">WhatsApp: {delegate.whatsapp_phone ? `+${delegate.whatsapp_phone}` : 'Sin registrar'}</p>
                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-300">{delegate.schools?.name || 'Global'}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -318,6 +360,17 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
                       <span className="text-[10px] font-black text-slate-400">{delegate.delegate_team_access?.length || 0} equipos</span>
                     </div>
                   </button>
+                  {!deleteMode && (
+                    <button
+                      type="button"
+                      disabled={loading}
+                      onClick={() => sendDelegateWhatsapp(delegate)}
+                      aria-label={`Enviar acceso por WhatsApp a ${delegate.name}`}
+                      className="shrink-0 px-3 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-widest bg-emerald-500 hover:bg-emerald-600 text-white flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <MessageCircle size={14} /> <span className="hidden xl:inline">Enviar WhatsApp</span>
+                    </button>
+                  )}
                 </div>
               ))}
               {delegates.length === 0 && <p className="p-8 text-center text-slate-400 text-xs font-black uppercase tracking-widest">No hay delegados creados</p>}

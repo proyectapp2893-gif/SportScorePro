@@ -28,6 +28,7 @@ async function loadDelegateRows(supabase: ReturnType<typeof createServerSupabase
       name,
       username,
       email,
+      whatsapp_phone,
       assigned_password,
       must_change_password,
       password_changed_at,
@@ -83,6 +84,7 @@ async function loadDelegateRows(supabase: ReturnType<typeof createServerSupabase
   return (fallbackQuery.data || []).map((delegate: any) => ({
     ...delegate,
     assigned_password: null,
+    whatsapp_phone: null,
     must_change_password: false,
     password_changed_at: null,
   }));
@@ -111,6 +113,11 @@ function temporaryPassword() {
   return `Sp-${randomBytes(5).toString('base64url')}9`;
 }
 
+function normalizeWhatsappPhone(value?: string) {
+  const digits = (value || '').replace(/\D/g, '');
+  return digits.length >= 10 && digits.length <= 15 ? digits : null;
+}
+
 async function insertDelegateUser(supabase: ReturnType<typeof createServerSupabaseAdminClient>, row: Record<string, any>) {
   const fullInsert = await supabase
     .from('delegate_users')
@@ -120,7 +127,7 @@ async function insertDelegateUser(supabase: ReturnType<typeof createServerSupaba
 
   if (fullInsert.error?.code !== '42703') return fullInsert;
 
-  const { assigned_password, must_change_password, password_changed_at, ...legacyRow } = row;
+  const { assigned_password, must_change_password, password_changed_at, whatsapp_phone, ...legacyRow } = row;
   return supabase
     .from('delegate_users')
     .insert(legacyRow)
@@ -189,6 +196,7 @@ export async function createDelegateUser(slug: string, input: {
   username: string;
   password: string;
   email?: string;
+  whatsappPhone?: string;
   schoolId?: string;
 }): Promise<AdminDelegateResult> {
   const auth = await requireDelegateAdmin(slug);
@@ -197,8 +205,12 @@ export async function createDelegateUser(slug: string, input: {
   const name = input.name.trim().toUpperCase();
   const username = input.username.toLowerCase().trim();
   const password = input.password.trim();
+  const whatsappPhone = input.whatsappPhone ? normalizeWhatsappPhone(input.whatsappPhone) : null;
   if (!name || !username || password.length < 8) {
     return { success: false, error: 'Completa nombre, usuario y contraseña de mínimo 8 caracteres.' };
+  }
+  if (input.whatsappPhone && !whatsappPhone) {
+    return { success: false, error: 'Ingresa el WhatsApp con código de país, entre 10 y 15 dígitos.' };
   }
 
   if (input.schoolId) {
@@ -217,6 +229,7 @@ export async function createDelegateUser(slug: string, input: {
     name,
     username,
     email: input.email?.trim() || null,
+    whatsapp_phone: whatsappPhone,
     password_hash: hashPassword(password),
     assigned_password: password,
     must_change_password: true,
@@ -237,6 +250,37 @@ export async function createDelegateUser(slug: string, input: {
   });
 
   return { success: true, data: undefined };
+}
+
+export async function updateDelegateWhatsapp(slug: string, delegateId: string, phone: string): Promise<AdminDelegateResult<{ phone: string }>> {
+  const auth = await requireDelegateAdmin(slug);
+  if (!auth.success) return { success: false, error: auth.error };
+
+  const normalizedPhone = normalizeWhatsappPhone(phone);
+  if (!normalizedPhone) {
+    return { success: false, error: 'Ingresa el WhatsApp con código de país, entre 10 y 15 dígitos.' };
+  }
+
+  const { data: delegate, error } = await auth.supabase
+    .from('delegate_users')
+    .update({ whatsapp_phone: normalizedPhone, updated_at: new Date().toISOString() })
+    .eq('id', delegateId)
+    .eq('client_id', auth.clientId)
+    .select('id')
+    .maybeSingle();
+
+  if (error || !delegate) return { success: false, error: 'No se pudo guardar el número de WhatsApp.' };
+
+  await logAuditEvent({
+    action: 'admin.delegate.whatsapp.update',
+    actorType: 'client',
+    clientId: auth.clientId,
+    targetType: 'delegate',
+    targetId: delegateId,
+    metadata: { slug },
+  });
+
+  return { success: true, data: { phone: normalizedPhone } };
 }
 
 export async function toggleDelegateStatus(slug: string, delegateId: string, nextStatus: boolean): Promise<AdminDelegateResult> {
