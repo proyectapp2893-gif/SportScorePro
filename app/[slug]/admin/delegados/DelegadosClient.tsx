@@ -120,18 +120,44 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
     }
 
     const portalUrl = `${window.location.origin}/${slug}/delegado`;
+    const teamNames = Array.from(new Set(
+      (delegate.delegate_team_access || [])
+        .map((access: any) => access.teams?.name)
+        .filter(Boolean),
+    )) as string[];
+    const teamLabel = teamNames.length > 0
+      ? teamNames.join(', ')
+      : delegate.schools?.name || 'TU DELEGACIÓN';
+    const hasMultipleTeams = teamNames.length > 1;
     const passwordLine = delegate.must_change_password && delegate.assigned_password
-      ? `Contraseña inicial: ${delegate.assigned_password}`
-      : 'Contraseña: usa la clave que configuraste actualmente.';
+      ? `*Contraseña inicial:* ${delegate.assigned_password}`
+      : '*Contraseña:* utiliza la contraseña que configuraste actualmente.';
     const message = [
-      `Hola ${delegate.name},`,
+      `Hola *${delegate.name}* 👋, DELEGADO DE *${teamLabel}*`,
       '',
-      'Estos son tus datos de acceso a SportScore Pro:',
-      `Usuario: ${delegate.username}`,
+      'Te damos la bienvenida al *Portal de Delegados de SportScore Pro*.',
+      '',
+      `Desde tu portal podrás consultar y hacer seguimiento a toda la información de *${teamLabel}* durante el torneo:`,
+      '',
+      '⚽ Programación de partidos',
+      `📊 Estadísticas ${hasMultipleTeams ? 'de los equipos' : 'del equipo'}`,
+      '🥅 Goles y goleadores',
+      '🟨🟥 Tarjetas y sanciones',
+      '🏆 Resultados y tabla de posiciones',
+      '🔴 Resultados de los partidos en vivo',
+      '',
+      '*Tus datos de acceso son:*',
+      '',
+      `*Usuario:* ${delegate.username}`,
       passwordLine,
-      `Portal: ${portalUrl}`,
       '',
-      'Por seguridad, cambia tu contraseña en el primer ingreso y no compartas estas credenciales.',
+      '🔗 *Ingresar al Portal de Delegados:*',
+      portalUrl,
+      '',
+      'Por seguridad, te recomendamos cambiar tu contraseña después del primer ingreso y mantener tus credenciales de acceso de forma privada.',
+      '',
+      '*SportScore Pro*',
+      '_Tu torneo. Toda la información. En tiempo real._',
     ].join('\n');
 
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
