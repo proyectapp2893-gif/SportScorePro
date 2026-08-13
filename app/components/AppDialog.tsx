@@ -15,6 +15,7 @@ type PromptOptions = ConfirmOptions & {
   placeholder?: string;
   inputType?: 'text' | 'password';
   minLength?: number;
+  initialValue?: string;
 };
 
 type DialogRequest =
@@ -49,6 +50,7 @@ export function AppDialogHost() {
 
   useEffect(() => {
     if (!current) return;
+    setInputValue(current.kind === 'prompt' ? current.initialValue || '' : '');
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         if (current.kind === 'confirm') current.resolve(false);

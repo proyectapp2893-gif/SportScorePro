@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { ArrowLeft, Copy, KeyRound, Link2, Lock, MessageCircle, Plus, RefreshCcw, ShieldCheck, Trash2, UserCheck, Users } from 'lucide-react';
+import { ArrowLeft, Copy, KeyRound, Link2, Lock, MessageCircle, Pencil, Plus, RefreshCcw, ShieldCheck, Trash2, UserCheck, Users } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AppSelect from '@/app/components/AppSelect';
 import { confirmDialog, promptDialog } from '@/app/components/AppDialog';
@@ -135,6 +135,29 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
     ].join('\n');
 
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const editDelegateWhatsapp = async (delegate: any) => {
+    const enteredPhone = await promptDialog({
+      title: 'Editar WhatsApp',
+      description: `Actualiza el número de ${delegate.name} usando el código de país y sin el signo +.`,
+      placeholder: '573001234567',
+      initialValue: delegate.whatsapp_phone || '',
+      inputType: 'text',
+      minLength: 10,
+      confirmLabel: 'Guardar número',
+    });
+    if (!enteredPhone || enteredPhone === delegate.whatsapp_phone) return;
+
+    setLoading(true);
+    const result = await updateDelegateWhatsapp(slug, delegate.id, enteredPhone);
+    setLoading(false);
+    if (!result.success) return toast.error(result.error);
+
+    setDelegates((current) => current.map((item) => item.id === delegate.id
+      ? { ...item, whatsapp_phone: result.data.phone }
+      : item));
+    toast.success('WhatsApp actualizado');
   };
 
   const handleSaveCategory = (categoryId: string) => {
@@ -361,15 +384,28 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
                     </div>
                   </button>
                   {!deleteMode && (
-                    <button
-                      type="button"
-                      disabled={loading}
-                      onClick={() => sendDelegateWhatsapp(delegate)}
-                      aria-label={`Enviar acceso por WhatsApp a ${delegate.name}`}
-                      className="shrink-0 px-3 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-widest bg-emerald-500 hover:bg-emerald-600 text-white flex items-center gap-1.5 disabled:opacity-50"
-                    >
-                      <MessageCircle size={14} /> <span className="hidden xl:inline">Enviar WhatsApp</span>
-                    </button>
+                    <div className="flex shrink-0 flex-col gap-1.5 xl:flex-row">
+                      {delegate.whatsapp_phone && (
+                        <button
+                          type="button"
+                          disabled={loading}
+                          onClick={() => editDelegateWhatsapp(delegate)}
+                          aria-label={`Editar WhatsApp de ${delegate.name}`}
+                          className="px-3 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-widest border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 flex items-center justify-center gap-1.5 disabled:opacity-50"
+                        >
+                          <Pencil size={13} /> <span className="hidden xl:inline">Editar</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={() => sendDelegateWhatsapp(delegate)}
+                        aria-label={`Enviar acceso por WhatsApp a ${delegate.name}`}
+                        className="px-3 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-widest bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center gap-1.5 disabled:opacity-50"
+                      >
+                        <MessageCircle size={14} /> <span className="hidden xl:inline">Enviar WhatsApp</span>
+                      </button>
+                    </div>
                   )}
                 </div>
               ))}
