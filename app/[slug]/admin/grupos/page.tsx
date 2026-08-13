@@ -7,7 +7,7 @@ import Link from 'next/link';
 import { useSearchParams, useRouter, useParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 'react-icons/fa';
-import { createCategoryFixture, deleteCategoryFixture, randomizeCategoryGroups, updateFixtureMatch, updateTeamGroup } from './actions';
+import { createCategoryFixture, deleteCategoryFixture, randomizeCategoryGroups, reorganizeCategoryFixtureTimes, updateFixtureMatch, updateTeamGroup } from './actions';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '../../../lib/sports/rules';
 import AppSelect from '@/app/components/AppSelect';
 import { advanceThreeStageTournament, getThreeStageStatus, startThreeStageTournament } from './stage-actions';
@@ -485,6 +485,19 @@ function FixtureContent() {
     setLoading(false);
   };
 
+  const handleReorganizeTimes = async () => {
+    if (!selectedCategory) return;
+    setLoading(true);
+    const toastId = toast.loading('Organizando fechas y equilibrando horarios...');
+    const result = await reorganizeCategoryFixtureTimes(slug, selectedCategory);
+    if (!result.success) toast.error(result.error, { id: toastId });
+    else {
+      toast.success(`${result.updatedMatches} partidos reorganizados equitativamente.`, { id: toastId });
+      await loadCategoryData();
+    }
+    setLoading(false);
+  };
+
 
   const handlePlayoffClick = () => {
     if (availableRounds.includes(100)) return toast.error('El sistema detecta una Fase Final ya activa.');
@@ -620,10 +633,10 @@ function FixtureContent() {
     return <Trophy size={size} className="text-slate-400" />;
   };
 
-  const getRoundName = (roundNumber: number) => {
-    if (roundNumber === 100 || roundNumber >= 201) return 'Fase 3 · Finales';
-    if (roundNumber >= 101) return `Fase 2 · Jornada ${roundNumber - 100}`;
-    return `Fase 1 · Jornada ${roundNumber}`;
+  const getRoundLabels = (roundNumber: number) => {
+    if (roundNumber === 100 || roundNumber >= 201) return { phase: 'Fase 3', round: 'Finales' };
+    if (roundNumber >= 101) return { phase: 'Fase 2', round: `Jornada ${roundNumber - 100}` };
+    return { phase: 'Fase 1', round: `Jornada ${roundNumber}` };
   };
 
   const matchesToShow = matches.filter(m => m.matchdays?.round_number === activeRound);
@@ -957,6 +970,11 @@ function FixtureContent() {
               
               {viewMode === 'FIXTURE' && (
                 <div className="flex flex-wrap gap-3 sm:gap-4">
+                  {matches.length > 0 && (
+                    <button onClick={handleReorganizeTimes} disabled={loading} className="flex-1 lg:flex-none flex items-center justify-center gap-2 bg-blue-50 text-blue-700 border border-blue-200 px-6 py-4 rounded-xl hover:bg-blue-600 hover:text-white transition-all shadow-sm font-black uppercase text-[10px] tracking-widest disabled:opacity-50">
+                      <Clock size={16} /> Reorganizar fechas y horarios
+                    </button>
+                  )}
                   {!stageStatus?.enabled && teams.length > 0 && matches.length === 0 && (
                     <div className="flex flex-col sm:flex-row w-full lg:w-auto gap-3">
                       <button onClick={handleAutoGenerateFixture} disabled={loading} className="w-full sm:w-auto flex items-center justify-center gap-2 bg-blue-600 text-white px-8 py-4 rounded-xl hover:bg-blue-500 transition-all font-black uppercase text-[10px] tracking-widest shadow-lg shadow-blue-200 disabled:opacity-50">
@@ -1059,14 +1077,17 @@ function FixtureContent() {
                     <button
                       key={round}
                       onClick={() => setActiveRound(round)}
-                      className={`px-8 py-4 rounded-t-2xl font-black uppercase tracking-[0.2em] text-[10px] transition-all whitespace-nowrap flex items-center gap-2
+                      className={`min-w-[150px] rounded-t-2xl px-6 py-3 font-black uppercase transition-all whitespace-nowrap flex flex-col items-center justify-center gap-1
                         ${activeRound === round 
                           ? 'bg-white text-blue-600 border-t-2 border-x border-slate-100 shadow-sm z-10 -mb-[1px]' 
                           : 'bg-slate-100 text-slate-400 hover:bg-white hover:text-slate-600 border-t border-transparent'}
                       `}
                     >
-                      {round === 100 && <GitMerge size={12}/>}
-                      {getRoundName(round)}
+                      <span className="flex items-center gap-2 text-[9px] tracking-[0.25em]">
+                        {(round === 100 || round >= 201) && <GitMerge size={12}/>}
+                        {getRoundLabels(round).phase}
+                      </span>
+                      <span className={`text-[10px] tracking-[0.16em] ${activeRound === round ? 'text-slate-700' : 'text-slate-400'}`}>{getRoundLabels(round).round}</span>
                     </button>
                   ))}
                 </div>
@@ -1099,15 +1120,15 @@ function FixtureContent() {
 
                       {/* LISTA DE PARTIDOS NORMALES */}
                       {normalMatches.map((match) => (
-                        <div key={match.id} className="p-5 sm:p-8 lg:p-12 hover:bg-slate-50/50 transition-colors relative group">
+                        <div key={match.id} className="relative overflow-hidden p-5 pt-24 transition-colors hover:bg-slate-50/50 sm:p-8 sm:pt-28 lg:p-12 lg:pt-28 group">
                           
                           <button onClick={() => openEditModal(match)} className="absolute top-4 right-4 sm:top-8 sm:right-8 p-3 bg-white border border-slate-200 text-slate-400 hover:text-blue-600 hover:border-blue-400 rounded-xl shadow-sm transition-all z-10 sm:opacity-0 group-hover:opacity-100">
                             <Pencil size={18} />
                           </button>
 
-                          <div className="relative sm:absolute sm:top-6 sm:left-1/2 sm:-translate-x-1/2 w-fit max-w-full flex items-center gap-3 bg-white border border-slate-100 px-4 sm:px-5 py-2 rounded-full shadow-sm mb-4 sm:mb-0 pr-14 sm:pr-5">
+                          <div className="absolute left-1/2 top-4 flex w-fit max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 rounded-full border border-slate-100 bg-white px-4 py-2 pr-14 shadow-sm sm:top-6 sm:px-5 sm:pr-5">
                             <CalendarDays size={14} className="text-blue-600" />
-                            <span className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
+                            <span className="truncate text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 sm:tracking-[0.2em]">
                               {match.matchdays?.scheduled_date ? new Date(match.matchdays.scheduled_date + 'T00:00:00').toLocaleDateString('es-ES', { month: 'long', day: 'numeric' }) : 'Fecha por asignar'} 
                               {' • '}
                               {match.scheduled_time ? match.scheduled_time.substring(0, 5) : 'H:MM'}
@@ -1116,7 +1137,7 @@ function FixtureContent() {
 
                           {/* NUEVO: ETIQUETA DE CANCHA CON DIBUJO CSS */}
                           {match.venue && (
-                            <div className="absolute top-4 left-6 flex flex-col items-start gap-1 z-10">
+                            <div className="absolute left-5 top-14 z-10 flex max-w-[calc(100%-2.5rem)] flex-col items-start gap-1 sm:left-8 sm:top-6 lg:left-12">
                               <span className="text-[8px] font-black text-slate-400 uppercase tracking-[0.2em] pl-1">Cancha Asignada</span>
                               <div className="flex items-center gap-2 bg-emerald-50 px-3 py-2 rounded-xl shadow-sm border border-emerald-200 transform transition-transform group-hover:scale-105">
                                 {/* DIBUJO DE MINI CANCHA (CSS Puro) */}
@@ -1131,11 +1152,11 @@ function FixtureContent() {
                             </div>
                           )}
 
-                          <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] items-center gap-5 sm:gap-8 lg:gap-12 mt-4 sm:mt-10">
+                          <div className="mx-auto grid w-full max-w-5xl grid-cols-1 items-center gap-5 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:gap-6 lg:gap-10">
                             
                             <div className="flex items-center justify-between sm:justify-end gap-4 sm:gap-8 min-w-0">
                               <div className="text-left sm:text-right flex flex-col min-w-0">
-                                 <span className="font-black text-slate-900 uppercase tracking-tight text-lg sm:text-2xl leading-none break-words">{match.home_team?.name || 'POR DEFINIR'}</span>
+                                 <span className="line-clamp-2 max-w-full break-words text-lg font-black uppercase leading-tight tracking-tight text-slate-900 sm:text-xl lg:text-2xl">{match.home_team?.name || 'POR DEFINIR'}</span>
                                  <span className="text-[10px] text-slate-400 font-black uppercase tracking-widest mt-2">Local</span>
                               </div>
                               <div className="w-16 h-16 sm:w-24 sm:h-24 bg-white rounded-2xl sm:rounded-3xl border border-slate-100 flex items-center justify-center p-2 sm:p-3 shrink-0 shadow-md group-hover:border-blue-200 transition-colors overflow-hidden">
@@ -1177,7 +1198,7 @@ function FixtureContent() {
                                 )}
                               </div>
                               <div className="text-right sm:text-left flex flex-col min-w-0">
-                                 <span className="font-black text-slate-900 uppercase tracking-tight text-lg sm:text-2xl leading-none break-words">{match.away_team?.name || 'POR DEFINIR'}</span>
+                                 <span className="line-clamp-2 max-w-full break-words text-lg font-black uppercase leading-tight tracking-tight text-slate-900 sm:text-xl lg:text-2xl">{match.away_team?.name || 'POR DEFINIR'}</span>
                                  <span className="text-[10px] text-slate-400 font-black uppercase tracking-widest mt-2">Visitante</span>
                               </div>
                             </div>

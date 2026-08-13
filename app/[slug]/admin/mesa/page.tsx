@@ -80,7 +80,7 @@ function MesaControlContent() {
         is_timer_running, timer_start_time, timer_accumulated_seconds, match_duration_seconds, match_phase,
         home_team:teams!home_team_id(id, name, schools(logo_url)),
         away_team:teams!away_team_id(id, name, schools(logo_url)),
-        matchdays!inner(category_id, round_number, scheduled_date, categories(name, match_duration, sports(name, scoring_system), tournaments(name, logo_url, fair_play_enabled, fp_starting_points, fp_yellow_deduction, fp_red_deduction, fp_no_show_deduction, fine_yellow_amount, fine_red_amount)))
+        matchdays!inner(category_id, round_number, scheduled_date, categories(name, match_duration, sports(name, scoring_system), tournaments(name, logo_url, fair_play_enabled, fp_starting_points, fp_yellow_deduction, fp_red_deduction, fp_no_show_deduction, fine_yellow_amount, fine_red_amount, schedule_dates)))
       `)
       .eq('matchdays.category_id', selectedCategory)
       .in('status', ['SCHEDULED', 'LIVE']) 

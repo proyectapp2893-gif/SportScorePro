@@ -41,6 +41,101 @@ type RandomizeGroupsResult =
   | { success: true; assignments: Array<{ teamId: string; groupName: string }> }
   | { success: false; error: string };
 
+type ReorganizeFixtureResult =
+  | { success: true; updatedMatches: number }
+  | { success: false; error: string };
+
+export async function reorganizeCategoryFixtureTimes(slug: string, categoryId: string): Promise<ReorganizeFixtureResult> {
+  if (!(await hasAdminSession(slug))) return { success: false, error: 'Sesión de administrador no válida.' };
+  if (!(await categoryBelongsToClientSlug(categoryId, slug))) return { success: false, error: 'La categoría no pertenece a este cliente.' };
+
+  const supabase = createServerSupabaseAdminClient();
+  const { data: category } = await supabase
+    .from('categories')
+    .select('id, tournaments!inner(id, schedule_time_slots, schedule_dates, available_venues)')
+    .eq('id', categoryId)
+    .maybeSingle();
+  const tournament = Array.isArray(category?.tournaments) ? category.tournaments[0] : category?.tournaments;
+  const slots = Array.from(new Set((Array.isArray(tournament?.schedule_time_slots) ? tournament.schedule_time_slots : [])
+    .map((value: unknown) => String(value).trim())
+    .filter((value: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(value)))) as string[];
+  if (slots.length === 0) return { success: false, error: 'Configura primero los horarios disponibles del torneo.' };
+  const venues = (Array.isArray(tournament?.available_venues) ? tournament.available_venues : [])
+    .map((value: unknown) => String(value))
+    .filter((value: string) => value === 'Cancha 1' || value === 'Cancha 2');
+  if (venues.length === 0) return { success: false, error: 'Configura primero Cancha 1 y/o Cancha 2 en el torneo.' };
+  const dates = (Array.isArray(tournament?.schedule_dates) ? tournament.schedule_dates : [])
+    .map((value: unknown) => String(value).trim())
+    .filter((value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)) as string[];
+  if (dates.length === 0) return { success: false, error: 'Configura primero los días disponibles del torneo.' };
+  const firstSaturday = new Date(`${dates[0]}T00:00:00Z`);
+  if (firstSaturday.getUTCDay() !== 6) return { success: false, error: 'La fecha inicial configurada debe ser sábado.' };
+
+  const { data: matches, error } = await supabase
+    .from('matches')
+    .select('id, home_team_id, away_team_id, status, scheduled_time, matchdays!inner(id, round_number, category_id, scheduled_date)')
+    .eq('matchdays.category_id', categoryId);
+  if (error) return { success: false, error: 'No se pudo cargar el fixture.' };
+  const validMatches = (matches || []).filter((match: any) => match.home_team_id && match.away_team_id);
+  const schedulable = validMatches.filter((match: any) => match.status === 'SCHEDULED')
+    .sort((a: any, b: any) => Number(a.matchdays?.round_number || 0) - Number(b.matchdays?.round_number || 0) || a.id.localeCompare(b.id));
+  if (schedulable.length === 0) return { success: false, error: 'No hay partidos programados que puedan reorganizarse.' };
+
+  const lockedMatchdayIds = new Set(validMatches.filter((match: any) => match.status !== 'SCHEDULED').map((match: any) => match.matchdays?.id));
+  const allMatchdays = Array.from(new Map(validMatches.map((match: any) => [match.matchdays?.id, match.matchdays])).values())
+    .filter((matchday: any) => matchday?.id)
+    .sort((a: any, b: any) => Number(a.round_number || 0) - Number(b.round_number || 0));
+  const pendingMatchdays = allMatchdays.filter((matchday: any) => !lockedMatchdayIds.has(matchday.id));
+  const calculatedDates = pendingMatchdays.map((matchday: any) => {
+    const scheduleIndex = allMatchdays.findIndex((item: any) => item.id === matchday.id);
+    const date = new Date(firstSaturday);
+    date.setUTCDate(firstSaturday.getUTCDate() + (scheduleIndex * 7));
+    return date.toISOString().slice(0, 10);
+  });
+
+  const teamSlotCounts: Record<string, number[]> = {};
+  const roundSlotLoads: Record<string, number[]> = {};
+  const assignments: Array<{ id: string; time: string; venue: string }> = [];
+  for (const match of validMatches as any[]) {
+    for (const teamId of [match.home_team_id, match.away_team_id]) if (!teamSlotCounts[teamId]) teamSlotCounts[teamId] = slots.map(() => 0);
+    if (match.status === 'SCHEDULED') continue;
+    const currentTime = String(match.scheduled_time || '').slice(0, 5);
+    const slotIndex = slots.indexOf(currentTime);
+    if (slotIndex >= 0) {
+      teamSlotCounts[match.home_team_id][slotIndex] += 1;
+      teamSlotCounts[match.away_team_id][slotIndex] += 1;
+    }
+  }
+  for (const match of schedulable as any[]) {
+    const round = String(match.matchdays?.round_number || 0);
+    if (!roundSlotLoads[round]) roundSlotLoads[round] = slots.map(() => 0);
+    for (const teamId of [match.home_team_id, match.away_team_id]) if (!teamSlotCounts[teamId]) teamSlotCounts[teamId] = slots.map(() => 0);
+    const rankedSlots = slots.map((time, index) => ({
+      time,
+      index,
+      cost: teamSlotCounts[match.home_team_id][index] + teamSlotCounts[match.away_team_id][index] + (roundSlotLoads[round][index] >= venues.length ? 1000 : 0) + (roundSlotLoads[round][index] * 0.2),
+    })).sort((a, b) => a.cost - b.cost || a.index - b.index);
+    const chosen = rankedSlots[0];
+    assignments.push({ id: match.id, time: `${chosen.time}:00`, venue: venues[roundSlotLoads[round][chosen.index] % venues.length] });
+    teamSlotCounts[match.home_team_id][chosen.index] += 1;
+    teamSlotCounts[match.away_team_id][chosen.index] += 1;
+    roundSlotLoads[round][chosen.index] += 1;
+  }
+
+  for (const assignment of assignments) {
+    const { error: updateError } = await supabase.from('matches').update({ scheduled_time: assignment.time, venue: assignment.venue }).eq('id', assignment.id).eq('status', 'SCHEDULED');
+    if (updateError) return { success: false, error: 'La reorganización quedó incompleta. Intenta nuevamente.' };
+  }
+  for (let index = 0; index < pendingMatchdays.length; index += 1) {
+    const matchday: any = pendingMatchdays[index];
+    const { error: dateError } = await supabase.from('matchdays').update({ scheduled_date: calculatedDates[index] }).eq('id', matchday.id);
+    if (dateError) return { success: false, error: 'Los horarios se actualizaron, pero no se pudieron completar todas las fechas.' };
+  }
+  const clientId = await getClientIdBySlug(slug);
+  await logAuditEvent({ action: 'admin.fixture.times_reorganized', actorType: 'client', clientId, targetType: 'category', targetId: categoryId, metadata: { slug, slots, venues, dates: calculatedDates, updatedMatches: assignments.length } });
+  return { success: true, updatedMatches: assignments.length };
+}
+
 function shuffleTeams<T>(items: T[]) {
   const shuffled = [...items];
   for (let index = shuffled.length - 1; index > 0; index -= 1) {

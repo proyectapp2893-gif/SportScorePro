@@ -15,12 +15,14 @@ type PlayerInput = {
   identityNumber?: string | null;
   shirtNumber?: number | null;
   birthYear?: number | null;
+  birthDate?: string | null;
   vinculo?: string | null;
+  relationshipDetail?: string | null;
 };
 
 const MAX_LOGO_SIZE_BYTES = 800 * 1024;
 const MAX_PLAYER_DOCUMENT_SIZE_BYTES = 5 * 1024 * 1024;
-const PLAYER_DOCUMENT_TYPES = ['IDENTITY_FRONT', 'IDENTITY_BACK'] as const;
+const PLAYER_DOCUMENT_TYPES = ['FACE_PHOTO', 'IDENTITY_FRONT', 'IDENTITY_BACK'] as const;
 
 async function getDelegateForSlug(slug: string) {
   const delegateId = await getDelegateSession(slug);
@@ -61,7 +63,7 @@ async function assertDelegateTeam(slug: string, teamId: string) {
       team_id,
       teams!inner(
         id, school_id, category_id,
-        categories!inner(id, tournament_id, registration_open, registration_deadline, min_roster_size, max_roster_size, roster_locked_message, tournaments(id, tournament_format))
+        categories!inner(id, tournament_id, registration_open, registration_deadline, min_roster_size, max_roster_size, roster_locked_message, tournaments(id, tournament_format, schedule_dates))
       )
     `)
     .eq('delegate_user_id', delegate.id)
@@ -128,7 +130,7 @@ export async function logoutDelegate(slug: string) {
   return { success: true };
 }
 
-export async function addDelegatePlayers(slug: string, teamId: string, players: PlayerInput[]): Promise<DelegateActionResult<{ inserted: number }>> {
+export async function addDelegatePlayers(slug: string, teamId: string, players: PlayerInput[]): Promise<DelegateActionResult<{ inserted: number; playerIds: string[] }>> {
   const access = await assertDelegateTeam(slug, teamId);
   if (!access.success) return { success: false, error: access.error };
 
@@ -144,7 +146,9 @@ export async function addDelegatePlayers(slug: string, teamId: string, players: 
       identity_number: player.identityNumber?.trim().replace(/\D/g, '') || null,
       shirt_number: player.shirtNumber ?? null,
       birth_year: player.birthYear ?? null,
+      birth_date: player.birthDate || null,
       vinculo: player.vinculo?.trim().toUpperCase() || null,
+      relationship_detail: player.relationshipDetail?.trim().toUpperCase() || null,
     }))
     .filter((player) => player.name);
 
@@ -159,6 +163,15 @@ export async function addDelegatePlayers(slug: string, teamId: string, players: 
   if (formattedPlayers.some((player) => player.vinculo && !allowedRelationships.has(player.vinculo))) {
     return { success: false, error: 'El vínculo debe ser PADRE DE FAMILIA, EX-ALUMNO o COLABORADOR.' };
   }
+  if (formattedPlayers.some((player) => !player.birth_date || Number.isNaN(Date.parse(player.birth_date)))) {
+    return { success: false, error: 'Todos los jugadores deben tener una fecha de nacimiento completa.' };
+  }
+  if (formattedPlayers.some((player) => player.vinculo === 'EX-ALUMNO' && !/^\d{4}$/.test(player.relationship_detail || ''))) {
+    return { success: false, error: 'Los ex-alumnos deben indicar el año de su promoción.' };
+  }
+  if (formattedPlayers.some((player) => player.vinculo === 'PADRE DE FAMILIA' && (player.relationship_detail || '').length < 5)) {
+    return { success: false, error: 'Los padres de familia deben indicar el nombre completo del estudiante.' };
+  }
   if (formattedPlayers.some((player) => player.shirt_number !== null && (!Number.isInteger(player.shirt_number) || player.shirt_number < 1 || player.shirt_number > 999))) {
     return { success: false, error: 'Los dorsales deben ser números enteros entre 1 y 999.' };
   }
@@ -168,9 +181,11 @@ export async function addDelegatePlayers(slug: string, teamId: string, players: 
   }
 
   if ((category?.tournaments as any)?.tournament_format === 'THREE_STAGE_35') {
-    const youngestAllowedYear = new Date().getFullYear() - 35;
-    if (formattedPlayers.some((player) => !player.birth_year || Number(player.birth_year) > youngestAllowedYear)) {
-      return { success: false, error: `Todos los participantes deben tener 35 años o más (nacidos en ${youngestAllowedYear} o antes).` };
+    const tournamentDate = String((category?.tournaments as any)?.schedule_dates?.[0] || `${new Date().getFullYear()}-12-31`);
+    const cutoff = new Date(`${tournamentDate}T12:00:00`);
+    cutoff.setFullYear(cutoff.getFullYear() - 35);
+    if (formattedPlayers.some((player) => new Date(`${player.birth_date}T12:00:00`) > cutoff)) {
+      return { success: false, error: `Todos los participantes deben tener 35 años cumplidos en la fecha inicial del torneo (${tournamentDate}).` };
     }
   }
 
@@ -203,7 +218,7 @@ export async function addDelegatePlayers(slug: string, teamId: string, players: 
     }
   }
 
-  const { error } = await supabase.from('players').insert(formattedPlayers);
+  const { data: insertedPlayers, error } = await supabase.from('players').insert(formattedPlayers).select('id');
   if (error) return {
     success: false,
     error: error.code === '23505'
@@ -221,7 +236,7 @@ export async function addDelegatePlayers(slug: string, teamId: string, players: 
     metadata: { slug, inserted: formattedPlayers.length },
   });
 
-  return { success: true, data: { inserted: formattedPlayers.length } };
+  return { success: true, data: { inserted: formattedPlayers.length, playerIds: (insertedPlayers || []).map((player) => player.id) } };
 }
 
 export async function deleteDelegatePlayer(slug: string, teamId: string, playerId: string): Promise<DelegateActionResult> {
@@ -263,10 +278,9 @@ export async function uploadPlayerIdentityDocument(
   if (!allowedTypes.has(file.type)) return { success: false, error: 'Usa un archivo JPG, PNG, WebP o PDF.' };
 
   const supabase = createServerSupabaseAdminClient();
-  const { data: player } = await supabase.from('players').select('id, birth_year').eq('id', playerId).eq('team_id', teamId).maybeSingle();
+  const { data: player } = await supabase.from('players').select('id').eq('id', playerId).eq('team_id', teamId).maybeSingle();
   if (!player) return { success: false, error: 'El jugador no pertenece a este equipo.' };
-  const currentYear = new Date().getFullYear();
-  if (!player.birth_year || currentYear - Number(player.birth_year) < 35) return { success: false, error: 'Los documentos solo se habilitan para participantes de 35 años o más.' };
+  if (documentType === 'FACE_PHOTO' && file.type === 'application/pdf') return { success: false, error: 'La fotografía del rostro debe ser JPG, PNG o WebP.' };
 
   const extension = file.type === 'application/pdf' ? 'pdf' : file.type.split('/')[1].replace('jpeg', 'jpg');
   const storagePath = `${access.delegate.client_id}/${teamId}/${playerId}/${documentType.toLowerCase()}-${randomUUID()}.${extension}`;
@@ -294,6 +308,27 @@ export async function uploadPlayerIdentityDocument(
   if (previous?.storage_path) await supabase.storage.from('player-documents').remove([previous.storage_path]);
 
   await logAuditEvent({ action: 'delegate.player_document.upload', actorType: 'delegate', actorId: access.delegate.id, clientId: access.delegate.client_id, targetType: 'player', targetId: playerId, metadata: { slug, teamId, documentType } });
+  return { success: true, data: undefined };
+}
+
+export async function saveDelegateTeamStaff(
+  slug: string,
+  teamId: string,
+  staff: { headCoach: string; assistantCoach: string },
+): Promise<DelegateActionResult> {
+  const access = await assertDelegateTeam(slug, teamId);
+  if (!access.success) return { success: false, error: access.error };
+  if (!isRegistrationOpen((access.team as any).categories)) return { success: false, error: 'La inscripción está cerrada.' };
+  const headCoach = staff.headCoach.trim().toUpperCase();
+  const assistantCoach = staff.assistantCoach.trim().toUpperCase();
+  if (headCoach.length < 5 || assistantCoach.length < 5) return { success: false, error: 'Ingresa el nombre completo del técnico y del asistente técnico.' };
+  const supabase = createServerSupabaseAdminClient();
+  const { error } = await supabase.from('team_staff').upsert([
+    { team_id: teamId, role: 'HEAD_COACH', full_name: headCoach, updated_at: new Date().toISOString() },
+    { team_id: teamId, role: 'ASSISTANT_COACH', full_name: assistantCoach, updated_at: new Date().toISOString() },
+  ], { onConflict: 'team_id,role' });
+  if (error) return { success: false, error: 'No se pudo guardar el cuerpo técnico.' };
+  await logAuditEvent({ action: 'delegate.team_staff.save', actorType: 'delegate', actorId: access.delegate.id, clientId: access.delegate.client_id, targetType: 'team', targetId: teamId, metadata: { slug } });
   return { success: true, data: undefined };
 }
 

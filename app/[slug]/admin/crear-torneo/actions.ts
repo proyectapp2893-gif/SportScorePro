@@ -6,6 +6,8 @@ import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import { getClientIdBySlug } from '@/app/lib/tenant';
 import { randomUUID } from 'crypto';
 
+const MAX_TOURNAMENT_LOGO_SIZE_BYTES = 5 * 1024 * 1024;
+
 type SaveTournamentInput = {
   editingTournamentId?: string | null;
   tournament: Record<string, unknown>;
@@ -24,8 +26,20 @@ export async function saveTournamentWizard(slug: string, input: SaveTournamentIn
   const clientId = await getClientIdBySlug(slug);
   if (!clientId) return { success: false, error: 'Cliente no encontrado.' };
 
+  const rawScheduleSlots = Array.isArray(input.tournament.schedule_time_slots) ? input.tournament.schedule_time_slots : [];
+  const scheduleTimeSlots = Array.from(new Set(rawScheduleSlots.map((value) => String(value).trim()).filter((value) => /^([01]\d|2[0-3]):[0-5]\d$/.test(value)))).sort();
+  if (scheduleTimeSlots.length === 0) return { success: false, error: 'Configura al menos un horario válido para el torneo.' };
+  const rawScheduleDates = Array.isArray(input.tournament.schedule_dates) ? input.tournament.schedule_dates : [];
+  const scheduleDates = rawScheduleDates.map((value) => String(value).trim()).filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value)).sort();
+  if (scheduleDates.length === 0) return { success: false, error: 'Configura el primer sábado del torneo.' };
+  if (new Date(`${scheduleDates[0]}T00:00:00Z`).getUTCDay() !== 6) return { success: false, error: 'La fecha inicial debe corresponder a un sábado.' };
+  const allowedVenues = new Set(['Cancha 1', 'Cancha 2']);
+  const availableVenues = Array.from(new Set((Array.isArray(input.tournament.available_venues) ? input.tournament.available_venues : []).map(String).filter((venue) => allowedVenues.has(venue))));
+  if (availableVenues.length === 0) return { success: false, error: 'Selecciona al menos una cancha disponible.' };
+  const safeTournament: Record<string, unknown> = { ...input.tournament, schedule_time_slots: scheduleTimeSlots, schedule_dates: [scheduleDates[0]], available_venues: availableVenues, fixture_visible_to_delegates: Boolean(input.tournament.fixture_visible_to_delegates) };
+
   const supabase = createServerSupabaseAdminClient();
-  if (input.tournament.tournament_format === 'THREE_STAGE_35') {
+  if (safeTournament.tournament_format === 'THREE_STAGE_35') {
     const invalidCategory = input.categories.find((category) => (input.teamsMap[category.id] || []).length !== 8);
     if (invalidCategory) return { success: false, error: `El formato Máster 35+ requiere exactamente 8 equipos en ${invalidCategory.name}.` };
   }
@@ -40,12 +54,12 @@ export async function saveTournamentWizard(slug: string, input: SaveTournamentIn
       .maybeSingle();
     if (!existingTournament) return { success: false, error: 'El torneo no pertenece a este cliente.' };
 
-    const { error } = await supabase.from('tournaments').update(input.tournament).eq('id', tournamentId);
+    const { error } = await supabase.from('tournaments').update(safeTournament).eq('id', tournamentId);
     if (error) return { success: false, error: 'No se pudo actualizar el torneo.' };
   } else {
     const { data: newTournament, error } = await supabase
       .from('tournaments')
-      .insert([{ ...input.tournament, client_id: clientId }])
+      .insert([{ ...safeTournament, client_id: clientId }])
       .select('id')
       .single();
     if (error || !newTournament) return { success: false, error: 'No se pudo crear el torneo.' };
@@ -195,6 +209,7 @@ export async function uploadTournamentLogo(slug: string, file: File): Promise<{ 
   const clientId = await getClientIdBySlug(slug);
   if (!clientId) return { success: false, error: 'Cliente no encontrado.' };
   if (!file.type.startsWith('image/')) return { success: false, error: 'El archivo debe ser una imagen.' };
+  if (file.size <= 0 || file.size > MAX_TOURNAMENT_LOGO_SIZE_BYTES) return { success: false, error: 'El logo debe pesar máximo 5 MB.' };
 
   const supabase = createServerSupabaseAdminClient();
   const extension = file.name.split('.').pop()?.toLowerCase() || 'png';

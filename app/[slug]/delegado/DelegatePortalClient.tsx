@@ -2,12 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Activity, CalendarDays, ClipboardCopy, Download, ExternalLink, Eye, FileCheck2, FileSpreadsheet, KeyRound, Lock, LogOut, Plus, ShieldCheck, Square, Trash2, Trophy, Upload, Users, X } from 'lucide-react';
+import { Activity, CalendarDays, Camera, ClipboardCopy, Download, ExternalLink, Eye, FileCheck2, FileSpreadsheet, KeyRound, Lock, LogOut, Plus, ShieldCheck, Square, Trash2, Trophy, Upload, UserRoundCog, Users, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '@/app/lib/sports/rules';
 import { toTeamSlug } from '@/app/lib/team-slug';
-import { addDelegatePlayers, changeDelegatePassword, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, uploadDelegateSchoolLogo, uploadPlayerIdentityDocument } from './actions';
+import { addDelegatePlayers, changeDelegatePassword, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, saveDelegateTeamStaff, uploadDelegateSchoolLogo, uploadPlayerIdentityDocument } from './actions';
 
 type DelegatePortalClientProps = {
   slug: string;
@@ -19,12 +19,17 @@ type BulkPlayerRow = {
   identityNumber: string;
   shirtNumber: number | null;
   birthYear: number | null;
+  birthDate: string;
   vinculo: string;
+  relationshipDetail: string;
+  faceFile?: File | null;
+  facePreview?: string;
+  identityFile?: File | null;
   error?: string;
 };
 
 const ALLOWED_RELATIONSHIPS = ['PADRE DE FAMILIA', 'EX-ALUMNO', 'COLABORADOR'] as const;
-const emptyBulkRow = (): BulkPlayerRow => ({ name: '', identityNumber: '', shirtNumber: null, birthYear: null, vinculo: '' });
+const emptyBulkRow = (): BulkPlayerRow => ({ name: '', identityNumber: '', shirtNumber: null, birthYear: null, birthDate: '', vinculo: '', relationshipDetail: '' });
 const MOBILE_ROW_COLORS = [
   'border-blue-200 bg-blue-50/80',
   'border-emerald-200 bg-emerald-50/80',
@@ -32,6 +37,28 @@ const MOBILE_ROW_COLORS = [
   'border-violet-200 bg-violet-50/80',
   'border-cyan-200 bg-cyan-50/80',
 ] as const;
+const MAX_COMPRESSED_IMAGE_BYTES = 1024 * 1024;
+
+async function compressRosterImage(file: File) {
+  if (!file.type.startsWith('image/') || file.size <= MAX_COMPRESSED_IMAGE_BYTES) return file;
+  const bitmap = await createImageBitmap(file);
+  const maxDimension = 1800;
+  const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  canvas.getContext('2d')?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  let quality = 0.86;
+  let blob: Blob | null = null;
+  while (quality >= 0.35) {
+    blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+    if (blob && blob.size <= MAX_COMPRESSED_IMAGE_BYTES) break;
+    quality -= 0.1;
+  }
+  if (!blob) throw new Error('No se pudo procesar la imagen.');
+  return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg', lastModified: Date.now() });
+}
 
 function isRegistrationOpen(category: any) {
   if (!category?.registration_open) return false;
@@ -55,6 +82,46 @@ function matchStatusLabel(status: string) {
   if (status === 'FINISHED') return 'Finalizado';
   if (status === 'SCHEDULED') return 'Programado';
   return status || 'Sin estado';
+}
+
+function ageOnDate(birthDate: string | null | undefined, referenceDate: string | null | undefined) {
+  if (!birthDate) return null;
+  const birth = new Date(`${birthDate}T12:00:00`);
+  const reference = new Date(`${referenceDate || `${new Date().getFullYear()}-12-31`}T12:00:00`);
+  let age = reference.getFullYear() - birth.getFullYear();
+  if (reference.getMonth() < birth.getMonth() || (reference.getMonth() === birth.getMonth() && reference.getDate() < birth.getDate())) age -= 1;
+  return age;
+}
+
+function BirthDateCards({ value, onChange, compact = false }: { value: string; onChange: (value: string) => void; compact?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [step, setStep] = useState<'YEAR' | 'MONTH' | 'DAY'>('YEAR');
+  const [year = '', month = '', day = ''] = value.split('-');
+  const days = year && month ? new Date(Number(year), Number(month), 0).getDate() : 31;
+  const monthNames = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'];
+  const displayValue = year && month && day ? `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}` : 'Seleccionar fecha';
+  const chooseYear = (nextYear: number) => { onChange(`${nextYear}--`); setStep('MONTH'); };
+  const chooseMonth = (nextMonth: number) => { onChange(`${year}-${String(nextMonth).padStart(2, '0')}-`); setStep('DAY'); };
+  const chooseDay = (nextDay: number) => { onChange(`${year}-${month.padStart(2, '0')}-${String(nextDay).padStart(2, '0')}`); setOpen(false); setStep('YEAR'); };
+  const openPicker = () => { setStep(year ? month ? 'DAY' : 'MONTH' : 'YEAR'); setOpen(true); };
+
+  return <div className="relative">
+    <button type="button" onClick={openPicker} className={`flex w-full items-center justify-between rounded-xl border border-blue-100 bg-white font-black text-slate-800 outline-none transition-colors hover:border-blue-400 ${compact ? 'px-3 py-2.5 text-[10px]' : 'px-4 py-3 text-xs'}`}>
+      <span>{displayValue}</span><CalendarDays size={compact ? 13 : 16} className="text-blue-600" />
+    </button>
+    {open && <div className={`absolute z-[80] mt-2 overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-2xl ${compact ? 'left-1/2 w-[330px] -translate-x-1/2' : 'left-0 w-full min-w-[300px]'}`}>
+      <div className="flex items-center justify-between border-b border-blue-50 bg-blue-50 px-4 py-3">
+        <div><p className="text-[8px] font-black uppercase tracking-widest text-blue-500">Fecha de nacimiento</p><p className="text-xs font-black uppercase">{step === 'YEAR' ? 'Selecciona el año' : step === 'MONTH' ? `Año ${year} · selecciona el mes` : `${monthNames[Number(month) - 1]} ${year} · selecciona el día`}</p></div>
+        <button type="button" onClick={() => setOpen(false)} className="rounded-lg bg-white p-2 text-slate-400"><X size={14} /></button>
+      </div>
+      <div className="max-h-64 overflow-y-auto p-3">
+        {step === 'YEAR' && <div className="grid grid-cols-4 gap-2">{Array.from({ length: new Date().getFullYear() - 1899 }, (_, index) => new Date().getFullYear() - index).map((item) => <button type="button" key={item} onClick={() => chooseYear(item)} className="rounded-xl border border-slate-100 bg-slate-50 px-2 py-3 text-xs font-black hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700">{item}</button>)}</div>}
+        {step === 'MONTH' && <div className="grid grid-cols-3 gap-2">{monthNames.map((name, index) => <button type="button" key={name} onClick={() => chooseMonth(index + 1)} className="rounded-xl border border-slate-100 bg-slate-50 px-2 py-4 text-xs font-black hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700">{name}</button>)}</div>}
+        {step === 'DAY' && <div className="grid grid-cols-7 gap-1.5">{Array.from({ length: days }, (_, index) => index + 1).map((item) => <button type="button" key={item} onClick={() => chooseDay(item)} className="aspect-square rounded-lg border border-slate-100 bg-slate-50 text-[10px] font-black hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700">{item}</button>)}</div>}
+      </div>
+      {step !== 'YEAR' && <button type="button" onClick={() => setStep(step === 'DAY' ? 'MONTH' : 'YEAR')} className="w-full border-t border-slate-100 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-blue-600">Volver a {step === 'DAY' ? 'meses' : 'años'}</button>}
+    </div>}
+  </div>;
 }
 
 function TeamLogo({ team, className = 'w-10 h-10' }: { team: any; className?: string }) {
@@ -86,7 +153,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [data, setData] = useState<any | null>(initialData);
   const [selectedTeamId, setSelectedTeamId] = useState(initialData?.teams?.[0]?.id || '');
-  const [newPlayer, setNewPlayer] = useState({ name: '', identityNumber: '', shirtNumber: '', birthYear: '', vinculo: '' });
+  const [staffForm, setStaffForm] = useState({ headCoach: '', assistantCoach: '' });
   const [logoUrl, setLogoUrl] = useState('');
   const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' });
   const [activeRound, setActiveRound] = useState('');
@@ -98,9 +165,11 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
 
   const selectedTeam = data?.teams?.find((team: any) => team.id === selectedTeamId) || data?.teams?.[0];
   const selectedCategory = selectedTeam?.categories;
+  const fixtureVisibleToDelegates = Boolean(selectedCategory?.tournaments?.fixture_visible_to_delegates);
   const canEditRoster = selectedTeam && isRegistrationOpen(selectedCategory);
   const players = data?.playersByTeam?.[selectedTeam?.id] || [];
-  const bulkFilledRows = bulkRows.filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthYear || row.vinculo);
+  const teamStaff = data?.staffByTeam?.[selectedTeam?.id] || [];
+  const bulkFilledRows = bulkRows.filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthDate || row.vinculo || row.relationshipDetail);
   const events = data?.eventsByTeam?.[selectedTeam?.id] || [];
   const matches = data?.matchesByTeam?.[selectedTeam?.id] || [];
   const fullSchedule = data?.schedulesByTeam?.[selectedTeam?.id] || [];
@@ -123,6 +192,10 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
 
   useEffect(() => {
     setActiveRound('');
+    setStaffForm({
+      headCoach: teamStaff.find((member: any) => member.role === 'HEAD_COACH')?.full_name || '',
+      assistantCoach: teamStaff.find((member: any) => member.role === 'ASSISTANT_COACH')?.full_name || '',
+    });
   }, [selectedTeam?.id]);
 
   const bulkDraftKey = selectedTeam?.id ? `sportscore:delegate:${slug}:bulk-roster:${selectedTeam.id}` : '';
@@ -131,7 +204,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     if (!showBulkUpload || !bulkDraftKey || bulkRows.length === 0) return;
     const timeout = window.setTimeout(() => {
       try {
-        window.localStorage.setItem(bulkDraftKey, JSON.stringify({ version: 1, updatedAt: Date.now(), rows: bulkRows }));
+        window.localStorage.setItem(bulkDraftKey, JSON.stringify({ version: 2, updatedAt: Date.now(), rows: bulkRows.map(({ faceFile, facePreview, identityFile, ...row }) => row) }));
         setDraftSavedAt(new Date());
       } catch {
         toast.error('El navegador no permitió guardar el borrador local.');
@@ -239,24 +312,15 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     window.location.reload();
   };
 
-  const handleAddPlayer = async (event: React.FormEvent) => {
+  const handleSaveStaff = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!selectedTeam) return;
     setLoading(true);
-    const result = await addDelegatePlayers(slug, selectedTeam.id, [{
-      name: newPlayer.name,
-      identityNumber: newPlayer.identityNumber,
-      shirtNumber: newPlayer.shirtNumber ? Number(newPlayer.shirtNumber) : null,
-      birthYear: newPlayer.birthYear ? Number(newPlayer.birthYear) : null,
-      vinculo: newPlayer.vinculo,
-    }]);
-    if (!result.success) toast.error(result.error);
-    else {
-      toast.success('Jugador inscrito');
-      setNewPlayer({ name: '', identityNumber: '', shirtNumber: '', birthYear: '', vinculo: '' });
-      window.location.reload();
-    }
+    const result = await saveDelegateTeamStaff(slug, selectedTeam.id, staffForm);
     setLoading(false);
+    if (!result.success) return toast.error(result.error);
+    toast.success('Cuerpo técnico guardado');
+    window.location.reload();
   };
 
   const normalizeExcelHeader = (value: string) => value
@@ -266,24 +330,28 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     .toUpperCase();
 
   const validateBulkRows = (rows: BulkPlayerRow[]) => {
-    const currentYear = new Date().getFullYear();
     const normalized = rows.map((row) => ({
       ...row,
       name: row.name.trim().toUpperCase(),
       identityNumber: row.identityNumber.trim().replace(/\D/g, ''),
       vinculo: row.vinculo.trim().toUpperCase(),
+      relationshipDetail: row.relationshipDetail.trim().toUpperCase(),
       error: undefined,
     }));
-    const meaningfulRows = normalized.filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthYear || row.vinculo);
+    const meaningfulRows = normalized.filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthDate || row.vinculo || row.relationshipDetail);
 
     return normalized.map((row) => {
-      if (!row.name && !row.identityNumber && !row.shirtNumber && !row.birthYear && !row.vinculo) return row;
+      if (!row.name && !row.identityNumber && !row.shirtNumber && !row.birthDate && !row.vinculo && !row.relationshipDetail) return row;
       const errors: string[] = [];
       if (!row.name) errors.push('Falta nombre');
       if (row.identityNumber.length < 5 || row.identityNumber.length > 30) errors.push('Identidad inválida');
       if (!Number.isInteger(row.shirtNumber) || Number(row.shirtNumber) < 1 || Number(row.shirtNumber) > 999) errors.push('Dorsal inválido');
-      if (!Number.isInteger(row.birthYear) || Number(row.birthYear) < 1900 || Number(row.birthYear) > currentYear) errors.push('Año inválido');
+      if (!row.birthDate || Number.isNaN(Date.parse(row.birthDate))) errors.push('Fecha inválida');
       if (!ALLOWED_RELATIONSHIPS.includes(row.vinculo as typeof ALLOWED_RELATIONSHIPS[number])) errors.push('Vínculo inválido');
+      if (row.vinculo === 'EX-ALUMNO' && !/^\d{4}$/.test(row.relationshipDetail)) errors.push('Falta promoción');
+      if (row.vinculo === 'PADRE DE FAMILIA' && row.relationshipDetail.length < 5) errors.push('Falta estudiante');
+      if (!row.faceFile) errors.push('Falta foto');
+      if (!row.identityFile) errors.push('Falta documento');
       if (row.shirtNumber && meaningfulRows.filter((item) => item.shirtNumber === row.shirtNumber).length > 1) errors.push('Dorsal repetido');
       if (row.identityNumber && meaningfulRows.filter((item) => item.identityNumber === row.identityNumber).length > 1) errors.push('Identidad repetida');
       return { ...row, error: errors.join(' · ') || undefined };
@@ -295,8 +363,30 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     const rows = bulkRows.map((row, rowIndex) => rowIndex === index ? {
       ...row,
       [field]: field === 'shirtNumber' || field === 'birthYear' ? (normalizedValue ? Number(normalizedValue) : null) : normalizedValue,
+      ...(field === 'vinculo' ? { relationshipDetail: '' } : {}),
     } : row);
     setBulkRows(validateBulkRows(rows));
+  };
+
+  const updateBulkFile = async (index: number, field: 'faceFile' | 'identityFile', file?: File) => {
+    if (!file) return;
+    if (field === 'identityFile' && file.type === 'application/pdf' && file.size > MAX_COMPRESSED_IMAGE_BYTES) return toast.error('El PDF debe pesar máximo 1 MB. Las imágenes sí se comprimen automáticamente.');
+    setLoading(true);
+    try {
+      const processed = file.type.startsWith('image/') ? await compressRosterImage(file) : file;
+      if (processed.size > MAX_COMPRESSED_IMAGE_BYTES) return toast.error('No fue posible comprimir el archivo a 1 MB. Usa una imagen más liviana.');
+      const rows = bulkRows.map((row, rowIndex) => rowIndex === index ? {
+        ...row,
+        [field]: processed,
+        ...(field === 'faceFile' ? { facePreview: URL.createObjectURL(processed) } : {}),
+      } : row);
+      setBulkRows(validateBulkRows(rows));
+      if (processed.size < file.size) toast.success(`Imagen comprimida a ${Math.ceil(processed.size / 1024)} KB`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudo procesar el archivo.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleBulkPaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
@@ -304,13 +394,15 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     if (!text.includes('\t') && !text.includes('\n')) return;
     event.preventDefault();
     const rows = text.split(/\r?\n/).filter((line) => line.trim()).map((line): BulkPlayerRow => {
-      const [name = '', identityNumber = '', shirtNumber = '', birthYear = '', vinculo = ''] = line.split('\t');
+      const [name = '', identityNumber = '', shirtNumber = '', birthDate = '', vinculo = '', relationshipDetail = ''] = line.split('\t');
       return {
         name,
         identityNumber,
         shirtNumber: shirtNumber ? Number(shirtNumber) : null,
-        birthYear: birthYear ? Number(birthYear) : null,
+        birthYear: birthDate ? Number(birthDate.slice(0, 4)) : null,
+        birthDate,
         vinculo,
+        relationshipDetail,
       };
     });
     setBulkRows(validateBulkRows([...rows, ...Array.from({ length: Math.max(0, 8 - rows.length) }, emptyBulkRow)]));
@@ -323,11 +415,12 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
         'NOMBRE COMPLETO': 'MANUEL RAMIREZ',
         'NUMERO DE IDENTIDAD': '1234567890',
         DORSAL: 10,
-        'ANO NACIMIENTO': 1985,
+        'FECHA DE NACIMIENTO': '1985-05-20',
         'VINCULO CON EL COLEGIO': 'EX-ALUMNO',
+        'PROMOCION O NOMBRE DEL ESTUDIANTE': '2003',
       },
     ]);
-    worksheet['!cols'] = [{ wch: 32 }, { wch: 24 }, { wch: 12 }, { wch: 20 }, { wch: 28 }];
+    worksheet['!cols'] = [{ wch: 32 }, { wch: 24 }, { wch: 12 }, { wch: 22 }, { wch: 28 }, { wch: 38 }];
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'JUGADORES');
     XLSX.writeFile(workbook, `Plantilla_${selectedTeam?.name || 'EQUIPO'}_Jugadores.xlsx`);
@@ -349,10 +442,12 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
         const name = String(row['NOMBRE COMPLETO'] || '').trim().toUpperCase();
         const identityNumber = String(row['NUMERO DE IDENTIDAD'] || '').trim().replace(/\D/g, '');
         const shirtNumber = Number(String(row.DORSAL || '').trim());
-        const birthYear = Number(String(row['ANO NACIMIENTO'] || '').trim());
+        const birthDate = String(row['FECHA DE NACIMIENTO'] || '').trim();
+        const birthYear = Number(birthDate.slice(0, 4));
         const vinculo = String(row['VINCULO CON EL COLEGIO'] || '').trim().toUpperCase();
-        return { name, identityNumber, shirtNumber: shirtNumber || null, birthYear: birthYear || null, vinculo };
-      }).filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthYear || row.vinculo);
+        const relationshipDetail = String(row['PROMOCION O NOMBRE DEL ESTUDIANTE'] || '').trim().toUpperCase();
+        return { name, identityNumber, shirtNumber: shirtNumber || null, birthYear: birthYear || null, birthDate, vinculo, relationshipDetail };
+      }).filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthDate || row.vinculo || row.relationshipDetail);
 
       if (parsedRows.length === 0) return toast.error('El archivo no contiene jugadores.');
       setBulkRows(validateBulkRows([...parsedRows, ...Array.from({ length: Math.max(0, 8 - parsedRows.length) }, emptyBulkRow)]));
@@ -362,7 +457,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   };
 
   const submitBulkPlayers = async () => {
-    const playersToInsert = bulkRows.filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthYear || row.vinculo);
+    const playersToInsert = bulkRows.filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthDate || row.vinculo || row.relationshipDetail);
     if (!selectedTeam || playersToInsert.length === 0 || playersToInsert.some((row) => row.error)) return;
     setLoading(true);
     const result = await addDelegatePlayers(slug, selectedTeam.id, playersToInsert.map((row) => ({
@@ -370,11 +465,24 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       identityNumber: row.identityNumber,
       shirtNumber: row.shirtNumber,
       birthYear: row.birthYear,
+      birthDate: row.birthDate,
       vinculo: row.vinculo,
+      relationshipDetail: row.relationshipDetail,
     })));
     setLoading(false);
     if (!result.success) return toast.error(result.error);
-    toast.success(`${result.data.inserted} jugadores inscritos`);
+    setLoading(true);
+    const uploads = playersToInsert.flatMap((row, index) => {
+      const playerId = result.data.playerIds[index];
+      return [
+        uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'FACE_PHOTO', row.faceFile as File),
+        uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'IDENTITY_FRONT', row.identityFile as File),
+      ];
+    });
+    const uploadResults = await Promise.all(uploads);
+    setLoading(false);
+    if (uploadResults.some((upload) => !upload.success)) toast.error('Los jugadores fueron creados, pero algunos archivos no pudieron cargarse.');
+    else toast.success(`${result.data.inserted} jugadores y documentos inscritos`);
     if (bulkDraftKey) window.localStorage.removeItem(bulkDraftKey);
     setShowBulkUpload(false);
     setBulkRows([]);
@@ -410,7 +518,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const closeBulkUpload = () => {
     if (bulkDraftKey && bulkRows.length > 0) {
       try {
-        window.localStorage.setItem(bulkDraftKey, JSON.stringify({ version: 1, updatedAt: Date.now(), rows: bulkRows }));
+        window.localStorage.setItem(bulkDraftKey, JSON.stringify({ version: 2, updatedAt: Date.now(), rows: bulkRows.map(({ faceFile, facePreview, identityFile, ...row }) => row) }));
       } catch {
         toast.error('No se pudo guardar el último cambio local.');
       }
@@ -459,7 +567,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     }
   };
 
-  const handlePlayerDocumentUpload = async (playerId: string, documentType: 'IDENTITY_FRONT' | 'IDENTITY_BACK', file?: File) => {
+  const handlePlayerDocumentUpload = async (playerId: string, documentType: 'FACE_PHOTO' | 'IDENTITY_FRONT' | 'IDENTITY_BACK', file?: File) => {
     if (!selectedTeam || !file) return;
     setLoading(true);
     const result = await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, documentType, file);
@@ -468,7 +576,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     setLoading(false);
   };
 
-  const openPlayerDocument = async (playerId: string, documentType: 'IDENTITY_FRONT' | 'IDENTITY_BACK') => {
+  const openPlayerDocument = async (playerId: string, documentType: 'FACE_PHOTO' | 'IDENTITY_FRONT' | 'IDENTITY_BACK') => {
     if (!selectedTeam) return;
     const result = await getPlayerIdentityDocumentUrl(slug, selectedTeam.id, playerId, documentType);
     if (!result.success) return toast.error(result.error);
@@ -476,28 +584,28 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   };
 
   const renderTeamMark = (team: any) => (
-    <TeamLogo team={team} className="w-10 h-10" />
+    <TeamLogo team={team} className="h-16 w-16 rounded-2xl sm:h-20 sm:w-20" />
   );
 
   const renderMatchCard = (match: any, compact = false) => (
-    <div key={match.id} className="border border-slate-100 rounded-xl p-3 bg-white">
-      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1 mb-3">
+    <div key={match.id} className="rounded-2xl border border-slate-100 bg-white p-4 sm:p-5">
+      <p className="mb-4 flex items-center justify-center gap-1 text-center text-[9px] font-black uppercase tracking-widest text-slate-400">
         <CalendarDays size={12} /> {match.matchdays?.scheduled_date || 'Sin fecha'} / {match.scheduled_time?.slice(0, 5) || '--:--'}
       </p>
-      <div className={`grid grid-cols-[minmax(0,1.35fr)_auto_minmax(0,1.35fr)] items-start gap-2 ${compact ? 'text-[9px]' : 'text-[10px] sm:text-xs'}`}>
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2 min-w-0">
+      <div className={`grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 sm:gap-5 ${compact ? 'text-[9px]' : 'text-[10px] sm:text-xs'}`}>
+        <div className="flex min-w-0 flex-col items-center gap-2 text-center">
           {renderTeamMark(match.home_team)}
-          <span className="font-black uppercase leading-tight break-words min-w-0">{match.home_team?.name}</span>
+          <span className="w-full break-words font-black uppercase leading-tight">{match.home_team?.name}</span>
         </div>
-        <div className="bg-slate-900 text-white rounded-lg px-2 sm:px-3 py-2 font-black text-center min-w-[56px] sm:min-w-[64px] self-center">
+        <div className="min-w-[58px] self-center rounded-xl bg-slate-900 px-3 py-3 text-center text-sm font-black text-white sm:min-w-[72px] sm:px-4">
           {match.status !== 'SCHEDULED' ? `${match.home_score || 0} - ${match.away_score || 0}` : 'VS'}
         </div>
-        <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2 min-w-0 text-right">
-          <span className="font-black uppercase leading-tight break-words min-w-0">{match.away_team?.name}</span>
+        <div className="flex min-w-0 flex-col items-center gap-2 text-center">
           {renderTeamMark(match.away_team)}
+          <span className="w-full break-words font-black uppercase leading-tight">{match.away_team?.name}</span>
         </div>
       </div>
-      <p className={`text-[9px] font-black uppercase mt-2 ${match.status === 'LIVE' ? 'text-red-500' : 'text-slate-400'}`}>{matchStatusLabel(match.status)}</p>
+      <p className={`mt-4 text-center text-[9px] font-black uppercase tracking-widest ${match.status === 'LIVE' ? 'text-red-500' : 'text-slate-400'}`}>{matchStatusLabel(match.status)}</p>
     </div>
   );
 
@@ -627,8 +735,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
             <section role="dialog" aria-modal="true" aria-labelledby="bulk-upload-title" className="flex h-[100dvh] w-full max-w-5xl flex-col overflow-hidden bg-white shadow-2xl sm:h-auto sm:max-h-[94dvh] sm:rounded-[2rem] sm:border sm:border-slate-200">
               <header className="flex items-start justify-between gap-4 border-b border-slate-100 p-5 sm:p-6">
                 <div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-600">Carga masiva</p>
-                  <h2 id="bulk-upload-title" className="text-xl font-black uppercase tracking-tight sm:text-2xl">Importar jugadores desde Excel</h2>
+                  <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-600">Planilla de inscripción</p>
+                  <h2 id="bulk-upload-title" className="text-xl font-black uppercase tracking-tight sm:text-2xl">Inscribir jugadores y documentos</h2>
                   <p className="mt-1 text-xs font-semibold text-slate-500">Equipo: {selectedTeam?.name}</p>
                   <p className="mt-2 text-[9px] font-black uppercase tracking-widest text-emerald-600">
                     {draftSavedAt ? `Borrador guardado localmente · ${draftSavedAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}` : 'Guardado local automático activo'}
@@ -649,24 +757,27 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-[10px] font-bold uppercase leading-relaxed tracking-wider text-slate-500">
-                  Escribe directamente o pega cinco columnas desde Excel: Nombre completo, Número de identidad, Dorsal, Año de nacimiento y Vínculo. Vínculos permitidos: Padre de familia, Ex-alumno o Colaborador.
+                  Escribe directamente o pega seis columnas desde Excel: Nombre completo, Número de identidad, Dorsal, Fecha de nacimiento, Vínculo y Promoción/Estudiante. Después de sincronizar debes cargar la foto y el documento de cada jugador para habilitarlo.
                 </div>
 
                 {bulkRows.length > 0 && (
                   <div onPaste={handleBulkPaste} className="hidden overflow-x-auto rounded-2xl border border-slate-200 md:block">
                     <table className="min-w-full text-left text-xs">
                       <thead className="bg-slate-950 text-[9px] font-black uppercase tracking-widest text-white">
-                        <tr><th className="p-3">#</th><th className="min-w-56 p-3">Nombre completo</th><th className="min-w-52 p-3">Número de identidad</th><th className="min-w-24 p-3">Dorsal</th><th className="min-w-44 p-3">Año de nacimiento</th><th className="min-w-52 p-3">Vínculo</th><th className="min-w-40 p-3">Validación</th><th className="p-3"></th></tr>
+                        <tr className="text-center"><th className="p-3">#</th><th className="p-3">Foto</th><th className="min-w-56 p-3">Nombre completo</th><th className="min-w-52 p-3">Número de identidad</th><th className="min-w-24 p-3">Dorsal</th><th className="min-w-44 p-3">Fecha de nacimiento</th><th className="min-w-52 p-3">Vínculo</th><th className="min-w-60 p-3">Promoción / Estudiante</th><th className="min-w-52 p-3">Documento</th><th className="min-w-40 p-3">Validación</th><th className="p-3"></th></tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {bulkRows.map((row, index) => (
                           <tr key={`${row.name}-${index}`} className={row.error ? 'bg-red-50' : 'bg-white'}>
                             <td className="p-3 font-black text-slate-400">{index + 1}</td>
+                            <td className="p-2"><label title="Subir foto del rostro" className="relative flex h-12 w-12 cursor-pointer items-center justify-center overflow-hidden rounded-full border-2 border-dashed border-cyan-300 bg-cyan-50 text-cyan-600">{row.facePreview ? <img src={row.facePreview} alt="Rostro" className="h-full w-full object-cover" /> : <Camera size={18} />}<input type="file" accept="image/jpeg,image/png,image/webp" capture="user" className="hidden" onChange={(event) => updateBulkFile(index, 'faceFile', event.target.files?.[0])} /></label></td>
                             <td className="p-2"><input value={row.name} onChange={(event) => updateBulkRow(index, 'name', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-black uppercase outline-none focus:border-blue-500" /></td>
                             <td className="p-2"><input type="text" inputMode="numeric" pattern="[0-9]*" value={row.identityNumber} onChange={(event) => updateBulkRow(index, 'identityNumber', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500" /></td>
                             <td className="p-2"><input type="number" inputMode="numeric" min="1" max="999" value={row.shirtNumber ?? ''} onChange={(event) => updateBulkRow(index, 'shirtNumber', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500" /></td>
-                            <td className="p-2"><input type="number" inputMode="numeric" min="1900" max={new Date().getFullYear()} value={row.birthYear ?? ''} onChange={(event) => updateBulkRow(index, 'birthYear', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500" /></td>
+                            <td className="p-2"><BirthDateCards compact value={row.birthDate} onChange={(value) => updateBulkRow(index, 'birthDate', value)} /></td>
                             <td className="p-2"><select value={row.vinculo} onChange={(event) => updateBulkRow(index, 'vinculo', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500"><option value="">Seleccionar</option>{ALLOWED_RELATIONSHIPS.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}</select></td>
+                            <td className="p-2">{(row.vinculo === 'PADRE DE FAMILIA' || row.vinculo === 'EX-ALUMNO') && <input type={row.vinculo === 'EX-ALUMNO' ? 'number' : 'text'} inputMode={row.vinculo === 'EX-ALUMNO' ? 'numeric' : undefined} placeholder={row.vinculo === 'EX-ALUMNO' ? 'Año de promoción' : 'Nombre completo del estudiante'} value={row.relationshipDetail} onChange={(event) => updateBulkRow(index, 'relationshipDetail', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-bold uppercase outline-none focus:border-blue-500" />}</td>
+                            <td className="p-2"><label className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 py-2 font-black uppercase ${row.identityFile ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}><FileCheck2 size={14} /> {row.identityFile ? 'Cargado' : 'Subir'}<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" onChange={(event) => updateBulkFile(index, 'identityFile', event.target.files?.[0])} /></label></td>
                             <td className={`p-3 text-[10px] font-black uppercase ${row.error ? 'text-red-600' : row.name ? 'text-emerald-600' : 'text-slate-300'}`}>{row.error || (row.name ? 'LISTO' : 'FILA VACÍA')}</td>
                             <td className="p-2"><button type="button" onClick={() => setBulkRows(validateBulkRows(bulkRows.filter((_, rowIndex) => rowIndex !== index)))} className="rounded-lg p-2 text-red-500 hover:bg-red-50" aria-label={`Eliminar fila ${index + 1}`}><Trash2 size={14} /></button></td>
                           </tr>
@@ -685,10 +796,13 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <label className="col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Nombre completo<input value={row.name} onChange={(event) => updateBulkRow(index, 'name', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-black uppercase text-slate-900 outline-none focus:border-blue-500" /></label>
+                          <label className="col-span-2 flex cursor-pointer items-center gap-3 rounded-xl border border-cyan-200 bg-white p-3 text-[10px] font-black uppercase tracking-wider text-cyan-700"><span className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-full bg-cyan-50">{row.facePreview ? <img src={row.facePreview} alt="Rostro" className="h-full w-full object-cover" /> : <Camera size={20} />}</span>{row.faceFile ? 'Cambiar foto del rostro' : 'Agregar foto del rostro'}<input type="file" accept="image/jpeg,image/png,image/webp" capture="user" className="hidden" onChange={(event) => updateBulkFile(index, 'faceFile', event.target.files?.[0])} /></label>
                           <label className="col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Número de identidad<input type="text" inputMode="numeric" pattern="[0-9]*" value={row.identityNumber} onChange={(event) => updateBulkRow(index, 'identityNumber', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-900 outline-none focus:border-blue-500" /></label>
                           <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Dorsal<input type="number" inputMode="numeric" min="1" max="999" value={row.shirtNumber ?? ''} onChange={(event) => updateBulkRow(index, 'shirtNumber', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-900 outline-none focus:border-blue-500" /></label>
-                          <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Año de nacimiento<input type="number" inputMode="numeric" min="1900" max={new Date().getFullYear()} value={row.birthYear ?? ''} onChange={(event) => updateBulkRow(index, 'birthYear', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-900 outline-none focus:border-blue-500" /></label>
+                          <label className="col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Fecha de nacimiento · año, mes y día<div className="mt-1.5"><BirthDateCards value={row.birthDate} onChange={(value) => updateBulkRow(index, 'birthDate', value)} /></div></label>
                           <label className="col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Vínculo<select value={row.vinculo} onChange={(event) => updateBulkRow(index, 'vinculo', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-bold uppercase text-slate-900 outline-none focus:border-blue-500"><option value="">Seleccionar</option>{ALLOWED_RELATIONSHIPS.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}</select></label>
+                          {row.vinculo !== 'COLABORADOR' && row.vinculo && <label className="col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">{row.vinculo === 'EX-ALUMNO' ? 'Año de la promoción' : 'Nombre completo del estudiante'}<input type={row.vinculo === 'EX-ALUMNO' ? 'number' : 'text'} inputMode={row.vinculo === 'EX-ALUMNO' ? 'numeric' : undefined} value={row.relationshipDetail} onChange={(event) => updateBulkRow(index, 'relationshipDetail', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-bold uppercase text-slate-900 outline-none focus:border-blue-500" /></label>}
+                          <label className={`col-span-2 flex cursor-pointer items-center justify-center gap-2 rounded-xl border px-3 py-3 text-[10px] font-black uppercase tracking-wider ${row.identityFile ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-indigo-200 bg-white text-indigo-700'}`}><FileCheck2 size={16} /> {row.identityFile ? row.identityFile.name : 'Agregar documento de identidad'}<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" onChange={(event) => updateBulkFile(index, 'identityFile', event.target.files?.[0])} /></label>
                         </div>
                         <p className={`mt-3 rounded-xl px-3 py-2 text-[10px] font-black uppercase ${row.error ? 'bg-red-100 text-red-600' : row.name ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-50 text-slate-400'}`}>{row.error || (row.name ? 'Registro listo' : 'Fila vacía')}</p>
                       </article>
@@ -888,7 +1002,16 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               </div>
             </section>
 
-            <section className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.9fr)] gap-6">
+            <section className="rounded-[2rem] border border-violet-100 bg-violet-50/50 p-5">
+              <div className="mb-4 flex items-center gap-3"><div className="rounded-xl bg-violet-600 p-3 text-white"><UserRoundCog size={20} /></div><div><h2 className="text-lg font-black uppercase">Cuerpo técnico</h2><p className="text-[9px] font-black uppercase tracking-widest text-violet-500">Inscripción oficial de la delegación</p></div></div>
+              <form onSubmit={handleSaveStaff} className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+                <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">Técnico<input required value={staffForm.headCoach} onChange={(event) => setStaffForm({ ...staffForm, headCoach: event.target.value.toUpperCase() })} placeholder="Nombre completo del técnico" className="mt-1.5 w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-xs font-bold uppercase outline-none focus:border-violet-500" /></label>
+                <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">Asistente técnico<input required value={staffForm.assistantCoach} onChange={(event) => setStaffForm({ ...staffForm, assistantCoach: event.target.value.toUpperCase() })} placeholder="Nombre completo del asistente" className="mt-1.5 w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-xs font-bold uppercase outline-none focus:border-violet-500" /></label>
+                <button disabled={loading || !canEditRoster} className="self-end rounded-xl bg-violet-600 px-5 py-3 text-xs font-black uppercase tracking-widest text-white disabled:opacity-40">Guardar</button>
+              </form>
+            </section>
+
+            <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(420px,1fr)]">
               <div className="bg-white border border-slate-200 rounded-[2rem] overflow-hidden">
                 <div className="p-5 border-b border-slate-100 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
@@ -899,22 +1022,12 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   </div>
                   {canEditRoster ? (
                     <button type="button" onClick={openBulkUpload} className="flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white hover:bg-emerald-700">
-                      <FileSpreadsheet size={15} /> Carga masiva
+                      <FileSpreadsheet size={15} /> Inscribir jugadores
                     </button>
                   ) : <Lock className="text-red-500" />}
                 </div>
                 {canEditRoster && (
-                  <form onSubmit={handleAddPlayer} className="grid grid-cols-1 gap-3 border-b border-slate-100 bg-slate-50 p-4 sm:grid-cols-2 lg:grid-cols-6">
-                    <input required value={newPlayer.name} onChange={(e) => setNewPlayer({ ...newPlayer, name: e.target.value.toUpperCase() })} placeholder="Nombre completo" className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold uppercase outline-none focus:border-blue-500 sm:col-span-1 lg:col-span-3" />
-                    <input required type="text" inputMode="numeric" pattern="[0-9]*" value={newPlayer.identityNumber} onChange={(e) => setNewPlayer({ ...newPlayer, identityNumber: e.target.value.replace(/\D/g, '') })} placeholder="Número de identidad" minLength={5} maxLength={30} className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold outline-none focus:border-blue-500 sm:col-span-1 lg:col-span-3" />
-                    <input required type="number" inputMode="numeric" min="1" max="999" value={newPlayer.shirtNumber} onChange={(e) => setNewPlayer({ ...newPlayer, shirtNumber: e.target.value })} placeholder="Dorsal" className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold outline-none focus:border-blue-500 lg:col-span-1" />
-                    <input required type="number" inputMode="numeric" min="1900" max={new Date().getFullYear()} value={newPlayer.birthYear} onChange={(e) => setNewPlayer({ ...newPlayer, birthYear: e.target.value })} placeholder="Año de nacimiento" className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold outline-none focus:border-blue-500 lg:col-span-2" />
-                    <select required value={newPlayer.vinculo} onChange={(e) => setNewPlayer({ ...newPlayer, vinculo: e.target.value })} className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold uppercase outline-none focus:border-blue-500 lg:col-span-2">
-                      <option value="">Vínculo con el colegio</option>
-                      {ALLOWED_RELATIONSHIPS.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}
-                    </select>
-                    <button disabled={loading} className="flex items-center justify-center gap-1 rounded-xl bg-blue-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white disabled:opacity-50 lg:col-span-1"><Plus size={14} /> Agregar</button>
-                  </form>
+                  <button type="button" onClick={openBulkUpload} className="flex w-full items-center justify-center gap-2 border-b border-slate-100 bg-blue-50 px-5 py-5 text-xs font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100"><FileSpreadsheet size={17} /> Abrir planilla de inscripción</button>
                 )}
                 <div className="divide-y divide-slate-50">
                   {players.map((player: any) => (
@@ -922,20 +1035,20 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                       <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
                         <p className="font-black uppercase text-sm">{player.name}</p>
-                        <p className="text-[10px] font-bold text-slate-400">ID {player.identity_number || 'SIN REGISTRAR'} / #{player.shirt_number || '-'} / {player.birth_year || 'Sin año'} / {player.vinculo || 'Sin vínculo'}</p>
+                        <p className="text-[10px] font-bold text-slate-400">ID {player.identity_number || 'SIN REGISTRAR'} / #{player.shirt_number || '-'} / {player.birth_date || player.birth_year || 'Sin fecha'} / {ageOnDate(player.birth_date, selectedCategory?.tournaments?.schedule_dates?.[0]) ?? '-'} años en el torneo / {player.vinculo || 'Sin vínculo'}{player.relationship_detail ? ` · ${player.relationship_detail}` : ''}</p>
                       </div>
                       {canEditRoster && <button onClick={() => handleDeletePlayer(player.id)} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><Trash2 size={16} /></button>}
                       </div>
-                      {player.birth_year && new Date().getFullYear() - Number(player.birth_year) >= 35 && (
+                      {(
                         <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
                           <div className="mb-2 flex items-center justify-between gap-2">
-                            <p className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500"><FileCheck2 size={13} className="text-blue-600" /> Identidad · categoría 35+</p>
-                            <span className="text-[9px] font-black uppercase text-slate-400">Privado</span>
+                            <p className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500"><FileCheck2 size={13} className="text-blue-600" /> Foto y documento obligatorios</p>
+                            <span className={`text-[9px] font-black uppercase ${player.player_documents?.some((item: any) => item.document_type === 'FACE_PHOTO') && player.player_documents?.some((item: any) => item.document_type === 'IDENTITY_FRONT') ? 'text-emerald-600' : 'text-red-500'}`}>{player.player_documents?.some((item: any) => item.document_type === 'FACE_PHOTO') && player.player_documents?.some((item: any) => item.document_type === 'IDENTITY_FRONT') ? 'Expediente completo' : 'No habilitado'}</span>
                           </div>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            {(['IDENTITY_FRONT', 'IDENTITY_BACK'] as const).map((documentType) => {
+                            {(['FACE_PHOTO', 'IDENTITY_FRONT'] as const).map((documentType) => {
                               const document = player.player_documents?.find((item: any) => item.document_type === documentType);
-                              const label = documentType === 'IDENTITY_FRONT' ? 'Documento frontal' : 'Documento posterior';
+                              const label = documentType === 'FACE_PHOTO' ? 'Fotografía del rostro' : 'Documento de identidad';
                               return (
                                 <div key={documentType} className="rounded-xl border border-slate-200 bg-white p-3">
                                   <div className="flex items-center justify-between gap-2">
@@ -950,7 +1063,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                                   {document?.rejection_reason && <p className="mt-2 text-[9px] font-bold text-red-500">{document.rejection_reason}</p>}
                                   <label className="mt-2 flex cursor-pointer items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-white">
                                     <Upload size={12} /> {document ? 'Reemplazar' : 'Subir'}
-                                    <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" disabled={loading} onChange={(event) => handlePlayerDocumentUpload(player.id, documentType, event.target.files?.[0])} />
+                                    <input type="file" accept={documentType === 'FACE_PHOTO' ? 'image/jpeg,image/png,image/webp' : 'image/jpeg,image/png,image/webp,application/pdf'} capture={documentType === 'FACE_PHOTO' ? 'user' : undefined} className="hidden" disabled={loading} onChange={(event) => handlePlayerDocumentUpload(player.id, documentType, event.target.files?.[0])} />
                                   </label>
                                 </div>
                               );
@@ -984,13 +1097,13 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Máximo 800 KB. Formatos de imagen.</p>
                 </div>
 
-                <div className="bg-white border border-slate-200 rounded-[2rem] p-5 xl:min-w-[360px]">
+                {fixtureVisibleToDelegates ? <div className="rounded-[2rem] border border-slate-200 bg-white p-5 xl:min-w-[420px]">
                   <h2 className="font-black uppercase text-lg mb-4">Partidos del equipo</h2>
                   <div className="space-y-3">
                     {teamUpcomingMatches.map((match: any) => renderMatchCard(match))}
                     {teamUpcomingMatches.length === 0 && <p className="text-center text-slate-400 text-xs font-black uppercase tracking-widest py-8">Sin partidos pendientes</p>}
                   </div>
-                </div>
+                </div> : <div className="rounded-[2rem] border border-indigo-100 bg-indigo-50 p-6 text-center xl:min-w-[420px]"><Lock className="mx-auto text-indigo-400" size={24} /><h2 className="mt-3 text-sm font-black uppercase text-indigo-800">Fixture pendiente de publicación</h2><p className="mt-2 text-[9px] font-bold uppercase tracking-widest text-indigo-400">La organización lo habilitará cuando esté confirmado.</p></div>}
               </div>
             </section>
 
@@ -1007,7 +1120,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 </div>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-[2rem] p-5">
+              {fixtureVisibleToDelegates && <div className="bg-white border border-slate-200 rounded-[2rem] p-5">
                 <h2 className="font-black uppercase text-lg mb-4">Jornadas completas</h2>
                 {roundEntries.length > 0 && (
                   <div className="flex gap-2 overflow-x-auto pb-2 mb-4">
@@ -1027,7 +1140,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   {((scheduleRounds[selectedRound] || []) as any[]).map((match) => renderRoundMatchCard(match))}
                   {fullSchedule.length === 0 && <p className="text-center text-slate-400 text-xs font-black uppercase tracking-widest py-8">No hay jornadas generadas</p>}
                 </div>
-              </div>
+              </div>}
             </section>
           </>
         )}

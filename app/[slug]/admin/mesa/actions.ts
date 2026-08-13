@@ -10,7 +10,7 @@ type RecordFootballEventInput = {
   matchId: string;
   teamId: string;
   playerId?: string | null;
-  eventType: 'GOAL' | 'YELLOW' | 'RED' | 'SUB' | 'SCORE_ADJUST';
+  eventType: 'GOAL' | 'YELLOW' | 'RED' | 'SUB' | 'SCORE_ADJUST' | 'ASSIST' | 'MVP';
   period: string;
   matchSecond?: number | null;
   minuteRecord?: number | null;
@@ -176,6 +176,14 @@ export async function recordFootballMatchEvent(input: RecordFootballEventInput) 
   assertMatchTeam(input.teamId, match);
 
   const supabase = createPrivilegedSupabaseClient();
+  if (input.eventType === 'MVP') {
+    const { error: replaceMvpError } = await supabase
+      .from('match_events')
+      .delete()
+      .eq('match_id', input.matchId)
+      .eq('event_type', 'MVP');
+    if (replaceMvpError) throw new Error('No se pudo actualizar el MVP del partido.');
+  }
   const { data, error } = await supabase.rpc('sportscore_record_match_event', {
     p_match_id: input.matchId,
     p_team_id: input.teamId,

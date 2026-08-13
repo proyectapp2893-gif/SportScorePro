@@ -12,7 +12,7 @@ async function loadTeamAccess(supabase: ReturnType<typeof createServerSupabaseAd
         categories(
           id, name, gender, registration_open, registration_deadline, min_roster_size, max_roster_size, roster_locked_message,
           sports(name),
-          tournaments(name, fair_play_enabled, fine_yellow_amount, fine_red_amount, fp_yellow_deduction, fp_red_deduction)
+          tournaments(name, fair_play_enabled, fine_yellow_amount, fine_red_amount, fp_yellow_deduction, fp_red_deduction, schedule_dates, fixture_visible_to_delegates)
         )
       )
     `)
@@ -89,17 +89,27 @@ async function loadDelegatePortalData(slug: string) {
   const matchesByTeam: Record<string, any[]> = {};
   const eventsByMatch: Record<string, any[]> = {};
   const schedulesByTeam: Record<string, any[]> = {};
+  const staffByTeam: Record<string, any[]> = {};
 
   if (teamIds.length > 0) {
-    const { data: players } = await supabase
+    const playersQuery = await supabase
       .from('players')
-      .select('id, team_id, name, identity_number, shirt_number, birth_year, vinculo, player_documents(id, document_type, status, rejection_reason, original_filename, updated_at)')
+      .select('id, team_id, name, identity_number, shirt_number, birth_year, birth_date, vinculo, relationship_detail, player_documents(id, document_type, status, rejection_reason, original_filename, updated_at)')
       .in('team_id', teamIds)
       .order('name');
+    const players = playersQuery.error?.code === '42703'
+      ? (await supabase.from('players').select('id, team_id, name, identity_number, shirt_number, birth_year, vinculo, player_documents(id, document_type, status, rejection_reason, original_filename, updated_at)').in('team_id', teamIds).order('name')).data
+      : playersQuery.data;
 
     (players || []).forEach((player: any) => {
       if (!playersByTeam[player.team_id]) playersByTeam[player.team_id] = [];
       playersByTeam[player.team_id].push(player);
+    });
+
+    const { data: staff } = await supabase.from('team_staff').select('id, team_id, role, full_name').in('team_id', teamIds);
+    (staff || []).forEach((member: any) => {
+      if (!staffByTeam[member.team_id]) staffByTeam[member.team_id] = [];
+      staffByTeam[member.team_id].push(member);
     });
 
     const eventsQuery = await supabase
@@ -184,6 +194,7 @@ async function loadDelegatePortalData(slug: string) {
     },
     teams,
     playersByTeam,
+    staffByTeam,
     eventsByTeam,
     matchesByTeam,
     eventsByMatch,

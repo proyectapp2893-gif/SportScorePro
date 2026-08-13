@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { supabase } from '../../../supabase'; 
-import { Trophy, Plus, School, CheckCircle2, ChevronRight, ChevronLeft, Image as ImageIcon, UploadCloud, Scale, DollarSign, X, Swords, GitMerge, Settings, Crown, ListOrdered, Grid2x2, LayoutGrid, TableProperties, Eraser, Database, Upload, Trash2, AlertTriangle, Edit2, Check } from 'lucide-react';
+import { Trophy, Plus, School, CheckCircle2, ChevronRight, ChevronLeft, Image as ImageIcon, UploadCloud, Scale, DollarSign, X, Swords, GitMerge, Settings, Crown, ListOrdered, Grid2x2, LayoutGrid, TableProperties, Eraser, Database, Upload, Trash2, AlertTriangle, Edit2, Check, Clock, CalendarDays } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { confirmDialog } from '@/app/components/AppDialog';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall, FaTableTennis, FaGolfBall } from 'react-icons/fa';
@@ -43,6 +43,10 @@ export default function CrearTorneoPage() {
   const [fpNoShowDeduction, setFpNoShowDeduction] = useState<number | ''>(500);
   const [fpYellowFine, setFpYellowFine] = useState<number | ''>(0);
   const [fpRedFine, setFpRedFine] = useState<number | ''>(0);
+  const [scheduleTimeSlots, setScheduleTimeSlots] = useState<string[]>(['08:00', '10:00', '12:00']);
+  const [scheduleDates, setScheduleDates] = useState<string[]>(['']);
+  const [availableVenues, setAvailableVenues] = useState<string[]>(['Cancha 1', 'Cancha 2']);
+  const [fixtureVisibleToDelegates, setFixtureVisibleToDelegates] = useState(false);
 
   const [customFpRules, setCustomFpRules] = useState<{ id: string; name: string; points: number | '' }[]>([]);
   
@@ -117,6 +121,10 @@ export default function CrearTorneoPage() {
       setFpNoShowDeduction(tournament.fp_no_show_deduction || 500); 
       setFpYellowFine(tournament.fine_yellow_amount || 0);
       setFpRedFine(tournament.fine_red_amount || 0);
+      setScheduleTimeSlots(Array.isArray(tournament.schedule_time_slots) && tournament.schedule_time_slots.length > 0 ? tournament.schedule_time_slots : ['08:00', '10:00', '12:00']);
+      setScheduleDates(Array.isArray(tournament.schedule_dates) && tournament.schedule_dates.length > 0 ? tournament.schedule_dates : ['']);
+      setAvailableVenues(Array.isArray(tournament.available_venues) && tournament.available_venues.length > 0 ? tournament.available_venues : ['Cancha 1', 'Cancha 2']);
+      setFixtureVisibleToDelegates(Boolean(tournament.fixture_visible_to_delegates));
       
       // CORRECCIÓN: Ajustado a fp_custom_rule en singular
       setCustomFpRules(tournament.fp_custom_rule || []); 
@@ -352,7 +360,11 @@ export default function CrearTorneoPage() {
         fp_no_show_deduction: Number(fpNoShowDeduction) || 0, 
         fp_custom_rule: cleanCustomRules, // CORRECCIÓN: Ajustado a singular para que coincida con DB
         fine_yellow_amount: Number(fpYellowFine) || 0,
-        fine_red_amount: Number(fpRedFine) || 0
+        fine_red_amount: Number(fpRedFine) || 0,
+        schedule_time_slots: Array.from(new Set(scheduleTimeSlots.filter(Boolean))).sort(),
+        schedule_dates: scheduleDates.filter(Boolean).sort(),
+        available_venues: availableVenues,
+        fixture_visible_to_delegates: fixtureVisibleToDelegates,
       };
 
       const result = await saveTournamentWizard(slug, {
@@ -549,13 +561,56 @@ export default function CrearTorneoPage() {
                   <input type="text" autoFocus required placeholder={`EJ: COPA ${clientInfo?.name?.split(' ')[0] || 'TORNEO'} 2026`} className="w-full bg-slate-50 border border-slate-200 p-4 rounded-xl text-lg font-black text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-50 transition-all uppercase" value={newTournamentName} onChange={(e) => setNewTournamentName(e.target.value)} />
                 </div>
 
+                <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-6 shadow-sm">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <label className="flex items-center gap-2 text-sm font-black uppercase tracking-widest text-blue-800"><Clock size={18} /> Horarios disponibles</label>
+                      <p className="mt-1 max-w-2xl text-[10px] font-bold uppercase leading-relaxed tracking-wider text-slate-500">Estas franjas se usarán para repartir los partidos de manera equilibrada. Después podrás reorganizar el fixture sin borrar resultados.</p>
+                    </div>
+                    <button type="button" onClick={() => setScheduleTimeSlots((current) => [...current, ''])} className="flex shrink-0 items-center justify-center gap-2 rounded-xl border border-blue-200 bg-white px-4 py-3 text-[10px] font-black uppercase tracking-widest text-blue-700"><Plus size={14} /> Agregar horario</button>
+                  </div>
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+                    {scheduleTimeSlots.map((time, index) => (
+                      <div key={index} className="flex items-center gap-2 rounded-xl border border-blue-100 bg-white p-2">
+                        <input type="time" value={time} onChange={(event) => setScheduleTimeSlots((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))} className="min-w-0 flex-1 bg-transparent px-2 py-2 text-sm font-black text-slate-800 outline-none" />
+                        <button type="button" onClick={() => setScheduleTimeSlots((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="rounded-lg p-2 text-red-500 hover:bg-red-50" aria-label={`Eliminar horario ${index + 1}`}><Trash2 size={14} /></button>
+                      </div>
+                    ))}
+                  </div>
+                  {scheduleTimeSlots.length === 0 && <p className="mt-4 rounded-xl border border-dashed border-blue-200 bg-white p-4 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Agrega al menos una franja horaria</p>}
+                  <div className="mt-6 border-t border-blue-100 pt-6">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <label className="flex items-center gap-2 text-sm font-black uppercase tracking-widest text-blue-800"><CalendarDays size={18} /> Primer sábado del torneo</label>
+                        <p className="mt-1 text-[10px] font-bold uppercase leading-relaxed tracking-wider text-slate-500">Las jornadas siguientes se calcularán automáticamente cada siete días.</p>
+                      </div>
+                    </div>
+                    <div className="mt-5 max-w-sm rounded-xl border border-blue-100 bg-white p-2">
+                      <input type="date" value={scheduleDates[0] || ''} onChange={(event) => setScheduleDates([event.target.value])} className="w-full bg-transparent px-3 py-2 text-sm font-black text-slate-800 outline-none" />
+                    </div>
+                    {!scheduleDates[0] && <p className="mt-4 rounded-xl border border-dashed border-blue-200 bg-white p-4 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Selecciona el primer sábado de competencia</p>}
+                  </div>
+                  <div className="mt-6 grid gap-4 border-t border-blue-100 pt-6 md:grid-cols-2">
+                    <div className="rounded-2xl border border-blue-100 bg-white p-4">
+                      <p className="text-xs font-black uppercase tracking-widest text-blue-800">Canchas disponibles</p>
+                      <p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Solo se asignarán las canchas seleccionadas.</p>
+                      <div className="mt-4 grid grid-cols-2 gap-2">{['Cancha 1', 'Cancha 2'].map((venue) => <label key={venue} className={`flex cursor-pointer items-center justify-center gap-2 rounded-xl border px-3 py-3 text-[10px] font-black uppercase tracking-widest ${availableVenues.includes(venue) ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-400'}`}><input type="checkbox" checked={availableVenues.includes(venue)} onChange={(event) => setAvailableVenues((current) => event.target.checked ? [...current, venue] : current.filter((item) => item !== venue))} className="h-4 w-4" />{venue}</label>)}</div>
+                    </div>
+                    <div className="rounded-2xl border border-indigo-100 bg-white p-4">
+                      <p className="text-xs font-black uppercase tracking-widest text-indigo-800">Fixture para delegados</p>
+                      <p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Puedes crearlo primero y publicarlo cuando esté confirmado.</p>
+                      <label className="mt-4 flex cursor-pointer items-center justify-between rounded-xl bg-indigo-50 px-4 py-3"><span className="text-[10px] font-black uppercase tracking-widest text-indigo-700">{fixtureVisibleToDelegates ? 'Visible' : 'Oculto'}</span><input type="checkbox" checked={fixtureVisibleToDelegates} onChange={(event) => setFixtureVisibleToDelegates(event.target.checked)} className="h-5 w-5" /></label>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
                   <label className="text-xs text-slate-500 uppercase font-black tracking-widest mb-3 block flex items-center gap-2"><ImageIcon size={16} className="text-blue-600"/> Escudo o Logo (Opcional)</label>
                   <div className="relative">
-                    <input type="file" accept="image/png, image/jpeg, image/webp" onChange={(e) => setLogoFile(e.target.files ? e.target.files[0] : null)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                    <input type="file" accept="image/png, image/jpeg, image/webp" onChange={(e) => { const file = e.target.files?.[0] || null; if (file && file.size > 5 * 1024 * 1024) { e.target.value = ''; toast.error('El logo debe pesar máximo 5 MB.'); return; } setLogoFile(file); }} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
                     <div className={`w-full border-2 border-dashed p-8 rounded-xl font-black uppercase tracking-widest text-xs flex flex-col items-center justify-center gap-3 transition-all ${(logoFile || existingLogoUrl) ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-slate-300 bg-slate-50 text-slate-500 hover:border-blue-400 hover:bg-slate-100'}`}>
                       {(logoFile || existingLogoUrl) ? <CheckCircle2 size={32} className="text-emerald-500"/> : <UploadCloud size={32} className="text-slate-400" />}
-                      <span className="truncate max-w-full px-4 text-center">{logoFile ? `NUEVO ARCHIVO: ${logoFile.name}` : existingLogoUrl ? 'LOGO ACTUAL GUARDADO (Haz clic para reemplazar)' : 'Arrastra un archivo o haz clic para subir'}</span>
+                      <span className="truncate max-w-full px-4 text-center">{logoFile ? `NUEVO ARCHIVO: ${logoFile.name}` : existingLogoUrl ? 'LOGO ACTUAL GUARDADO (Haz clic para reemplazar)' : 'Arrastra un archivo o haz clic para subir · Máximo 5 MB'}</span>
                     </div>
                   </div>
                 </div>
