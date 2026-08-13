@@ -119,7 +119,10 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
       setDelegates((current) => current.map((item) => item.id === delegate.id ? { ...item, whatsapp_phone: phone } : item));
     }
 
-    const portalUrl = `${window.location.origin}/${slug}/delegado`;
+    const publicOrigin = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+      ? 'https://sport-score-pro.vercel.app'
+      : window.location.origin;
+    const portalUrl = `${publicOrigin}/${slug}/delegado`;
     const teamNames = Array.from(new Set(
       (delegate.delegate_team_access || [])
         .map((access: any) => access.teams?.name)
@@ -133,25 +136,25 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
       ? `*Contraseña inicial:* ${delegate.assigned_password}`
       : '*Contraseña:* utiliza la contraseña que configuraste actualmente.';
     const message = [
-      `Hola *${delegate.name}* 👋, DELEGADO DE *${teamLabel}*`,
+      `Hola *${delegate.name}*, DELEGADO DE ${teamLabel}*`,
       '',
       'Te damos la bienvenida al *Portal de Delegados de SportScore Pro*.',
       '',
       `Desde tu portal podrás consultar y hacer seguimiento a toda la información de *${teamLabel}* durante el torneo:`,
       '',
-      '⚽ Programación de partidos',
-      `📊 Estadísticas ${hasMultipleTeams ? 'de los equipos' : 'del equipo'}`,
-      '🥅 Goles y goleadores',
-      '🟨🟥 Tarjetas y sanciones',
-      '🏆 Resultados y tabla de posiciones',
-      '🔴 Resultados de los partidos en vivo',
+      '- Programación de partidos',
+      `- Estadísticas ${hasMultipleTeams ? 'de los equipos' : 'del equipo'}`,
+      '- Goles y goleadores',
+      '- Tarjetas y sanciones',
+      '- Resultados y tabla de posiciones',
+      '- Resultados de los partidos en vivo',
       '',
       '*Tus datos de acceso son:*',
       '',
       `*Usuario:* ${delegate.username}`,
       passwordLine,
       '',
-      '🔗 *Ingresar al Portal de Delegados:*',
+      '*Ingresar al Portal de Delegados:*',
       portalUrl,
       '',
       'Por seguridad, te recomendamos cambiar tu contraseña después del primer ingreso y mantener tus credenciales de acceso de forma privada.',
