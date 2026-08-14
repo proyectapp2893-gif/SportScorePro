@@ -480,7 +480,7 @@ export default function CrearTorneoPage() {
                 {wizardStep === 5 && ' Ramas y Categorías'}
               </p>
             </div>
-            <button onClick={() => router.push(`/${slug}/admin`)} className="p-2 bg-slate-100 text-slate-500 rounded-full hover:bg-slate-200 transition-colors shrink-0">
+            <button onClick={() => router.push(`/${slug}/admin`)} title="Volver al panel principal" aria-label="Volver al panel principal" className="p-2 bg-slate-100 text-slate-500 rounded-full hover:bg-slate-200 transition-colors shrink-0">
               <X size={20} />
             </button>
           </div>

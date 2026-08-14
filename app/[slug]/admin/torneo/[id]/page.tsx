@@ -161,7 +161,7 @@ export default function TorneoDashboard() {
             onClick={() => router.push(`/${slug}/admin`)}
             className="flex items-center gap-2 text-slate-500 hover:text-slate-900 transition-all text-[10px] font-black uppercase tracking-widest group bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-sm"
           >
-            <ChevronLeft size={16} className="group-hover:-translate-x-1 transition-transform" /> Volver al inicio
+            <ChevronLeft size={16} className="group-hover:-translate-x-1 transition-transform" /> Panel principal
           </button>
           
           <div className="flex gap-4">

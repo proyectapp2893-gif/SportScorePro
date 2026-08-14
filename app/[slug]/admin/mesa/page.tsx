@@ -2,7 +2,7 @@
 
 import { useEffect, useState, Suspense } from 'react';
 import { supabase } from '../../../supabase'; 
-import { ArrowLeft, ArrowRight, CheckCircle2, Play, School, CalendarDays, Trophy, ShieldCheck, MonitorPlay, ExternalLink } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CheckCircle2, Play, School, CalendarDays, Trophy, ShieldCheck, MonitorPlay, ExternalLink, House } from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams, useRouter, useParams } from 'next/navigation';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 'react-icons/fa';
@@ -164,9 +164,10 @@ function MesaControlContent() {
               </button>
             ) : (
               <Link href={`/${slug}/admin`} className="w-full sm:w-auto p-4 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-blue-600 transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest group shadow-sm">
-                <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" /> Volver al inicio
+                <House size={16} /> Panel principal
               </Link>
             )}
+            {(selectedCategory || selectedSport) && <Link href={`/${slug}/admin`} className="w-full sm:w-auto p-4 bg-slate-900 border border-slate-900 rounded-2xl text-white hover:bg-blue-600 hover:border-blue-600 transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm"><House size={16} /> Panel principal</Link>}
           </div>
         </div>
 

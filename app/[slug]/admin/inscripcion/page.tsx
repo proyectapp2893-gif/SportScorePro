@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../../../supabase';
-import { UserPlus, Trash2, ArrowLeft, Download, Upload, Users, Edit2, Check, X, RefreshCcw, AlertTriangle, ArrowRight, Trophy, ShieldCheck, FileSpreadsheet, School, Grid, Eraser, Database, Plus, Eye, FileCheck2 } from 'lucide-react';
+import { UserPlus, Trash2, ArrowLeft, Download, Upload, Users, Edit2, Check, X, RefreshCcw, AlertTriangle, ArrowRight, Trophy, ShieldCheck, FileSpreadsheet, School, Grid, Eraser, Database, Plus, Eye, FileCheck2, Camera, IdCard, House } from 'lucide-react';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
@@ -37,6 +37,7 @@ export default function InscripcionPage() {
   const [currentTeam, setCurrentTeam] = useState<any>(null);
   const [players, setPlayers] = useState<any[]>([]);
   const [playerDocuments, setPlayerDocuments] = useState<any[]>([]);
+  const [documentPreview, setDocumentPreview] = useState<{ url: string; title: string; isPdf: boolean } | null>(null);
   
   const [loading, setLoading] = useState(false);
   const [newPlayer, setNewPlayer] = useState({ name: '', shirt_number: '', birth_year: '', vinculo: '' });
@@ -131,10 +132,26 @@ export default function InscripcionPage() {
     }
   }
 
-  const openDocument = async (documentId: string) => {
-    const result = await openRosterPlayerDocument(slug, documentId);
+  useEffect(() => {
+    if (!documentPreview) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDocumentPreview(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [documentPreview]);
+
+  const openDocument = async (document: any) => {
+    const result = await openRosterPlayerDocument(slug, document.id);
     if (!result.success) return toast.error(result.error);
-    window.open(result.data.url, '_blank', 'noopener,noreferrer');
+    const title = document.document_type === 'FACE_PHOTO'
+      ? 'Fotografía del rostro'
+      : document.document_type === 'IDENTITY_BACK' ? 'Documento de identidad · reverso' : 'Documento de identidad';
+    setDocumentPreview({
+      url: result.data.url,
+      title,
+      isPdf: String(document.original_filename || '').toLowerCase().endsWith('.pdf'),
+    });
   };
 
   const reviewDocument = async (documentId: string, status: 'APPROVED' | 'REJECTED') => {
@@ -366,6 +383,35 @@ export default function InscripcionPage() {
     <main className="min-h-screen bg-slate-50 text-slate-900 font-sans relative">
       
       {/* MODALES SOFISTICADOS */}
+      {documentPreview && (
+        <div
+          className="fixed inset-0 z-[400] flex items-center justify-center bg-slate-950/70 p-3 sm:p-5"
+          role="dialog"
+          aria-modal="true"
+          aria-label={documentPreview.title}
+          onClick={(event) => { if (event.target === event.currentTarget) setDocumentPreview(null); }}
+        >
+          <section className="flex h-[78vh] w-full max-w-2xl animate-in zoom-in-95 flex-col overflow-hidden rounded-[1.5rem] border border-white/10 bg-white shadow-2xl sm:h-[76vh] sm:rounded-[2rem]">
+            <header className="flex items-center justify-between gap-4 border-b border-slate-100 bg-slate-950 px-5 py-4 text-white sm:px-6">
+              <div className="min-w-0">
+                <p className="text-[8px] font-black uppercase tracking-[0.25em] text-blue-400">Revisión de expediente</p>
+                <h2 className="truncate text-sm font-black uppercase sm:text-lg">{documentPreview.title}</h2>
+              </div>
+              <button type="button" onClick={() => setDocumentPreview(null)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10 text-white transition-colors hover:bg-white/20" aria-label="Cerrar visor"><X size={20} /></button>
+            </header>
+            <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-slate-100 p-3 sm:p-4">
+              {documentPreview.isPdf
+                ? <iframe src={documentPreview.url} title={documentPreview.title} loading="lazy" className="h-full w-full rounded-xl border-0 bg-white shadow-sm" />
+                : <img src={documentPreview.url} alt={documentPreview.title} decoding="async" className="max-h-full max-w-full rounded-xl bg-white object-contain shadow-lg" />}
+            </div>
+            <footer className="flex items-center justify-between gap-4 border-t border-slate-100 bg-white px-5 py-3">
+              <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400">Presiona Esc o toca fuera para cerrar</p>
+              <button type="button" onClick={() => setDocumentPreview(null)} className="rounded-xl bg-slate-900 px-5 py-2.5 text-[9px] font-black uppercase tracking-widest text-white hover:bg-blue-600">Cerrar</button>
+            </footer>
+          </section>
+        </div>
+      )}
+
       {showDeleteTeamModal && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
           <div className="bg-white border border-slate-100 p-8 rounded-[2.5rem] w-full max-w-md shadow-2xl flex flex-col items-center text-center animate-in zoom-in-95 duration-200">
@@ -515,10 +561,10 @@ export default function InscripcionPage() {
             <p className="text-slate-500 font-bold uppercase text-[10px] tracking-widest mt-1">Nóminas oficiales</p>
           </div>
           
-          <button onClick={handleBackNavigation} className="w-full sm:w-fit p-4 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-blue-600 hover:bg-slate-50 transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm group">
-            <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" /> 
-            {selectedSchool ? 'Volver a Delegaciones' : selectedCategory ? 'Volver a Categorías' : selectedSport ? 'Volver a Deportes' : selectedTournament ? 'Volver a Torneos' : 'Volver al inicio'}
-          </button>
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+            {(selectedSchool || selectedCategory || selectedSport || selectedTournament) && <button onClick={handleBackNavigation} className="w-full sm:w-fit p-4 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-blue-600 hover:bg-slate-50 transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm group"><ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" />{selectedSchool ? 'Delegaciones' : selectedCategory ? 'Categorías' : selectedSport ? 'Deportes' : 'Torneos'}</button>}
+            <Link href={`/${slug}/admin${selectedTournament ? `?tournament=${selectedTournament}` : ''}`} className="w-full sm:w-fit p-4 bg-slate-900 border border-slate-900 rounded-2xl text-white hover:bg-blue-600 hover:border-blue-600 transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm"><House size={16} /> Panel principal</Link>
+          </div>
         </div>
 
         {/* VISTA 1: TORNEO */}
@@ -738,39 +784,55 @@ export default function InscripcionPage() {
                     </div>
                   )}
 
+                  {currentTeam && (
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-slate-100 bg-white px-5 py-3 text-[9px] font-black uppercase tracking-widest text-slate-500 sm:px-6">
+                      <span className="text-slate-700">Estado de documentos:</span>
+                      <span className="flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full bg-amber-400" /> Pendiente de revisión</span>
+                      <span className="flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full bg-emerald-500" /> Aprobado</span>
+                      <span className="flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full bg-red-500" /> Rechazado</span>
+                    </div>
+                  )}
+
                   <div className="overflow-x-auto flex-1 bg-white">
-                    <table className="w-full text-left border-collapse min-w-[600px]">
+                    <table className="w-full table-fixed text-left border-collapse min-w-[1080px]">
                       <thead>
                         <tr className="bg-slate-50 border-b border-slate-200 text-[10px] text-slate-500 uppercase font-black tracking-[0.2em]">
-                          <th className="p-6 w-20 text-center">Dorsal</th>
-                          <th className="p-6">Nombre del Atleta</th>
-                          <th className="p-6">Vínculo</th>
-                          <th className="p-6 text-center">Año Nac.</th>
-                          <th className="p-6 text-center">Identidad 35+</th>
-                          <th className="p-6 text-right w-20">Acción</th>
+                          <th className="w-20 p-4 text-center">Dorsal</th>
+                          <th className="w-56 p-4">Nombre del Atleta</th>
+                          <th className="w-40 p-4">Vínculo</th>
+                          <th className="w-24 p-4 text-center">Año Nac.</th>
+                          <th className="w-[430px] p-4 text-center">Foto y documento</th>
+                          <th className="w-20 p-4 text-right">Acción</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {players.map(p => (
                           <tr key={p.id} className="hover:bg-slate-50/50 transition-colors group">
-                            <td className="p-6 text-center font-black text-blue-600 text-lg">{p.shirt_number || '-'}</td>
-                            <td className="p-6 font-black text-slate-800 uppercase tracking-tight whitespace-normal break-words">{p.name}</td>
-                            <td className="p-6 text-slate-500 font-bold uppercase text-[10px]">{p.vinculo || '-'}</td>
-                            <td className="p-6 text-center text-slate-400 font-bold text-sm">{p.birth_year || '-'}</td>
-                            <td className="p-6">
-                              <div className="flex justify-center gap-2">
+                            <td className="p-3 text-center font-black text-blue-600 text-base">{p.shirt_number || '-'}</td>
+                            <td className="p-3 font-black text-slate-800 uppercase tracking-tight whitespace-normal break-words text-sm">{p.name}</td>
+                            <td className="p-3 text-slate-500 font-bold uppercase text-[10px]">{p.vinculo || '-'}</td>
+                            <td className="p-3 text-center text-slate-500 font-bold text-sm">{p.birth_date ? String(p.birth_date).slice(0, 4) : p.birth_year || '-'}</td>
+                            <td className="p-3">
+                              <div className="flex flex-nowrap justify-center gap-2">
                                 {playerDocuments.filter((document) => document.player_id === p.id).map((document) => (
-                                  <div key={document.id} className="flex items-center rounded-xl border border-slate-200 bg-white p-1">
-                                    <button type="button" onClick={() => openDocument(document.id)} title={document.document_type === 'IDENTITY_FRONT' ? 'Ver frontal' : 'Ver posterior'} className={`rounded-lg p-2 ${document.status === 'APPROVED' ? 'text-emerald-600' : document.status === 'REJECTED' ? 'text-red-500' : 'text-amber-500'}`}><Eye size={15} /></button>
-                                    {document.status !== 'APPROVED' && <button type="button" onClick={() => reviewDocument(document.id, 'APPROVED')} title="Aprobar" className="rounded-lg p-2 text-emerald-600 hover:bg-emerald-50"><Check size={15} /></button>}
-                                    {document.status !== 'REJECTED' && <button type="button" onClick={() => reviewDocument(document.id, 'REJECTED')} title="Rechazar" className="rounded-lg p-2 text-red-500 hover:bg-red-50"><X size={15} /></button>}
+                                  <div key={document.id} className={`flex min-w-[190px] items-center gap-1 rounded-xl border p-1.5 ${document.status === 'APPROVED' ? 'border-emerald-200 bg-emerald-50/60' : document.status === 'REJECTED' ? 'border-red-200 bg-red-50/60' : 'border-amber-200 bg-amber-50/60'}`}>
+                                    <div className="flex min-w-0 flex-1 items-center gap-1.5 px-1.5">
+                                      <span className="flex min-w-0 items-center gap-1.5 text-[8px] font-black uppercase tracking-wider text-slate-700">
+                                        {document.document_type === 'FACE_PHOTO' ? <Camera size={13} /> : <IdCard size={13} />}
+                                        {document.document_type === 'FACE_PHOTO' ? 'Foto' : document.document_type === 'IDENTITY_BACK' ? 'Identidad reverso' : 'Identidad'}
+                                      </span>
+                                      <i className={`h-2 w-2 shrink-0 rounded-full ${document.status === 'APPROVED' ? 'bg-emerald-500' : document.status === 'REJECTED' ? 'bg-red-500' : 'bg-amber-400'}`} />
+                                    </div>
+                                    <button type="button" onClick={() => openDocument(document)} title="Ver archivo" aria-label="Ver archivo" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-blue-600 shadow-sm hover:bg-blue-50"><Eye size={14} /></button>
+                                    {document.status !== 'APPROVED' && <button type="button" onClick={() => reviewDocument(document.id, 'APPROVED')} title="Aprobar" aria-label="Aprobar documento" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-emerald-600 shadow-sm hover:bg-emerald-100"><Check size={15} /></button>}
+                                    {document.status !== 'REJECTED' && <button type="button" onClick={() => reviewDocument(document.id, 'REJECTED')} title="Rechazar" aria-label="Rechazar documento" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-red-500 shadow-sm hover:bg-red-100"><X size={15} /></button>}
                                   </div>
                                 ))}
                                 {playerDocuments.every((document) => document.player_id !== p.id) && <span className="text-[9px] font-black uppercase text-slate-300">Sin documentos</span>}
                               </div>
                             </td>
-                            <td className="p-6 text-right">
-                              <button onClick={() => setPlayerToDelete({ id: p.id, name: p.name })} className="p-3 text-slate-300 hover:text-red-600 transition-colors opacity-0 group-hover:opacity-100 rounded-lg hover:bg-red-50">
+                            <td className="p-3 text-right">
+                              <button onClick={() => setPlayerToDelete({ id: p.id, name: p.name })} className="p-2 text-slate-300 hover:text-red-600 transition-colors opacity-40 group-hover:opacity-100 rounded-lg hover:bg-red-50">
                                 <Trash2 size={16} />
                               </button>
                             </td>

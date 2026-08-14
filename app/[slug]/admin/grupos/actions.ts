@@ -45,6 +45,18 @@ type ReorganizeFixtureResult =
   | { success: true; updatedMatches: number }
   | { success: false; error: string };
 
+export async function updateTournamentFixtureVisibility(slug: string, categoryId: string, visible: boolean): Promise<FixtureActionResult> {
+  if (!(await hasAdminSession(slug))) return { success: false, error: 'Sesión de administrador no válida.' };
+  if (!(await categoryBelongsToClientSlug(categoryId, slug))) return { success: false, error: 'La categoría no pertenece a este cliente.' };
+  const supabase = createServerSupabaseAdminClient();
+  const { data: category } = await supabase.from('categories').select('tournament_id').eq('id', categoryId).maybeSingle();
+  if (!category?.tournament_id) return { success: false, error: 'No se encontró el torneo.' };
+  const { error } = await supabase.from('tournaments').update({ fixture_visible_to_delegates: visible }).eq('id', category.tournament_id);
+  if (error) return { success: false, error: 'No se pudo actualizar la visibilidad del fixture.' };
+  await logAuditEvent({ action: visible ? 'admin.fixture.publish' : 'admin.fixture.hide', actorType: 'client', clientId: await getClientIdBySlug(slug), targetType: 'tournament', targetId: category.tournament_id, metadata: { slug, categoryId } });
+  return { success: true };
+}
+
 export async function reorganizeCategoryFixtureTimes(slug: string, categoryId: string): Promise<ReorganizeFixtureResult> {
   if (!(await hasAdminSession(slug))) return { success: false, error: 'Sesión de administrador no válida.' };
   if (!(await categoryBelongsToClientSlug(categoryId, slug))) return { success: false, error: 'La categoría no pertenece a este cliente.' };

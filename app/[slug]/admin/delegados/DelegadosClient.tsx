@@ -7,7 +7,8 @@ import { ArrowLeft, Copy, KeyRound, Link2, Lock, MessageCircle, Pencil, Plus, Re
 import toast from 'react-hot-toast';
 import AppSelect from '@/app/components/AppSelect';
 import { confirmDialog, promptDialog } from '@/app/components/AppDialog';
-import { assignDelegateTeam, createDelegateUser, deleteDelegateUsers, removeDelegateTeam, resetDelegatePassword, syncDelegatesFromTournament, toggleDelegateStatus, updateCategoryRegistrationSettings, updateDelegateWhatsapp } from './actions';
+import { DEFAULT_ROSTER_LOCKED_MESSAGE } from '@/app/lib/registration';
+import { assignDelegateTeam, createDelegateUser, deleteDelegateUsers, removeDelegateTeam, resetDelegatePassword, syncDelegatesFromTournament, toggleDelegateStatus, updateCategoryRegistrationSettings, updateDelegateName, updateDelegateWhatsapp } from './actions';
 
 export default function DelegadosClient({ slug, initialData }: { slug: string; initialData: any }) {
   const searchParams = useSearchParams();
@@ -27,7 +28,7 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
       registrationDeadline: category.registration_deadline || '',
       minRosterSize: category.min_roster_size || '',
       maxRosterSize: category.max_roster_size || '',
-      lockedMessage: category.roster_locked_message || '',
+      lockedMessage: category.roster_locked_message || DEFAULT_ROSTER_LOCKED_MESSAGE,
     }]))
   );
   const [loading, setLoading] = useState(false);
@@ -189,6 +190,17 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
     toast.success('WhatsApp actualizado');
   };
 
+  const editDelegateName = async (delegate: any) => {
+    const enteredName = await promptDialog({ title: 'Editar nombre del delegado', description: 'Este nombre aparecerá en el portal, mensajes de acceso y registros administrativos.', placeholder: 'Nombre completo', initialValue: delegate.name || '', inputType: 'text', minLength: 3, confirmLabel: 'Guardar nombre' });
+    if (!enteredName || enteredName.trim().toUpperCase() === delegate.name) return;
+    setLoading(true);
+    const result = await updateDelegateName(slug, delegate.id, enteredName);
+    setLoading(false);
+    if (!result.success) return toast.error(result.error);
+    setDelegates((current) => current.map((item) => item.id === delegate.id ? { ...item, name: result.data.name } : item));
+    toast.success('Nombre del delegado actualizado');
+  };
+
   const handleSaveCategory = (categoryId: string) => {
     const settings = categorySettings[categoryId];
     runAction(updateCategoryRegistrationSettings(slug, categoryId, {
@@ -240,7 +252,7 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div className="min-w-0">
             <Link href={`/${slug}/admin`} className="w-fit mb-4 bg-white border border-slate-200 text-slate-500 hover:text-slate-900 rounded-xl px-4 py-3 text-xs font-black uppercase tracking-widest flex items-center gap-2">
-              <ArrowLeft size={16} /> Volver al hub
+              <ArrowLeft size={16} /> Panel principal
             </Link>
             <p className="text-blue-600 font-black text-[10px] uppercase tracking-[0.25em]">Control de acceso</p>
             <h1 className="text-3xl sm:text-4xl font-black uppercase tracking-tighter">Delegados</h1>
@@ -414,6 +426,7 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
                   </button>
                   {!deleteMode && (
                     <div className="flex shrink-0 flex-col gap-1.5 xl:flex-row">
+                      <button type="button" disabled={loading} onClick={() => editDelegateName(delegate)} aria-label={`Editar nombre de ${delegate.name}`} className="flex items-center justify-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-[9px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100 disabled:opacity-50"><Pencil size={13} /><span className="hidden xl:inline">Nombre</span></button>
                       {delegate.whatsapp_phone && (
                         <button
                           type="button"
@@ -510,7 +523,7 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
                         <input value={settings.minRosterSize} onChange={(e) => setCategorySettings({ ...categorySettings, [category.id]: { ...settings, minRosterSize: e.target.value } })} placeholder="Mín." className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none" />
                         <input value={settings.maxRosterSize} onChange={(e) => setCategorySettings({ ...categorySettings, [category.id]: { ...settings, maxRosterSize: e.target.value } })} placeholder="Máx." className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none" />
                       </div>
-                      <input value={settings.lockedMessage} onChange={(e) => setCategorySettings({ ...categorySettings, [category.id]: { ...settings, lockedMessage: e.target.value } })} placeholder="Mensaje de cierre" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none" />
+                      <textarea rows={3} value={settings.lockedMessage} onChange={(e) => setCategorySettings({ ...categorySettings, [category.id]: { ...settings, lockedMessage: e.target.value } })} placeholder={DEFAULT_ROSTER_LOCKED_MESSAGE} className="w-full resize-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-xs font-bold outline-none" />
                       <button disabled={!initialData.schemaReady} onClick={() => handleSaveCategory(category.id)} className="w-full bg-slate-900 text-white rounded-xl py-3 text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 disabled:opacity-50"><RefreshCcw size={14} /> Guardar configuración</button>
                     </div>
                   );

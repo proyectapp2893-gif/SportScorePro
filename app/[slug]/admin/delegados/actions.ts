@@ -283,6 +283,17 @@ export async function updateDelegateWhatsapp(slug: string, delegateId: string, p
   return { success: true, data: { phone: normalizedPhone } };
 }
 
+export async function updateDelegateName(slug: string, delegateId: string, nextName: string): Promise<AdminDelegateResult<{ name: string }>> {
+  const auth = await requireDelegateAdmin(slug);
+  if (!auth.success) return { success: false, error: auth.error };
+  const name = nextName.trim().replace(/\s+/g, ' ').toUpperCase();
+  if (name.length < 3 || name.length > 120) return { success: false, error: 'Ingresa un nombre completo válido.' };
+  const { data: delegate, error } = await auth.supabase.from('delegate_users').update({ name, updated_at: new Date().toISOString() }).eq('id', delegateId).eq('client_id', auth.clientId).select('id').maybeSingle();
+  if (error || !delegate) return { success: false, error: 'No se pudo actualizar el nombre del delegado.' };
+  await logAuditEvent({ action: 'admin.delegate.name.update', actorType: 'client', clientId: auth.clientId, targetType: 'delegate', targetId: delegateId, metadata: { slug, name } });
+  return { success: true, data: { name } };
+}
+
 export async function toggleDelegateStatus(slug: string, delegateId: string, nextStatus: boolean): Promise<AdminDelegateResult> {
   const auth = await requireDelegateAdmin(slug);
   if (!auth.success) return { success: false, error: auth.error };

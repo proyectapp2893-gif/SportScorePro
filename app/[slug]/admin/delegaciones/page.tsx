@@ -3,11 +3,28 @@
 import { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { supabase } from '../../../supabase';
-import { ArrowLeft, Search, Users, School, ShieldCheck, AlertCircle, Download, FileSpreadsheet, Activity, X } from 'lucide-react';
+import { ArrowLeft, Search, Users, School, ShieldCheck, AlertCircle, Download, FileSpreadsheet, Activity, X, BadgeCheck, IdCard, FileDown } from 'lucide-react';
 import Link from 'next/link';
 import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
 import AppSelect from '@/app/components/AppSelect';
+import { getAdminPlayerCardPhotoUrl, getAdminTeamCardPhotoUrls } from './actions';
+
+function ageOnDate(birthDate: string | null | undefined, referenceDate: string | null | undefined, birthYear?: number | null) {
+  if (!birthDate) {
+    const referenceYear = referenceDate ? new Date(`${referenceDate}T00:00:00`).getFullYear() : new Date().getFullYear();
+    return birthYear && Number.isFinite(referenceYear) ? referenceYear - birthYear : null;
+  }
+
+  const birth = new Date(`${birthDate}T00:00:00`);
+  if (Number.isNaN(birth.getTime())) return null;
+  const reference = referenceDate ? new Date(`${referenceDate}T00:00:00`) : new Date();
+  let age = reference.getFullYear() - birth.getFullYear();
+  const birthdayPending = reference.getMonth() < birth.getMonth()
+    || (reference.getMonth() === birth.getMonth() && reference.getDate() < birth.getDate());
+  if (birthdayPending) age -= 1;
+  return age;
+}
 
 export default function ControlDelegacionesPage() {
   const params = useParams();
@@ -25,6 +42,10 @@ export default function ControlDelegacionesPage() {
   const [selectedSchool, setSelectedSchool] = useState<any | null>(null);
   const [schoolTeams, setSchoolTeams] = useState<any[]>([]);
   const [loadingDetails, setLoadingDetails] = useState(false);
+  const [cardLoadingId, setCardLoadingId] = useState<string | null>(null);
+  const [pdfLoadingTeamId, setPdfLoadingTeamId] = useState<string | null>(null);
+  const [playerCard, setPlayerCard] = useState<{ player: any; team: any; photoUrl: string } | null>(null);
+  const [pdfPreview, setPdfPreview] = useState<{ url: string; filename: string; missingPhotos: number } | null>(null);
 
   useEffect(() => {
     if (slug) fetchClientScope();
@@ -33,6 +54,10 @@ export default function ControlDelegacionesPage() {
   useEffect(() => {
     if (clientId) fetchOverviewData();
   }, [clientId, selectedTournamentId]);
+
+  useEffect(() => () => {
+    if (pdfPreview?.url) URL.revokeObjectURL(pdfPreview.url);
+  }, [pdfPreview?.url]);
 
   // Filtrado en tiempo real
   useEffect(() => {
@@ -117,7 +142,7 @@ export default function ControlDelegacionesPage() {
     let detailQuery = supabase.from('teams')
       .select(`
         id, name,
-        categories!inner(name, gender, tournament_id, sports(name)),
+        categories!inner(name, gender, tournament_id, sports(name), tournaments(name, schedule_dates)),
         players (*)
       `)
       .eq('school_id', school.id);
@@ -148,6 +173,133 @@ export default function ControlDelegacionesPage() {
       setSchoolTeams(activeTeams);
     }
     setLoadingDetails(false);
+  }
+
+  async function openPlayerCard(player: any, team: any) {
+    setCardLoadingId(player.id);
+    const result = await getAdminPlayerCardPhotoUrl(slug, player.id);
+    setCardLoadingId(null);
+    if (!result.success) return toast.error(result.error);
+    setPlayerCard({ player, team, photoUrl: result.data.url });
+  }
+
+  async function downloadTeamCardsPdf(team: any) {
+    if (!team.players?.length) return toast.error('Este equipo no tiene jugadores inscritos.');
+    setPdfLoadingTeamId(team.id);
+    const toastId = toast.loading('Preparando carnés...');
+    try {
+      const photosResult = await getAdminTeamCardPhotoUrls(slug, team.id);
+      if (!photosResult.success) throw new Error(photosResult.error);
+      const photoUrls = new Map(photosResult.data.map((photo) => [photo.playerId, photo.url]));
+      const { jsPDF } = await import('jspdf');
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
+      const imageCache = new Map<string, string>();
+      const toDataUrl = async (url?: string) => {
+        if (!url) return null;
+        if (imageCache.has(url)) return imageCache.get(url) || null;
+        try {
+          const response = await fetch(url);
+          if (!response.ok) return null;
+          const blob = await response.blob();
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result));
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(blob);
+          });
+          imageCache.set(url, dataUrl);
+          return dataUrl;
+        } catch { return null; }
+      };
+
+      const [schoolLogo, playerPhotoEntries] = await Promise.all([
+        toDataUrl(selectedSchool.logo_url),
+        Promise.all(team.players.map(async (player: any) => [player.id, await toDataUrl(photoUrls.get(player.id))] as const)),
+      ]);
+      const playerPhotos = new Map<string, string | null>(playerPhotoEntries);
+      const imageFormat = (dataUrl: string) => dataUrl.startsWith('data:image/png') ? 'PNG' : dataUrl.startsWith('data:image/webp') ? 'WEBP' : 'JPEG';
+      const cardWidth = 94;
+      const cardHeight = 87;
+      const gapX = 6;
+      const gapY = 6;
+      const startX = 8;
+      const startY = 9;
+      let missingPhotos = 0;
+
+      for (let index = 0; index < team.players.length; index += 1) {
+        if (index > 0 && index % 6 === 0) pdf.addPage();
+        const position = index % 6;
+        const x = startX + (position % 2) * (cardWidth + gapX);
+        const y = startY + Math.floor(position / 2) * (cardHeight + gapY);
+        const player = team.players[index];
+        const playerPhoto = playerPhotos.get(player.id) || null;
+        if (!playerPhoto) missingPhotos += 1;
+
+        pdf.setFillColor(255, 255, 255);
+        pdf.setDrawColor(215, 225, 238);
+        pdf.roundedRect(x, y, cardWidth, cardHeight, 4, 4, 'FD');
+        pdf.setFillColor(7, 15, 36);
+        pdf.roundedRect(x, y, cardWidth, 31, 4, 4, 'F');
+        pdf.setFillColor(7, 15, 36);
+        pdf.rect(x, y + 20, cardWidth, 11, 'F');
+        pdf.setFillColor(37, 99, 235);
+        pdf.rect(x, y + 31, cardWidth, 1.6, 'F');
+
+        if (playerPhoto) {
+          try { pdf.addImage(playerPhoto, imageFormat(playerPhoto), x + 5, y + 8, 22, 27, undefined, 'FAST'); } catch { missingPhotos += 1; }
+        } else {
+          pdf.setFillColor(241, 245, 249); pdf.roundedRect(x + 5, y + 8, 22, 27, 2, 2, 'F');
+          pdf.setTextColor(148, 163, 184); pdf.setFontSize(7); pdf.setFont('helvetica', 'bold'); pdf.text('SIN FOTO', x + 16, y + 22, { align: 'center' });
+        }
+
+        if (schoolLogo) {
+          try { pdf.addImage(schoolLogo, imageFormat(schoolLogo), x + cardWidth - 17, y + 5, 12, 12, undefined, 'FAST'); } catch { /* logo opcional */ }
+        }
+        pdf.setTextColor(96, 165, 250); pdf.setFontSize(5.5); pdf.setFont('helvetica', 'bold'); pdf.text('SPORTSCORE PRO · CARNÉ OFICIAL', x + 31, y + 9);
+        pdf.setTextColor(255, 255, 255); pdf.setFontSize(11); pdf.setFont('helvetica', 'bold');
+        const playerName = pdf.splitTextToSize(String(player.name || '').toUpperCase(), 55).slice(0, 2);
+        pdf.text(playerName, x + 31, y + 16);
+        pdf.setTextColor(30, 64, 175); pdf.setFontSize(18); pdf.text(`#${player.shirt_number || '-'}`, x + 6, y + 45);
+        pdf.setTextColor(100, 116, 139); pdf.setFontSize(5.5); pdf.text('DORSAL', x + 6, y + 49);
+        const age = ageOnDate(player.birth_date, team.categories?.tournaments?.schedule_dates?.[0], player.birth_year);
+        pdf.setTextColor(8, 145, 178); pdf.setFontSize(18); pdf.text(String(age ?? '-'), x + 31, y + 45);
+        pdf.setTextColor(100, 116, 139); pdf.setFontSize(5.5); pdf.text('EDAD', x + 31, y + 49);
+        pdf.setDrawColor(226, 232, 240); pdf.line(x + 5, y + 54, x + cardWidth - 5, y + 54);
+        pdf.setTextColor(100, 116, 139); pdf.setFontSize(5.2); pdf.text('EQUIPO', x + 6, y + 60); pdf.text('CATEGORÍA', x + 50, y + 60);
+        pdf.setTextColor(15, 23, 42); pdf.setFontSize(7); pdf.setFont('helvetica', 'bold');
+        pdf.text(pdf.splitTextToSize(String(team.name || '').toUpperCase(), 38).slice(0, 1), x + 6, y + 65);
+        pdf.text(pdf.splitTextToSize(String(team.categories?.name || '').toUpperCase(), 36).slice(0, 1), x + 50, y + 65);
+        pdf.setTextColor(100, 116, 139); pdf.setFontSize(5.2); pdf.text('VÍNCULO', x + 6, y + 72); pdf.text('TORNEO', x + 50, y + 72);
+        pdf.setTextColor(15, 23, 42); pdf.setFontSize(6.5);
+        pdf.text(pdf.splitTextToSize(String(player.vinculo || '-').toUpperCase(), 38).slice(0, 1), x + 6, y + 77);
+        pdf.text(pdf.splitTextToSize(String(team.categories?.tournaments?.name || '-').toUpperCase(), 37).slice(0, 1), x + 50, y + 77);
+        pdf.setTextColor(148, 163, 184); pdf.setFontSize(4.8); pdf.text(`ID ${String(player.identity_number || 'SIN REGISTRAR')}`, x + 6, y + 83);
+      }
+
+      const filename = `Carnes_${String(team.name).replace(/[^a-z0-9]+/gi, '_')}.pdf`;
+      const url = URL.createObjectURL(pdf.output('blob'));
+      setPdfPreview({ url, filename, missingPhotos });
+      toast.success(missingPhotos ? `Vista previa lista. ${missingPhotos} jugador(es) aparecen sin foto.` : 'Vista previa lista: seis carnés por hoja.', { id: toastId });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudo generar el PDF.', { id: toastId });
+    } finally {
+      setPdfLoadingTeamId(null);
+    }
+  }
+
+  function closePdfPreview() {
+    setPdfPreview(null);
+  }
+
+  function confirmPdfDownload() {
+    if (!pdfPreview) return;
+    const link = document.createElement('a');
+    link.href = pdfPreview.url;
+    link.download = pdfPreview.filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    toast.success('PDF descargado');
   }
 
   const exportSchoolRoster = () => {
@@ -238,9 +390,10 @@ export default function ControlDelegacionesPage() {
                       <p className="text-blue-600 font-black text-[10px] uppercase tracking-widest mb-1">{team.categories?.sports?.name}</p>
                       <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">{team.categories?.name} <span className="text-slate-400 font-medium">({team.categories?.gender})</span></h3>
                     </div>
-                    <span className="bg-white border border-slate-200 px-4 py-2 rounded-xl text-xs font-black text-slate-500 uppercase tracking-widest">
-                      {team.players.length} Inscritos
-                    </span>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <span className="bg-white border border-slate-200 px-4 py-2 rounded-xl text-xs font-black text-slate-500 uppercase tracking-widest">{team.players.length} Inscritos</span>
+                      <button type="button" disabled={pdfLoadingTeamId === team.id} onClick={() => downloadTeamCardsPdf(team)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-[9px] font-black uppercase tracking-widest text-white transition-colors hover:bg-blue-600 disabled:opacity-50"><FileDown size={15} /> {pdfLoadingTeamId === team.id ? 'Generando...' : 'Descargar carnés PDF'}</button>
+                    </div>
                   </div>
 
                   <div className="overflow-x-auto">
@@ -250,6 +403,8 @@ export default function ControlDelegacionesPage() {
                           <th className="p-4 pl-8 w-20 text-center">Dorsal</th>
                           <th className="p-4">Nombre del Atleta</th>
                           <th className="p-4 text-center pr-8">Año de Nacimiento</th>
+                          <th className="p-4 text-center">Edad</th>
+                          <th className="p-4 pr-8 text-center">Carné</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
@@ -257,7 +412,18 @@ export default function ControlDelegacionesPage() {
                           <tr key={p.id} className="hover:bg-slate-50 transition-colors">
                             <td className="p-4 pl-8 text-center font-black text-slate-400">{p.shirt_number || '-'}</td>
                             <td className="p-4 font-black text-slate-700 uppercase tracking-tight">{p.name}</td>
-                            <td className="p-4 pr-8 text-center text-slate-500 font-bold">{p.birth_year || '-'}</td>
+                            <td className="p-4 pr-8 text-center text-slate-500 font-bold">{p.birth_date ? String(p.birth_date).slice(0, 4) : p.birth_year || '-'}</td>
+                            <td className="p-4 text-center"><span className="inline-flex min-w-10 items-center justify-center rounded-xl bg-cyan-50 px-3 py-2 text-sm font-black text-cyan-700">{ageOnDate(p.birth_date, team.categories?.tournaments?.schedule_dates?.[0], p.birth_year) ?? '-'}</span></td>
+                            <td className="p-4 pr-8 text-center">
+                              <button
+                                type="button"
+                                disabled={cardLoadingId === p.id}
+                                onClick={() => openPlayerCard(p, team)}
+                                className="inline-flex items-center gap-2 rounded-xl bg-blue-50 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50"
+                              >
+                                <IdCard size={15} /> {cardLoadingId === p.id ? 'Abriendo...' : 'Ver carné'}
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -266,6 +432,55 @@ export default function ControlDelegacionesPage() {
 
                 </div>
               ))}
+            </div>
+          )}
+
+          {playerCard && (
+            <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-md" role="dialog" aria-modal="true" aria-label={`Carné de ${playerCard.player.name}`}>
+              <div className="w-full max-w-md animate-in zoom-in-95 overflow-hidden rounded-[2rem] border border-white/10 bg-white shadow-2xl">
+                <div className="relative overflow-hidden bg-slate-950 px-6 pb-8 pt-6 text-white">
+                  {selectedSchool.logo_url && <img src={selectedSchool.logo_url} alt="" className="pointer-events-none absolute -right-12 -top-8 h-64 w-64 object-contain opacity-[0.07] grayscale" />}
+                  <div className="relative flex items-start justify-between">
+                    <div><p className="text-[8px] font-black uppercase tracking-[0.3em] text-blue-400">SportScore Pro</p><h2 className="mt-1 text-xl font-black uppercase">Carné oficial</h2></div>
+                    <button type="button" onClick={() => setPlayerCard(null)} className="rounded-xl bg-white/10 p-2 text-white hover:bg-white/20" aria-label="Cerrar carné"><X size={17} /></button>
+                  </div>
+                  <div className="relative mt-6 flex items-end gap-5">
+                    <div className="h-32 w-28 shrink-0 overflow-hidden rounded-[1.5rem] border-4 border-white bg-white shadow-xl"><img src={playerCard.photoUrl} alt={`Foto de ${playerCard.player.name}`} className="h-full w-full object-cover" /></div>
+                    <div className="min-w-0 pb-1"><p className="text-[8px] font-black uppercase tracking-widest text-slate-400">Jugador registrado</p><h3 className="mt-1 break-words text-2xl font-black uppercase leading-none">{playerCard.player.name}</h3><div className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-3 py-1.5 text-[8px] font-black uppercase tracking-widest text-emerald-300"><BadgeCheck size={13} /> Identidad registrada</div></div>
+                  </div>
+                </div>
+                <div className="relative bg-gradient-to-br from-blue-50 via-white to-indigo-50 p-6">
+                  <div className="absolute left-0 top-0 h-1.5 w-full bg-gradient-to-r from-blue-600 via-cyan-400 to-emerald-400" />
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="rounded-2xl border border-blue-100 bg-white p-4 text-center"><p className="text-3xl font-black text-blue-700">#{playerCard.player.shirt_number || '-'}</p><p className="text-[8px] font-black uppercase tracking-widest text-slate-400">Dorsal</p></div>
+                    <div className="rounded-2xl border border-cyan-100 bg-white p-4 text-center"><p className="text-3xl font-black text-cyan-700">{ageOnDate(playerCard.player.birth_date, playerCard.team.categories?.tournaments?.schedule_dates?.[0], playerCard.player.birth_year) ?? '-'}</p><p className="text-[8px] font-black uppercase tracking-widest text-slate-400">Edad</p></div>
+                    <div className="flex items-center justify-center rounded-2xl border border-indigo-100 bg-white p-3">{selectedSchool.logo_url ? <img src={selectedSchool.logo_url} alt={`Logo de ${selectedSchool.name}`} className="h-16 w-16 object-contain" /> : <School className="text-slate-300" size={42} />}</div>
+                  </div>
+                  <div className="mt-4 rounded-2xl border border-slate-100 bg-white p-4">
+                    <div className="flex items-center justify-between gap-3"><div><p className="text-[8px] font-black uppercase tracking-widest text-slate-400">Equipo</p><p className="text-sm font-black uppercase text-slate-900">{playerCard.team.name}</p></div><ShieldCheck className="text-blue-600" size={22} /></div>
+                    <div className="mt-3 grid grid-cols-2 gap-3 border-t border-slate-100 pt-3"><div><p className="text-[8px] font-black uppercase tracking-widest text-slate-400">Categoría</p><p className="text-[10px] font-black uppercase">{playerCard.team.categories?.name}</p></div><div><p className="text-[8px] font-black uppercase tracking-widest text-slate-400">Vínculo</p><p className="text-[10px] font-black uppercase">{playerCard.player.vinculo || '-'}</p></div></div>
+                  </div>
+                  <p className="mt-4 text-center text-[8px] font-black uppercase tracking-[0.2em] text-slate-400">Válido para {playerCard.team.categories?.tournaments?.name}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {pdfPreview && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/75 p-3 sm:p-5" role="dialog" aria-modal="true" aria-label="Vista previa de carnés" onClick={(event) => { if (event.target === event.currentTarget) closePdfPreview(); }}>
+              <section className="flex h-[88vh] w-full max-w-4xl animate-in zoom-in-95 flex-col overflow-hidden rounded-[1.5rem] bg-white shadow-2xl sm:rounded-[2rem]">
+                <header className="flex items-center justify-between gap-4 border-b border-white/10 bg-slate-950 px-5 py-4 text-white sm:px-6">
+                  <div className="min-w-0"><p className="text-[8px] font-black uppercase tracking-[0.25em] text-blue-400">Seis carnés por hoja</p><h2 className="truncate text-base font-black uppercase sm:text-xl">Vista previa del PDF</h2></div>
+                  <button type="button" onClick={closePdfPreview} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10 hover:bg-white/20" aria-label="Cerrar vista previa"><X size={19} /></button>
+                </header>
+                <div className="min-h-0 flex-1 bg-slate-100 p-2 sm:p-4">
+                  <iframe src={pdfPreview.url} title="Vista previa de carnés" className="h-full w-full rounded-xl border-0 bg-white" />
+                </div>
+                <footer className="flex flex-col gap-3 border-t border-slate-100 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div><p className="text-[9px] font-black uppercase tracking-widest text-slate-500">{pdfPreview.filename}</p>{pdfPreview.missingPhotos > 0 && <p className="mt-1 text-[9px] font-bold uppercase text-amber-600">{pdfPreview.missingPhotos} jugador(es) aparecen sin foto</p>}</div>
+                  <div className="flex gap-2"><button type="button" onClick={closePdfPreview} className="flex-1 rounded-xl bg-slate-100 px-5 py-3 text-[9px] font-black uppercase tracking-widest text-slate-600 sm:flex-none">Cancelar</button><button type="button" onClick={confirmPdfDownload} className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-[9px] font-black uppercase tracking-widest text-white hover:bg-blue-700 sm:flex-none"><Download size={15} /> Descargar PDF</button></div>
+                </footer>
+              </section>
             </div>
           )}
         </div>
@@ -287,7 +502,7 @@ export default function ControlDelegacionesPage() {
             <p className="text-slate-500 font-bold uppercase text-[10px] tracking-widest mt-1">Supervisión de inscripciones por institución y torneo</p>
           </div>
           <Link href={`/${slug}/admin`} className="p-4 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-slate-900 hover:bg-slate-50 transition-all flex items-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm shrink-0">
-            <ArrowLeft size={16} /> Volver al inicio
+            <ArrowLeft size={16} /> Panel principal
           </Link>
         </div>
 

@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '@/app/lib/sports/rules';
 import { toTeamSlug } from '@/app/lib/team-slug';
+import { DEFAULT_ROSTER_LOCKED_MESSAGE } from '@/app/lib/registration';
 import { addDelegatePlayers, changeDelegatePassword, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, saveDelegateTeamStaff, uploadDelegateSchoolLogo, uploadPlayerIdentityDocument } from './actions';
 
 type DelegatePortalClientProps = {
@@ -66,6 +67,24 @@ function isRegistrationOpen(category: any) {
   return new Date(category.registration_deadline).getTime() >= Date.now();
 }
 
+function registrationDeadlineLabel(value: string | null | undefined) {
+  if (!value) return 'Sin fecha límite';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Sin fecha límite';
+  return new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+}
+
+function registrationCountdown(value: string | null | undefined) {
+  if (!value) return { label: 'Sin fecha límite', className: 'bg-slate-200 text-slate-600' };
+  const deadline = new Date(value).getTime();
+  if (Number.isNaN(deadline)) return { label: 'Sin fecha límite', className: 'bg-slate-200 text-slate-600' };
+  const remainingMilliseconds = deadline - Date.now();
+  if (remainingMilliseconds <= 0) return { label: 'Plazo vencido', className: 'bg-red-600 text-white' };
+  const remainingDays = Math.ceil(remainingMilliseconds / 86_400_000);
+  if (remainingDays <= 3) return { label: `Faltan ${remainingDays} ${remainingDays === 1 ? 'día' : 'días'}`, className: 'bg-red-600 text-white' };
+  return { label: `Faltan ${remainingDays} días`, className: 'bg-amber-500 text-white' };
+}
+
 function initialsForTeam(team: any) {
   const source = team?.name || team?.schools?.name || 'EQ';
   return String(source)
@@ -91,6 +110,14 @@ function ageOnDate(birthDate: string | null | undefined, referenceDate: string |
   let age = reference.getFullYear() - birth.getFullYear();
   if (reference.getMonth() < birth.getMonth() || (reference.getMonth() === birth.getMonth() && reference.getDate() < birth.getDate())) age -= 1;
   return age;
+}
+
+function playerDossierStatus(documents: any[] | null | undefined) {
+  const required = ['FACE_PHOTO', 'IDENTITY_FRONT'].map((type) => documents?.find((item: any) => item.document_type === type));
+  if (required.some((document) => !document)) return { label: 'Faltan archivos', className: 'text-red-500' };
+  if (required.some((document) => document.status === 'REJECTED')) return { label: 'Requiere corrección', className: 'text-red-500' };
+  if (required.every((document) => document.status === 'APPROVED')) return { label: 'Expediente aprobado', className: 'text-emerald-600' };
+  return { label: 'Carga completa · pendiente de revisión', className: 'text-amber-600' };
 }
 
 function BirthDateCards({ value, onChange, compact = false }: { value: string; onChange: (value: string) => void; compact?: boolean }) {
@@ -332,10 +359,10 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const validateBulkRows = (rows: BulkPlayerRow[]) => {
     const normalized = rows.map((row) => ({
       ...row,
-      name: row.name.trim().toUpperCase(),
+      name: row.name.toUpperCase(),
       identityNumber: row.identityNumber.trim().replace(/\D/g, ''),
       vinculo: row.vinculo.trim().toUpperCase(),
-      relationshipDetail: row.relationshipDetail.trim().toUpperCase(),
+      relationshipDetail: row.relationshipDetail.toUpperCase(),
       error: undefined,
     }));
     const meaningfulRows = normalized.filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthDate || row.vinculo || row.relationshipDetail);
@@ -583,6 +610,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     window.open(result.data.url, '_blank', 'noopener,noreferrer');
   };
 
+
   const renderTeamMark = (team: any) => (
     <TeamLogo team={team} className="h-16 w-16 rounded-2xl sm:h-20 sm:w-20" />
   );
@@ -746,6 +774,29 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               </header>
 
               <div className="flex-1 space-y-5 overflow-y-auto overscroll-contain p-4 sm:p-6">
+                <section className="overflow-hidden rounded-2xl border border-emerald-200 bg-emerald-50/50">
+                  <div className="flex flex-col gap-2 border-b border-emerald-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div><p className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-emerald-800"><Users size={15} /> Jugadores ya inscritos</p><p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-emerald-700/70">Estos registros ya están guardados y no volverán a sincronizarse</p></div>
+                    <span className="w-fit rounded-full bg-emerald-600 px-3 py-1.5 text-[9px] font-black uppercase tracking-widest text-white">{players.length} inscritos</span>
+                  </div>
+                  {players.length > 0 ? (
+                    <div className="max-h-56 divide-y divide-emerald-100 overflow-y-auto bg-white/80">
+                      {players.map((player: any, index: number) => {
+                        const dossier = playerDossierStatus(player.player_documents);
+                        return (
+                          <div key={player.id} className="grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 sm:grid-cols-[32px_minmax(0,1fr)_90px_130px_auto]">
+                            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-[10px] font-black text-blue-700">#{player.shirt_number || '-'}</span>
+                            <div className="min-w-0"><p className="truncate text-xs font-black uppercase text-slate-900">{index + 1}. {player.name}</p><p className="truncate text-[9px] font-bold uppercase text-slate-400 sm:hidden">ID {player.identity_number || 'sin registrar'} · {player.birth_date || player.birth_year || 'sin fecha'}</p></div>
+                            <span className="hidden text-center text-[9px] font-black uppercase text-slate-500 sm:block">{player.birth_date ? String(player.birth_date).slice(0, 4) : player.birth_year || '-'}</span>
+                            <span className="hidden truncate text-[9px] font-black uppercase text-slate-500 sm:block">{player.vinculo || 'Sin vínculo'}</span>
+                            <span className={`text-right text-[8px] font-black uppercase ${dossier.className}`}>{dossier.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : <p className="bg-white px-4 py-5 text-center text-[9px] font-black uppercase tracking-widest text-slate-400">Aún no hay jugadores guardados</p>}
+                </section>
+
                 <div className="grid gap-3 md:grid-cols-2">
                   <button type="button" onClick={downloadBulkTemplate} className="flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-4 text-xs font-black uppercase tracking-widest text-blue-700">
                     <Download size={16} /> Descargar plantilla
@@ -768,7 +819,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {bulkRows.map((row, index) => (
-                          <tr key={`${row.name}-${index}`} className={row.error ? 'bg-red-50' : 'bg-white'}>
+                          <tr key={`bulk-player-${index}`} className={row.error ? 'bg-red-50' : 'bg-white'}>
                             <td className="p-3 font-black text-slate-400">{index + 1}</td>
                             <td className="p-2"><label title="Subir foto del rostro" className="relative flex h-12 w-12 cursor-pointer items-center justify-center overflow-hidden rounded-full border-2 border-dashed border-cyan-300 bg-cyan-50 text-cyan-600">{row.facePreview ? <img src={row.facePreview} alt="Rostro" className="h-full w-full object-cover" /> : <Camera size={18} />}<input type="file" accept="image/jpeg,image/png,image/webp" capture="user" className="hidden" onChange={(event) => updateBulkFile(index, 'faceFile', event.target.files?.[0])} /></label></td>
                             <td className="p-2"><input value={row.name} onChange={(event) => updateBulkRow(index, 'name', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-black uppercase outline-none focus:border-blue-500" /></td>
@@ -1026,8 +1077,41 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                     </button>
                   ) : <Lock className="text-red-500" />}
                 </div>
+                <div className="grid grid-cols-1 gap-3 border-b border-slate-100 bg-slate-50/70 p-4 sm:grid-cols-2 sm:p-5">
+                  <div className={`rounded-2xl border p-4 ${selectedCategory?.min_roster_size && players.length >= selectedCategory.min_roster_size ? 'border-emerald-200 bg-emerald-50' : 'border-blue-200 bg-blue-50'}`}>
+                    <div className="flex items-center gap-3">
+                      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white ${selectedCategory?.min_roster_size && players.length >= selectedCategory.min_roster_size ? 'bg-emerald-500' : 'bg-blue-600'}`}><Users size={20} /></div>
+                      <div className="min-w-0">
+                        <p className={`text-[9px] font-black uppercase tracking-[0.16em] ${selectedCategory?.min_roster_size && players.length >= selectedCategory.min_roster_size ? 'text-emerald-700' : 'text-blue-700'}`}>Mínimo obligatorio</p>
+                        <p className="mt-0.5 text-2xl font-black text-slate-950">{players.length} <span className="text-sm text-slate-400">/ {selectedCategory?.min_roster_size || 'sin definir'}</span></p>
+                      </div>
+                    </div>
+                    <p className="mt-3 border-t border-current/10 pt-2 text-[9px] font-black uppercase tracking-wider text-slate-600">
+                      {selectedCategory?.min_roster_size ? (players.length >= selectedCategory.min_roster_size ? 'Nómina mínima completada' : `Faltan ${selectedCategory.min_roster_size - players.length} jugador(es)`) : 'La organización debe definir el mínimo'} · Máximo {selectedCategory?.max_roster_size || 'sin definir'}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-500 text-white"><CalendarDays size={20} /></div>
+                        <p className="text-[9px] font-black uppercase tracking-[0.16em] text-amber-700 sm:text-[10px]">Fecha máxima de inscripción</p>
+                      </div>
+                      <span className={`shrink-0 rounded-full px-3 py-2 text-[9px] font-black uppercase tracking-wider shadow-sm ${registrationCountdown(selectedCategory?.registration_deadline).className}`}>{registrationCountdown(selectedCategory?.registration_deadline).label}</span>
+                    </div>
+                    <p className="mt-4 whitespace-nowrap text-xl font-black uppercase leading-none tracking-tight text-slate-950 sm:text-2xl">{registrationDeadlineLabel(selectedCategory?.registration_deadline)}</p>
+                    <p className="mt-4 border-t border-amber-200 pt-3 text-[9px] font-black uppercase leading-relaxed tracking-wider text-amber-800">Después de esta fecha no se podrán modificar jugadores</p>
+                  </div>
+                </div>
                 {canEditRoster && (
                   <button type="button" onClick={openBulkUpload} className="flex w-full items-center justify-center gap-2 border-b border-slate-100 bg-blue-50 px-5 py-5 text-xs font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100"><FileSpreadsheet size={17} /> Abrir planilla de inscripción</button>
+                )}
+                {!canEditRoster && (
+                  <div className="border-b border-amber-200 bg-amber-50 px-5 py-4">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700"><Lock size={16} /></div>
+                      <div><p className="text-[9px] font-black uppercase tracking-widest text-amber-700">Inscripción cerrada</p><p className="mt-1 text-xs font-bold leading-relaxed text-slate-700">{selectedCategory?.roster_locked_message?.trim() || DEFAULT_ROSTER_LOCKED_MESSAGE}</p></div>
+                    </div>
+                  </div>
                 )}
                 <div className="divide-y divide-slate-50">
                   {players.map((player: any) => (
@@ -1043,7 +1127,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                         <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
                           <div className="mb-2 flex items-center justify-between gap-2">
                             <p className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500"><FileCheck2 size={13} className="text-blue-600" /> Foto y documento obligatorios</p>
-                            <span className={`text-[9px] font-black uppercase ${player.player_documents?.some((item: any) => item.document_type === 'FACE_PHOTO') && player.player_documents?.some((item: any) => item.document_type === 'IDENTITY_FRONT') ? 'text-emerald-600' : 'text-red-500'}`}>{player.player_documents?.some((item: any) => item.document_type === 'FACE_PHOTO') && player.player_documents?.some((item: any) => item.document_type === 'IDENTITY_FRONT') ? 'Expediente completo' : 'No habilitado'}</span>
+                            <span className={`text-right text-[9px] font-black uppercase ${playerDossierStatus(player.player_documents).className}`}>{playerDossierStatus(player.player_documents).label}</span>
                           </div>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                             {(['FACE_PHOTO', 'IDENTITY_FRONT'] as const).map((documentType) => {
@@ -1055,7 +1139,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                                     <div>
                                       <p className="text-[10px] font-black uppercase text-slate-700">{label}</p>
                                       <p className={`text-[9px] font-black uppercase ${document?.status === 'APPROVED' ? 'text-emerald-600' : document?.status === 'REJECTED' ? 'text-red-500' : document ? 'text-amber-500' : 'text-slate-400'}`}>
-                                        {document?.status === 'APPROVED' ? 'Aprobado' : document?.status === 'REJECTED' ? 'Rechazado' : document ? 'Pendiente' : 'Sin archivo'}
+                                        {document?.status === 'APPROVED' ? 'Aprobado' : document?.status === 'REJECTED' ? 'Rechazado' : document ? 'Cargado · pendiente de revisión' : 'Sin archivo'}
                                       </p>
                                     </div>
                                     {document && <button type="button" onClick={() => openPlayerDocument(player.id, documentType)} className="rounded-lg p-2 text-blue-600 hover:bg-blue-50" aria-label={`Ver ${label}`}><Eye size={15} /></button>}

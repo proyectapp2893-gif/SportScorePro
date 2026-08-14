@@ -2,12 +2,12 @@
 
 import { useEffect, useState, Suspense, useRef } from 'react';
 import { supabase } from '../../../supabase';
-import { ArrowLeft, ArrowRight, Calendar, Trophy, Clock, Trash2, School, CalendarDays, AlertTriangle, GitMerge, AlertCircle, X, Pencil, Save, ShieldCheck, Download, UploadCloud, TableProperties, Eraser, Database, Plus, Users, Wand2, MapPin } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Calendar, Trophy, Clock, Trash2, School, CalendarDays, AlertTriangle, GitMerge, AlertCircle, X, Pencil, Save, ShieldCheck, Download, UploadCloud, TableProperties, Eraser, Database, Plus, Users, Wand2, MapPin, House, Eye, EyeOff, FileDown } from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams, useRouter, useParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 'react-icons/fa';
-import { createCategoryFixture, deleteCategoryFixture, randomizeCategoryGroups, reorganizeCategoryFixtureTimes, updateFixtureMatch, updateTeamGroup } from './actions';
+import { createCategoryFixture, deleteCategoryFixture, randomizeCategoryGroups, reorganizeCategoryFixtureTimes, updateFixtureMatch, updateTeamGroup, updateTournamentFixtureVisibility } from './actions';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '../../../lib/sports/rules';
 import AppSelect from '@/app/components/AppSelect';
 import { advanceThreeStageTournament, getThreeStageStatus, startThreeStageTournament } from './stage-actions';
@@ -36,6 +36,8 @@ function FixtureContent() {
   const [teams, setTeams] = useState<any[]>([]);
   const [matches, setMatches] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [reorganizing, setReorganizing] = useState(false);
+  const [fixturePdfPreview, setFixturePdfPreview] = useState<{ url: string; filename: string } | null>(null);
 
   const [activeRound, setActiveRound] = useState<number>(1);
   const [availableRounds, setAvailableRounds] = useState<number[]>([]);
@@ -66,7 +68,7 @@ function FixtureContent() {
         setClientId(client.id);
         const { data: catData } = await supabase
           .from('categories')
-          .select('*, tournaments!inner(client_id), sports(name)')
+          .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates), sports(name)')
           .eq('tournaments.client_id', client.id)
           .order('name');
         if (catData) setCategories(catData);
@@ -74,6 +76,10 @@ function FixtureContent() {
     }
     initializeHub();
   }, [slug]);
+
+  useEffect(() => () => {
+    if (fixturePdfPreview?.url) URL.revokeObjectURL(fixturePdfPreview.url);
+  }, [fixturePdfPreview?.url]);
 
   useEffect(() => {
     if (urlCategory && categories.length > 0) {
@@ -488,14 +494,109 @@ function FixtureContent() {
   const handleReorganizeTimes = async () => {
     if (!selectedCategory) return;
     setLoading(true);
+    setReorganizing(true);
     const toastId = toast.loading('Organizando fechas y equilibrando horarios...');
-    const result = await reorganizeCategoryFixtureTimes(slug, selectedCategory);
-    if (!result.success) toast.error(result.error, { id: toastId });
-    else {
-      toast.success(`${result.updatedMatches} partidos reorganizados equitativamente.`, { id: toastId });
-      await loadCategoryData();
+    try {
+      const result = await reorganizeCategoryFixtureTimes(slug, selectedCategory);
+      if (!result.success) toast.error(result.error, { id: toastId });
+      else {
+        toast.success(`${result.updatedMatches} partidos reorganizados equitativamente.`, { id: toastId });
+        await loadCategoryData();
+      }
+    } catch {
+      toast.error('No se pudo completar la reorganización. Intenta nuevamente.', { id: toastId });
+    } finally {
+      setLoading(false);
+      setReorganizing(false);
     }
+  };
+
+  const handleFixtureVisibility = async () => {
+    if (!selectedCategory) return;
+    const category = categories.find((item) => item.id === selectedCategory);
+    const nextVisible = !Boolean(category?.tournaments?.fixture_visible_to_delegates);
+    setLoading(true);
+    const result = await updateTournamentFixtureVisibility(slug, selectedCategory, nextVisible);
     setLoading(false);
+    if (!result.success) return toast.error(result.error);
+    setCategories((current) => current.map((item) => item.id === selectedCategory ? { ...item, tournaments: { ...item.tournaments, fixture_visible_to_delegates: nextVisible } } : item));
+    toast.success(nextVisible ? 'Fixture publicado para los delegados' : 'Fixture ocultado para los delegados');
+  };
+
+  const handleExportFixturePdf = async () => {
+    if (!selectedCategory || matches.length === 0) return toast.error('No hay partidos para exportar.');
+    setLoading(true);
+    const toastId = toast.loading('Generando fixture PDF...');
+    try {
+      const { jsPDF } = await import('jspdf');
+      const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4', compress: true });
+      const category = categories.find((item) => item.id === selectedCategory);
+      const orderedMatches = [...matches].sort((a: any, b: any) => Number(a.matchdays?.round_number || 0) - Number(b.matchdays?.round_number || 0) || String(a.scheduled_time || '').localeCompare(String(b.scheduled_time || '')));
+      const grouped = orderedMatches.reduce((acc: Map<number, any[]>, match: any) => {
+        const round = Number(match.matchdays?.round_number || 0);
+        if (!acc.has(round)) acc.set(round, []);
+        acc.get(round)?.push(match);
+        return acc;
+      }, new Map<number, any[]>());
+      let pageNumber = 1;
+      let y = 0;
+
+      const drawPageHeader = () => {
+        pdf.setFillColor(7, 15, 36); pdf.rect(0, 0, 297, 27, 'F');
+        pdf.setTextColor(96, 165, 250); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7); pdf.text('SPORTSCORE PRO · FIXTURE OFICIAL', 12, 9);
+        pdf.setTextColor(255, 255, 255); pdf.setFontSize(15); pdf.text(String(category?.name || 'CATEGORÍA').toUpperCase(), 12, 18);
+        pdf.setFontSize(8); pdf.text(`${String(category?.sports?.name || '').toUpperCase()} · ${teams.length} DELEGACIONES`, 285, 18, { align: 'right' });
+        pdf.setTextColor(100, 116, 139); pdf.setFontSize(6); pdf.text(`PÁGINA ${pageNumber}`, 285, 204, { align: 'right' });
+        y = 34;
+      };
+      const addPageIfNeeded = (requiredHeight: number) => {
+        if (y + requiredHeight <= 198) return;
+        pdf.addPage(); pageNumber += 1; drawPageHeader();
+      };
+      drawPageHeader();
+
+      for (const [round, roundMatches] of grouped.entries()) {
+        addPageIfNeeded(18);
+        const labels = getRoundLabels(round);
+        const scheduledDate = roundMatches.find((match: any) => match.matchdays?.scheduled_date)?.matchdays?.scheduled_date;
+        pdf.setFillColor(219, 234, 254); pdf.roundedRect(12, y, 273, 10, 2, 2, 'F');
+        pdf.setTextColor(29, 78, 216); pdf.setFontSize(8); pdf.setFont('helvetica', 'bold'); pdf.text(`${labels.phase} · ${labels.round}`.toUpperCase(), 16, y + 6.5);
+        pdf.setTextColor(71, 85, 105); pdf.text(scheduledDate ? new Date(`${scheduledDate}T00:00:00`).toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' }).toUpperCase() : 'FECHA POR ASIGNAR', 281, y + 6.5, { align: 'right' });
+        y += 13;
+        pdf.setFillColor(241, 245, 249); pdf.rect(12, y, 273, 8, 'F');
+        pdf.setTextColor(100, 116, 139); pdf.setFontSize(6); pdf.text('HORA', 16, y + 5); pdf.text('CANCHA', 39, y + 5); pdf.text('LOCAL', 78, y + 5); pdf.text('VISITANTE', 170, y + 5); pdf.text('ESTADO', 269, y + 5, { align: 'center' });
+        y += 8;
+        for (const match of roundMatches) {
+          addPageIfNeeded(11);
+          const isBye = !match.away_team_id || match.status === 'BYE';
+          pdf.setDrawColor(226, 232, 240); pdf.line(12, y + 10, 285, y + 10);
+          pdf.setTextColor(51, 65, 85); pdf.setFontSize(7); pdf.setFont('helvetica', 'bold');
+          pdf.text(match.scheduled_time ? String(match.scheduled_time).slice(0, 5) : '--:--', 16, y + 6.5);
+          pdf.text(String(match.venue || 'Por asignar').toUpperCase(), 39, y + 6.5);
+          pdf.text(pdf.splitTextToSize(String(match.home_team?.name || 'POR DEFINIR').toUpperCase(), 78).slice(0, 1), 78, y + 6.5);
+          pdf.text(isBye ? 'DESCANSA' : pdf.splitTextToSize(String(match.away_team?.name || 'POR DEFINIR').toUpperCase(), 78).slice(0, 1), 170, y + 6.5);
+          const status = isBye ? 'DESCANSA' : match.status === 'FINISHED' ? 'FINALIZADO' : match.status === 'LIVE' ? 'EN VIVO' : 'PROGRAMADO';
+          pdf.setTextColor(match.status === 'LIVE' ? 220 : 71, match.status === 'LIVE' ? 38 : 85, match.status === 'LIVE' ? 38 : 105); pdf.text(status, 269, y + 6.5, { align: 'center' });
+          y += 11;
+        }
+        y += 5;
+      }
+
+      const filename = `Fixture_${String(category?.name || 'Torneo').replace(/[^a-z0-9]+/gi, '_')}.pdf`;
+      setFixturePdfPreview({ url: URL.createObjectURL(pdf.output('blob')), filename });
+      toast.success('Vista previa del fixture lista', { id: toastId });
+    } catch {
+      toast.error('No se pudo generar el fixture PDF.', { id: toastId });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const closeFixturePdfPreview = () => setFixturePdfPreview(null);
+  const downloadFixturePdf = () => {
+    if (!fixturePdfPreview) return;
+    const link = document.createElement('a'); link.href = fixturePdfPreview.url; link.download = fixturePdfPreview.filename; document.body.appendChild(link); link.click(); link.remove();
+    toast.success('Fixture PDF descargado');
   };
 
 
@@ -649,6 +750,29 @@ function FixtureContent() {
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900 font-sans relative pb-20">
+      {reorganizing && (
+        <div className="fixed inset-0 z-[500] flex items-center justify-center bg-slate-950/75 p-4" role="status" aria-live="assertive" aria-label="Reorganizando fixture">
+          <div className="w-full max-w-sm animate-in zoom-in-95 rounded-[2rem] border border-blue-400/20 bg-white p-7 text-center shadow-2xl sm:p-9">
+            <div className="relative mx-auto flex h-20 w-20 items-center justify-center">
+              <div className="absolute inset-0 animate-spin rounded-full border-[5px] border-blue-100 border-t-blue-600" />
+              <Clock size={28} className="animate-pulse text-blue-600" />
+            </div>
+            <h2 className="mt-6 text-xl font-black uppercase tracking-tight text-slate-950">Procesando fixture</h2>
+            <p className="mt-2 text-[10px] font-bold uppercase leading-relaxed tracking-widest text-slate-500">Calculando fechas, equilibrando horarios y asignando canchas</p>
+            <div className="mt-6 h-2 overflow-hidden rounded-full bg-blue-100"><div className="h-full w-1/2 animate-pulse rounded-full bg-blue-600" /></div>
+            <p className="mt-3 text-[9px] font-black uppercase tracking-widest text-blue-600">Espera hasta finalizar la actualización</p>
+          </div>
+        </div>
+      )}
+      {fixturePdfPreview && (
+        <div className="fixed inset-0 z-[490] flex items-center justify-center bg-slate-950/75 p-3 sm:p-5" role="dialog" aria-modal="true" aria-label="Vista previa del fixture PDF" onClick={(event) => { if (event.target === event.currentTarget) closeFixturePdfPreview(); }}>
+          <section className="flex h-[88vh] w-full max-w-5xl animate-in zoom-in-95 flex-col overflow-hidden rounded-[1.5rem] bg-white shadow-2xl sm:rounded-[2rem]">
+            <header className="flex items-center justify-between gap-4 bg-slate-950 px-5 py-4 text-white sm:px-6"><div><p className="text-[8px] font-black uppercase tracking-[0.25em] text-blue-400">Documento oficial</p><h2 className="text-base font-black uppercase sm:text-xl">Vista previa del fixture</h2></div><button type="button" onClick={closeFixturePdfPreview} className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 hover:bg-white/20" aria-label="Cerrar vista previa"><X size={19} /></button></header>
+            <div className="min-h-0 flex-1 bg-slate-100 p-2 sm:p-4"><iframe src={fixturePdfPreview.url} title="Fixture PDF" className="h-full w-full rounded-xl border-0 bg-white" /></div>
+            <footer className="flex flex-col gap-3 border-t border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><p className="text-[9px] font-black uppercase tracking-widest text-slate-500">{fixturePdfPreview.filename}</p><div className="flex gap-2"><button type="button" onClick={closeFixturePdfPreview} className="flex-1 rounded-xl bg-slate-100 px-5 py-3 text-[9px] font-black uppercase tracking-widest text-slate-600 sm:flex-none">Cancelar</button><button type="button" onClick={downloadFixturePdf} className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-[9px] font-black uppercase tracking-widest text-white hover:bg-blue-700 sm:flex-none"><Download size={15} /> Descargar PDF</button></div></footer>
+          </section>
+        </div>
+      )}
       
       {/* MODAL: GRILLA INTERACTIVA TIPO EXCEL */}
       {showGridModal && (
@@ -843,7 +967,7 @@ function FixtureContent() {
             <p className="text-slate-500 font-bold uppercase text-[10px] tracking-widest mt-1">Sincronización de encuentros</p>
           </div>
           
-          {selectedCategory ? (
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">{selectedCategory ? (
             <button onClick={() => { setSelectedCategory(null); router.replace(`/${slug}/admin/grupos`, { scroll: false }); }} className="p-4 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-blue-600 hover:bg-slate-50 transition-all flex items-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm group">
               <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" /> Categorías
             </button>
@@ -853,9 +977,9 @@ function FixtureContent() {
             </button>
           ) : (
             <Link href={`/${slug}/admin`} className="w-full sm:w-fit p-4 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-blue-600 hover:bg-slate-50 transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm group">
-              <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" /> Volver al inicio
+              <House size={16} /> Panel principal
             </Link>
-          )}
+          )}{(selectedCategory || selectedSport) && <Link href={`/${slug}/admin`} className="flex items-center justify-center gap-2 rounded-2xl border border-slate-900 bg-slate-900 p-4 text-xs font-black uppercase tracking-widest text-white shadow-sm transition-all hover:border-blue-600 hover:bg-blue-600"><House size={16} /> Panel principal</Link>}</div>
         </div>
 
         {!selectedCategory && !selectedSport && (
@@ -936,10 +1060,9 @@ function FixtureContent() {
               </section>
             )}
             
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between bg-white border border-slate-200 p-5 sm:p-8 rounded-[2rem] shadow-sm gap-5 sm:gap-6 relative overflow-hidden">
+            <div className="relative overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm">
                <div className="absolute top-0 left-0 w-full h-1.5 bg-blue-600"></div>
-              
-              <div className="flex flex-col sm:flex-row sm:items-center gap-5 sm:gap-6 min-w-0">
+              <div className="flex flex-col gap-4 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
                 <div className="flex items-center gap-4 min-w-0">
                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 shadow-inner">
                       {getSportIcon(categories.find(c => c.id === selectedCategory)?.sports?.name, 32)}
@@ -951,32 +1074,43 @@ function FixtureContent() {
                     <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mt-1">Nóminas detectadas: {teams.length} delegaciones</p>
                   </div>
                 </div>
+                <div className={`flex w-fit items-center gap-2 rounded-full border px-4 py-2 text-[9px] font-black uppercase tracking-widest ${categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-600'}`}>
+                  <span className={`h-2.5 w-2.5 rounded-full ${categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                  {categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates ? 'Visible para delegados' : 'Oculto para delegados'}
+                </div>
+              </div>
 
-                <div className="flex bg-slate-100 p-1 rounded-xl shadow-inner sm:ml-4">
+              <div className="space-y-4 bg-gradient-to-r from-slate-50 to-blue-50/40 p-4 sm:p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex w-full shrink-0 bg-slate-200/70 p-1 rounded-xl shadow-inner sm:w-fit">
                    <button 
                      onClick={() => setViewMode('FIXTURE')}
-                     className={`px-6 py-2 rounded-lg font-black uppercase text-[10px] tracking-widest transition-all ${viewMode === 'FIXTURE' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                     className={`flex-1 px-6 py-2.5 rounded-lg font-black uppercase text-[10px] tracking-widest transition-all sm:flex-none ${viewMode === 'FIXTURE' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
                    >
                      Partidos
                    </button>
                    <button 
                      onClick={() => setViewMode('GROUPS')}
-                     className={`px-6 py-2 rounded-lg font-black uppercase text-[10px] tracking-widest transition-all flex items-center gap-2 ${viewMode === 'GROUPS' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                     className={`flex flex-1 items-center justify-center gap-2 px-6 py-2.5 rounded-lg font-black uppercase text-[10px] tracking-widest transition-all sm:flex-none ${viewMode === 'GROUPS' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
                    >
                      Grupos <Users size={12}/>
                    </button>
+                  </div>
+                  {viewMode === 'FIXTURE' && <button type="button" role="switch" aria-checked={Boolean(categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates)} aria-label="Visibilidad del fixture para delegados" onClick={handleFixtureVisibility} disabled={loading || matches.length === 0} className="flex min-h-12 w-full items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-left shadow-sm transition-all hover:border-blue-300 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto sm:min-w-[300px]">
+                    <span className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-700">{categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates ? <Eye size={16} className="shrink-0 text-emerald-600" /> : <EyeOff size={16} className="shrink-0 text-slate-400" />} Fixture para delegados</span>
+                    <span className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates ? 'bg-emerald-500' : 'bg-slate-300'}`} aria-hidden="true"><span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates ? 'translate-x-6' : 'translate-x-1'}`} /></span>
+                  </button>}
                 </div>
-              </div>
-              
-              {viewMode === 'FIXTURE' && (
-                <div className="flex flex-wrap gap-3 sm:gap-4">
+
+                {viewMode === 'FIXTURE' && <div className="grid w-full grid-cols-2 gap-2.5 xl:grid-cols-4">
                   {matches.length > 0 && (
-                    <button onClick={handleReorganizeTimes} disabled={loading} className="flex-1 lg:flex-none flex items-center justify-center gap-2 bg-blue-50 text-blue-700 border border-blue-200 px-6 py-4 rounded-xl hover:bg-blue-600 hover:text-white transition-all shadow-sm font-black uppercase text-[10px] tracking-widest disabled:opacity-50">
-                      <Clock size={16} /> Reorganizar fechas y horarios
+                    <button onClick={handleReorganizeTimes} disabled={loading} className="flex min-h-16 items-center justify-center gap-2 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-[9px] font-black uppercase leading-tight tracking-widest text-blue-700 shadow-sm transition-all hover:-translate-y-0.5 hover:bg-blue-600 hover:text-white hover:shadow-md disabled:opacity-50">
+                      <Clock size={16} className={reorganizing ? 'animate-spin' : ''} /> {reorganizing ? 'Procesando...' : 'Reorganizar fechas y horarios'}
                     </button>
                   )}
+                  {matches.length > 0 && <button type="button" onClick={handleExportFixturePdf} disabled={loading} className="flex min-h-16 items-center justify-center gap-2 rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-cyan-700 shadow-sm transition-all hover:-translate-y-0.5 hover:bg-cyan-600 hover:text-white hover:shadow-md disabled:opacity-50"><FileDown size={16} /> Exportar PDF</button>}
                   {!stageStatus?.enabled && teams.length > 0 && matches.length === 0 && (
-                    <div className="flex flex-col sm:flex-row w-full lg:w-auto gap-3">
+                    <div className="col-span-2 flex flex-col gap-2 sm:flex-row xl:col-span-4">
                       <button onClick={handleAutoGenerateFixture} disabled={loading} className="w-full sm:w-auto flex items-center justify-center gap-2 bg-blue-600 text-white px-8 py-4 rounded-xl hover:bg-blue-500 transition-all font-black uppercase text-[10px] tracking-widest shadow-lg shadow-blue-200 disabled:opacity-50">
                         <CalendarDays size={16} /> Autogenerar Cruces
                       </button>
@@ -988,17 +1122,17 @@ function FixtureContent() {
                   {!stageStatus?.enabled && matches.length > 0 && (
                     <>
                       {!hasFaseFinal && (
-                        <button onClick={handlePlayoffClick} disabled={loading} className="flex-1 lg:flex-none flex items-center justify-center gap-2 bg-indigo-50 text-indigo-600 border border-indigo-200 px-6 py-4 rounded-xl hover:bg-indigo-600 hover:text-white transition-all shadow-sm font-black uppercase text-[10px] tracking-widest">
+                        <button onClick={handlePlayoffClick} disabled={loading} className="flex min-h-16 items-center justify-center gap-2 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-indigo-600 shadow-sm transition-all hover:-translate-y-0.5 hover:bg-indigo-600 hover:text-white hover:shadow-md">
                           <GitMerge size={16} /> Fase Final
                         </button>
                       )}
-                      <button onClick={handleDeleteClick} disabled={loading} className="flex-1 lg:flex-none flex items-center justify-center gap-2 bg-white text-red-600 border border-red-200 px-6 py-4 rounded-xl hover:bg-red-50 transition-all font-black uppercase text-[10px] tracking-widest">
+                      <button onClick={handleDeleteClick} disabled={loading} className="flex min-h-16 items-center justify-center gap-2 rounded-2xl border border-red-200 bg-white px-4 py-3 text-[9px] font-black uppercase tracking-widest text-red-600 shadow-sm transition-all hover:-translate-y-0.5 hover:bg-red-50 hover:shadow-md">
                         <Trash2 size={16} /> Limpiar
                       </button>
                     </>
                   )}
-                </div>
-              )}
+                </div>}
+              </div>
             </div>
 
             {viewMode === 'GROUPS' && (

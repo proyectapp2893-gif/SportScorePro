@@ -322,7 +322,7 @@ export default function ColegiosPage() {
               </button>
             
             <Link href={`/${slug}/admin`} className="p-4 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-blue-600 hover:bg-slate-50 transition-all flex items-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm group">
-              <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform"/> Volver al HUB
+              <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform"/> Panel principal
             </Link>
           </div>
         </div>

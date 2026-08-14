@@ -139,7 +139,7 @@ export default function PlanillerosClient({ slug, initialData }: { slug: string;
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div className="min-w-0">
             <Link href={`/${slug}/admin`} className="w-fit mb-4 bg-white border border-slate-200 text-slate-500 hover:text-slate-900 rounded-xl px-4 py-3 text-xs font-black uppercase tracking-widest flex items-center gap-2">
-              <ArrowLeft size={16} /> Volver al inicio
+              <ArrowLeft size={16} /> Panel principal
             </Link>
             <p className="text-blue-600 font-black text-[10px] uppercase tracking-[0.25em]">Operación de partidos</p>
             <h1 className="text-3xl sm:text-4xl font-black uppercase tracking-tighter">Jueces y Planilleros</h1>

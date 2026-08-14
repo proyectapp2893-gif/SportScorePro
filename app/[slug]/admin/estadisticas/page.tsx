@@ -2,7 +2,7 @@
 
 import { useEffect, useState, Suspense } from 'react';
 import { supabase } from '../../../supabase';
-import { ArrowLeft, ArrowRight, Trophy, BarChart3, Medal, Crown, School, Activity, Shield, Flame, GitMerge, Scale, Search, Hash } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Trophy, BarChart3, Medal, Crown, School, Activity, Shield, Flame, GitMerge, Scale, Search, Hash, House } from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams, useRouter, useParams } from 'next/navigation';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 'react-icons/fa';
@@ -255,7 +255,7 @@ function EstadisticasContent() {
             <p className="text-slate-500 font-bold uppercase text-[10px] tracking-widest mt-1">Analítica avanzada</p>
           </div>
           
-          {selectedCategory ? (
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">{selectedCategory ? (
             <button onClick={() => { setSelectedCategory(null); router.replace(`/${slug}/admin/estadisticas`, { scroll: false }); }} className="p-4 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-blue-600 hover:bg-slate-50 transition-all flex items-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm group">
               <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" /> Categorías
             </button>
@@ -265,9 +265,9 @@ function EstadisticasContent() {
             </button>
           ) : (
             <Link href={`/${slug}/admin`} className="w-full sm:w-fit p-4 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-blue-600 hover:bg-slate-50 transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm group">
-              <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" /> Volver al inicio
+              <House size={16} /> Panel principal
             </Link>
-          )}
+          )}{(selectedCategory || selectedSport) && <Link href={`/${slug}/admin`} className="flex items-center justify-center gap-2 rounded-2xl border border-slate-900 bg-slate-900 p-4 text-xs font-black uppercase tracking-widest text-white shadow-sm transition-all hover:border-blue-600 hover:bg-blue-600"><House size={16} /> Panel principal</Link>}</div>
         </div>
 
         {/* VISTA 1: SELECCIONAR DEPORTE */}

@@ -150,7 +150,7 @@ export default function TribunalPage() {
         {/* NAVEGACIÓN Y CABECERA */}
         <div className="mb-8">
           <Link href={`/${slug}/admin`} className="inline-flex items-center gap-2 text-slate-500 hover:text-blue-600 font-black uppercase tracking-widest text-[10px] mb-6 transition-colors bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-sm">
-            <ArrowLeft size={16} /> Volver al inicio
+            <ArrowLeft size={16} /> Panel principal
           </Link>
           
           <div className="mb-6">
