@@ -197,7 +197,8 @@ export function getMatchScoreForStandings(match: MatchLike, rules: SportRules) {
     };
   }
 
-  if (rules.usesPenaltySets && match.home_sets !== null && match.home_sets !== undefined && match.away_sets !== null && match.away_sets !== undefined) {
+  const hasPenaltyShootout = Number(match.home_sets || 0) > 0 || Number(match.away_sets || 0) > 0;
+  if (rules.usesPenaltySets && hasPenaltyShootout) {
     return {
       home: match.home_sets || 0,
       away: match.away_sets || 0,

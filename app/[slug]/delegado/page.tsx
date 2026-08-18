@@ -114,13 +114,13 @@ async function loadDelegatePortalData(slug: string) {
 
     const eventsQuery = await supabase
       .from('match_events')
-      .select('id, match_id, team_id, player_id, event_type, period, minute_record, fine_amount, fine_status, players(name, shirt_number), teams(name, schools(name, logo_url)), matches(status)')
+      .select('id, match_id, team_id, player_id, event_type, period, minute_record, fine_amount, fine_status, players(name, shirt_number), teams(name, schools(name, logo_url)), matches(status, matchdays(round_number))')
       .in('team_id', teamIds);
 
     const events = eventsQuery.error
       ? (await supabase
         .from('match_events')
-        .select('id, match_id, team_id, player_id, event_type, period, minute_record, players(name, shirt_number), teams(name, schools(name, logo_url)), matches(status)')
+        .select('id, match_id, team_id, player_id, event_type, period, minute_record, players(name, shirt_number), teams(name, schools(name, logo_url)), matches(status, matchdays(round_number))')
         .in('team_id', teamIds)).data
       : eventsQuery.data;
 

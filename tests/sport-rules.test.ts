@@ -45,6 +45,18 @@ describe('sport rules', () => {
 
     expect(
       getMatchScoreForStandings(
+        { home_score: 3, away_score: 1, home_sets: 0, away_sets: 0 },
+        soccerRules,
+      ),
+    ).toEqual({
+      home: 3,
+      away: 1,
+      isPenaltyScore: false,
+      countsForScoreColumns: true,
+    });
+
+    expect(
+      getMatchScoreForStandings(
         { home_score: 1, away_score: 1, home_sets: 4, away_sets: 3 },
         soccerRules,
       ),

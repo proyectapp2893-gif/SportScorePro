@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Activity, CalendarDays, Camera, ClipboardCopy, Download, ExternalLink, Eye, FileCheck2, FileSpreadsheet, KeyRound, Lock, LogOut, Plus, ShieldCheck, Square, Trash2, Trophy, Upload, UserRoundCog, Users, X } from 'lucide-react';
+import { Activity, CalendarDays, Camera, ChevronDown, ClipboardCopy, Download, ExternalLink, Eye, FileCheck2, FileSpreadsheet, KeyRound, Lock, LogOut, Plus, ShieldCheck, Square, Trash2, Trophy, Upload, UserRoundCog, Users, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '@/app/lib/sports/rules';
@@ -185,7 +185,9 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' });
   const [activeRound, setActiveRound] = useState('');
   const [selectedHistoryMatch, setSelectedHistoryMatch] = useState<any | null>(null);
+  const [selectedStatDetail, setSelectedStatDetail] = useState<'GOALS' | 'YELLOW' | 'RED' | 'DEBT' | null>(null);
   const [showBulkUpload, setShowBulkUpload] = useState(false);
+  const [showRegistrationModule, setShowRegistrationModule] = useState(false);
   const [bulkRows, setBulkRows] = useState<BulkPlayerRow[]>([]);
   const [draftSavedAt, setDraftSavedAt] = useState<Date | null>(null);
   const [loading, setLoading] = useState(false);
@@ -203,6 +205,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const eventsByMatch = data?.eventsByMatch || {};
   const historyMatches = matches.filter((match: any) => match.status === 'FINISHED');
   const teamUpcomingMatches = matches.filter((match: any) => match.status !== 'FINISHED');
+  const nextMatch = teamUpcomingMatches[0];
+  const nextOpponent = nextMatch ? (nextMatch.home_team_id === selectedTeam?.id ? nextMatch.away_team : nextMatch.home_team) : null;
   const scheduleRounds = fullSchedule.reduce((acc: Record<string, any[]>, match: any) => {
     const round = match.matchdays?.round_number || 0;
     const key = round === 100 || round >= 201 ? 'Fase 3 · Finales' : round >= 101 ? `Fase 2 · Jornada ${round - 100}` : `Fase 1 · Jornada ${round}`;
@@ -219,6 +223,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
 
   useEffect(() => {
     setActiveRound('');
+    setShowRegistrationModule(false);
     setStaffForm({
       headCoach: teamStaff.find((member: any) => member.role === 'HEAD_COACH')?.full_name || '',
       assistantCoach: teamStaff.find((member: any) => member.role === 'ASSISTANT_COACH')?.full_name || '',
@@ -253,14 +258,19 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const totalScoring = (eventSummary.GOAL || 0) + (eventSummary.BASKET_1 || 0) + ((eventSummary.BASKET_2 || 0) * 2) + ((eventSummary.BASKET_3 || 0) * 3);
   const eventFineAmount = (event: any) => {
     if (event.fine_status === 'PAID') return 0;
-    if (typeof event.fine_amount === 'number' && event.fine_amount > 0) return event.fine_amount;
     if (event.event_type === 'YELLOW') {
-      return selectedCategory?.tournaments?.fine_yellow_amount || selectedCategory?.tournaments?.fp_yellow_deduction || 0;
+      return selectedCategory?.tournaments?.fine_yellow_amount
+        || (typeof event.fine_amount === 'number' ? event.fine_amount : 0)
+        || selectedCategory?.tournaments?.fp_yellow_deduction
+        || 0;
     }
     if (event.event_type === 'RED') {
-      return selectedCategory?.tournaments?.fine_red_amount || selectedCategory?.tournaments?.fp_red_deduction || 0;
+      return selectedCategory?.tournaments?.fine_red_amount
+        || (typeof event.fine_amount === 'number' ? event.fine_amount : 0)
+        || selectedCategory?.tournaments?.fp_red_deduction
+        || 0;
     }
-    return 0;
+    return typeof event.fine_amount === 'number' ? event.fine_amount : 0;
   };
   const debt = events.reduce((sum: number, event: any) => sum + eventFineAmount(event), 0);
 
@@ -302,6 +312,12 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     return Object.values(byPlayer).sort((a: any, b: any) => b.total - a.total);
   }, [events]);
   const cardEvents = events.filter((event: any) => event.event_type === 'YELLOW' || event.event_type === 'RED');
+  const statDetailEvents = selectedStatDetail === 'GOALS'
+    ? events.filter((event: any) => ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3'].includes(event.event_type))
+    : selectedStatDetail === 'DEBT'
+      ? cardEvents.filter((event: any) => event.fine_status !== 'PAID')
+      : cardEvents.filter((event: any) => event.event_type === selectedStatDetail);
+  const statDetailTitle = selectedStatDetail === 'GOALS' ? 'Goles y anotadores' : selectedStatDetail === 'YELLOW' ? 'Tarjetas amarillas' : selectedStatDetail === 'RED' ? 'Tarjetas rojas' : 'Multas pendientes';
 
   const handleLogin = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -953,6 +969,26 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
           </div>
         )}
 
+        {selectedStatDetail && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm" onClick={() => setSelectedStatDetail(null)}>
+            <section role="dialog" aria-modal="true" aria-labelledby="stat-detail-title" className="w-full max-w-xl overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+              <header className="flex items-start justify-between gap-4 border-b border-slate-100 p-5">
+                <div><p className="text-[9px] font-black uppercase tracking-[0.25em] text-blue-600">Detalle del equipo</p><h2 id="stat-detail-title" className="text-xl font-black uppercase">{statDetailTitle}</h2></div>
+                <button type="button" onClick={() => setSelectedStatDetail(null)} className="rounded-xl bg-slate-100 p-2.5 text-slate-500" aria-label="Cerrar detalle"><X size={17} /></button>
+              </header>
+              <div className="max-h-[65vh] divide-y divide-slate-100 overflow-y-auto p-5">
+                {statDetailEvents.map((event: any) => (
+                  <div key={event.id} className="flex items-center justify-between gap-4 py-3">
+                    <div className="min-w-0"><p className="truncate text-xs font-black uppercase">#{event.players?.shirt_number || '-'} {event.players?.name || 'Jugador sin asignar'}</p><p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">{eventLabel(event.event_type)}{event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · {event.period || 'Periodo sin registrar'}{event.minute_record ? ` · ${event.minute_record}'` : ''}</p></div>
+                    {selectedStatDetail === 'DEBT' && <span className="shrink-0 text-sm font-black text-violet-700">${eventFineAmount(event).toLocaleString('es-CO')}</span>}
+                  </div>
+                ))}
+                {statDetailEvents.length === 0 && <p className="py-10 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">No hay registros para mostrar</p>}
+              </div>
+            </section>
+          </div>
+        )}
+
         {data.teams.length === 0 && (
           <section className="rounded-[2rem] border border-amber-200 bg-white p-8 text-center shadow-sm sm:p-12">
             <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
@@ -979,32 +1015,37 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
 
         {selectedTeam && (
           <>
-            <section className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
               <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
                 <Users className="text-blue-600 mb-2" size={20} />
                 <p className="text-2xl font-black">{players.length}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Inscritos</p>
               </div>
-              <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+              <button type="button" onClick={() => setSelectedStatDetail('GOALS')} className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md" aria-label="Ver goleadores">
                 <Trophy className="text-emerald-600 mb-2" size={20} />
                 <p className="text-2xl font-black">{totalScoring}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Goles/Puntos</p>
-              </div>
-              <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
+              </button>
+              <button type="button" onClick={() => setSelectedStatDetail('YELLOW')} className="rounded-2xl border border-amber-100 bg-amber-50/70 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md" aria-label="Ver tarjetas amarillas">
                 <Square className="text-yellow-400 fill-yellow-400 mb-2" size={20} />
                 <p className="text-2xl font-black">{eventSummary.YELLOW || 0}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Amarillas</p>
-              </div>
-              <div className="rounded-2xl border border-red-100 bg-red-50/70 p-4">
+              </button>
+              <button type="button" onClick={() => setSelectedStatDetail('RED')} className="rounded-2xl border border-red-100 bg-red-50/70 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md" aria-label="Ver tarjetas rojas">
                 <Square className="text-red-600 fill-red-600 mb-2" size={20} />
                 <p className="text-2xl font-black">{eventSummary.RED || 0}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Rojas</p>
-              </div>
-              <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-4">
+              </button>
+              <button type="button" onClick={() => setSelectedStatDetail('DEBT')} className="rounded-2xl border border-violet-100 bg-violet-50/70 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md" aria-label="Ver quién debe multas">
                 <Activity className="text-slate-700 mb-2" size={20} />
                 <p className="text-2xl font-black">${debt.toLocaleString('es-CO')}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Multas</p>
-              </div>
+              </button>
+              <button type="button" onClick={() => document.getElementById('upcoming-matches')?.scrollIntoView({ behavior: 'smooth', block: 'center' })} className="col-span-2 rounded-2xl border border-cyan-100 bg-cyan-50/70 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md md:col-span-1" aria-label="Ver próximo partido">
+                <CalendarDays className="mb-2 text-cyan-600" size={20} />
+                <p className="truncate text-sm font-black uppercase">{nextOpponent?.name || 'Sin programación'}</p>
+                <p className="mt-1 text-[9px] font-black uppercase tracking-widest text-slate-400">{nextMatch ? `${nextMatch.matchdays?.scheduled_date || 'Fecha pendiente'} · ${nextMatch.scheduled_time?.slice(0, 5) || '--:--'}` : 'Próximo partido'}</p>
+              </button>
             </section>
 
             <section className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
@@ -1020,7 +1061,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   <table className="min-w-[650px] w-full text-xs">
                     <thead className="bg-slate-950 text-[9px] font-black uppercase tracking-widest text-white"><tr><th className="p-3 text-left">Pos.</th><th className="p-3 text-left">Equipo</th><th className="p-3">PJ</th><th className="p-3">G</th><th className="p-3">E</th><th className="p-3">P</th><th className="p-3">{sportRules.scoreLabels.for}</th><th className="p-3">{sportRules.scoreLabels.against}</th><th className="p-3">DG</th><th className="p-3">PTS</th></tr></thead>
                     <tbody className="divide-y divide-blue-100 bg-white/85">
-                      {standings.map((team: any, index: number) => <tr key={team.id} className={team.id === selectedTeam.id ? 'bg-blue-100/70' : ''}><td className="p-3 font-black text-slate-400">{index + 1}</td><td className="p-3 font-black uppercase">{team.name}</td><td className="p-3 text-center font-bold">{team.played}</td><td className="p-3 text-center font-bold">{team.won}</td><td className="p-3 text-center font-bold">{team.drawn}</td><td className="p-3 text-center font-bold">{team.lost}</td><td className="p-3 text-center font-bold">{team.goals_for}</td><td className="p-3 text-center font-bold">{team.goals_against}</td><td className="p-3 text-center font-bold">{team.goals_for - team.goals_against}</td><td className="p-3 text-center font-black text-blue-600">{team.points}</td></tr>)}
+                      {standings.map((team: any, index: number) => <tr key={team.id} className={team.id === selectedTeam.id ? 'delegate-standing-highlight' : ''}><td className="p-3 font-black text-slate-400">{index + 1}</td><td className="p-3 font-black uppercase"><span className={team.id === selectedTeam.id ? 'delegate-team-name-lights' : ''}>{team.name}</span></td><td className="p-3 text-center font-bold">{team.played}</td><td className="p-3 text-center font-bold">{team.won}</td><td className="p-3 text-center font-bold">{team.drawn}</td><td className="p-3 text-center font-bold">{team.lost}</td><td className="p-3 text-center font-bold">{team.goals_for}</td><td className="p-3 text-center font-bold">{team.goals_against}</td><td className="p-3 text-center font-bold">{team.goals_for - team.goals_against}</td><td className="p-3 text-center font-black text-blue-600">{team.points}</td></tr>)}
                     </tbody>
                   </table>
                   {standings.length === 0 && <p className="p-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">No hay equipos programados</p>}
@@ -1047,7 +1088,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               <div className="rounded-[2rem] border border-amber-100 bg-amber-50/45 p-5">
                 <h2 className="text-lg font-black uppercase">Tarjetas y sanciones</h2>
                 <div className="mt-4 divide-y divide-slate-100">
-                  {cardEvents.map((event: any) => <div key={event.id} className="flex items-center justify-between gap-3 py-3"><div className="flex min-w-0 items-center gap-3"><Square size={18} className={event.event_type === 'RED' ? 'fill-red-600 text-red-600' : 'fill-yellow-400 text-yellow-400'} /><div className="min-w-0"><p className="truncate text-xs font-black uppercase">{event.players?.name || 'Jugador sin asignar'}</p><p className="text-[9px] font-bold uppercase text-slate-400">{eventLabel(event.event_type)} · {event.fine_status === 'PAID' ? 'Pagada' : 'Pendiente'}</p></div></div><span className="shrink-0 text-xs font-black">${eventFineAmount(event).toLocaleString('es-CO')}</span></div>)}
+                  {cardEvents.map((event: any) => <div key={event.id} className="flex items-center justify-between gap-3 py-3"><div className="flex min-w-0 items-center gap-3"><Square size={18} className={event.event_type === 'RED' ? 'fill-red-600 text-red-600' : 'fill-yellow-400 text-yellow-400'} /><div className="min-w-0"><p className="truncate text-xs font-black uppercase">{event.players?.name || 'Jugador sin asignar'}</p><p className="text-[9px] font-bold uppercase text-slate-400">{eventLabel(event.event_type)}{event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · {event.fine_status === 'PAID' ? 'Pagada' : 'Pendiente'}</p></div></div><span className="shrink-0 text-xs font-black">${eventFineAmount(event).toLocaleString('es-CO')}</span></div>)}
                   {cardEvents.length === 0 && <p className="py-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Sin tarjetas ni sanciones</p>}
                 </div>
               </div>
@@ -1062,21 +1103,18 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               </form>
             </section>
 
-            <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(420px,1fr)]">
-              <div className="bg-white border border-slate-200 rounded-[2rem] overflow-hidden">
-                <div className="p-5 border-b border-slate-100 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <section className="grid grid-cols-1 gap-6">
+              <div className="self-start overflow-hidden rounded-[2rem] border border-slate-200 bg-white">
+                <button type="button" onClick={() => setShowRegistrationModule((open) => !open)} className="flex w-full flex-col gap-3 border-b border-slate-100 p-5 text-left transition-colors hover:bg-slate-50 sm:flex-row sm:items-center sm:justify-between" aria-expanded={showRegistrationModule}>
                   <div>
                     <h2 className="font-black uppercase text-xl">Nómina</h2>
                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                      {canEditRoster ? 'Inscripción abierta' : 'Inscripción cerrada'}
+                      {players.length} inscritos · {canEditRoster ? 'Inscripción abierta' : 'Inscripción cerrada'}
                     </p>
                   </div>
-                  {canEditRoster ? (
-                    <button type="button" onClick={openBulkUpload} className="flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white hover:bg-emerald-700">
-                      <FileSpreadsheet size={15} /> Inscribir jugadores
-                    </button>
-                  ) : <Lock className="text-red-500" />}
-                </div>
+                  <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-blue-700">{showRegistrationModule ? 'Ocultar planilla' : 'Ver planilla'}<ChevronDown size={18} className={`transition-transform ${showRegistrationModule ? 'rotate-180' : ''}`} /></span>
+                </button>
+                {showRegistrationModule && <>
                 <div className="grid grid-cols-1 gap-3 border-b border-slate-100 bg-slate-50/70 p-4 sm:grid-cols-2 sm:p-5">
                   <div className={`rounded-2xl border p-4 ${selectedCategory?.min_roster_size && players.length >= selectedCategory.min_roster_size ? 'border-emerald-200 bg-emerald-50' : 'border-blue-200 bg-blue-50'}`}>
                     <div className="flex items-center gap-3">
@@ -1159,9 +1197,10 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   ))}
                   {players.length === 0 && <p className="p-8 text-center text-slate-400 text-xs font-black uppercase tracking-widest">Sin jugadores inscritos</p>}
                 </div>
+                </>}
               </div>
 
-              <div className="space-y-6">
+              <div className="grid gap-6 lg:grid-cols-2">
                 <div className="bg-white border border-slate-200 rounded-[2rem] p-5 space-y-3">
                   <div className="flex items-center gap-3">
                     <TeamLogo team={selectedTeam} className="w-14 h-14" />
@@ -1181,7 +1220,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Máximo 800 KB. Formatos de imagen.</p>
                 </div>
 
-                {fixtureVisibleToDelegates ? <div className="rounded-[2rem] border border-slate-200 bg-white p-5 xl:min-w-[420px]">
+                {fixtureVisibleToDelegates ? <div id="upcoming-matches" className="scroll-mt-6 rounded-[2rem] border border-slate-200 bg-white p-5 xl:min-w-[420px]">
                   <h2 className="font-black uppercase text-lg mb-4">Partidos del equipo</h2>
                   <div className="space-y-3">
                     {teamUpcomingMatches.map((match: any) => renderMatchCard(match))}
