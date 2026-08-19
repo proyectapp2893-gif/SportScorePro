@@ -39,6 +39,61 @@ const MOBILE_ROW_COLORS = [
   'border-cyan-200 bg-cyan-50/80',
 ] as const;
 const MAX_COMPRESSED_IMAGE_BYTES = 1024 * 1024;
+const BULK_DRAFT_DB_NAME = 'sportscore-delegate-drafts';
+const BULK_DRAFT_STORE = 'bulk-rosters';
+
+function openBulkDraftDatabase() {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = window.indexedDB.open(BULK_DRAFT_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(BULK_DRAFT_STORE)) request.result.createObjectStore(BULK_DRAFT_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveBulkDraftFiles(key: string, rows: BulkPlayerRow[]) {
+  const database = await openBulkDraftDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(BULK_DRAFT_STORE, 'readwrite');
+    const storableRows = rows.map(({ facePreview: _facePreview, ...row }) => row);
+    transaction.objectStore(BULK_DRAFT_STORE).put({ version: 3, updatedAt: Date.now(), rows: storableRows }, key);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+}
+
+async function loadBulkDraftFiles(key: string) {
+  const database = await openBulkDraftDatabase();
+  const draft = await new Promise<any>((resolve, reject) => {
+    const transaction = database.transaction(BULK_DRAFT_STORE, 'readonly');
+    const request = transaction.objectStore(BULK_DRAFT_STORE).get(key);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  });
+  database.close();
+  return draft;
+}
+
+async function deleteBulkDraftFiles(key: string) {
+  const database = await openBulkDraftDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(BULK_DRAFT_STORE, 'readwrite');
+    transaction.objectStore(BULK_DRAFT_STORE).delete(key);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+}
+
+function restoreBulkFilePreviews(rows: BulkPlayerRow[]) {
+  return rows.map((row) => ({
+    ...row,
+    facePreview: row.faceFile instanceof File ? URL.createObjectURL(row.faceFile) : undefined,
+  }));
+}
 
 async function compressRosterImage(file: File) {
   if (!file.type.startsWith('image/') || file.size <= MAX_COMPRESSED_IMAGE_BYTES) return file;
@@ -126,34 +181,70 @@ function playerDossierStatus(documents: any[] | null | undefined) {
   return { label: 'Carga completa · pendiente de revisión', className: 'text-amber-600' };
 }
 
-function BirthDateCards({ value, onChange, compact = false }: { value: string; onChange: (value: string) => void; compact?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const [step, setStep] = useState<'YEAR' | 'MONTH' | 'DAY'>('YEAR');
-  const [year = '', month = '', day = ''] = value.split('-');
-  const days = year && month ? new Date(Number(year), Number(month), 0).getDate() : 31;
-  const monthNames = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'];
-  const displayValue = year && month && day ? `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}` : 'Seleccionar fecha';
-  const chooseYear = (nextYear: number) => { onChange(`${nextYear}--`); setStep('MONTH'); };
-  const chooseMonth = (nextMonth: number) => { onChange(`${year}-${String(nextMonth).padStart(2, '0')}-`); setStep('DAY'); };
-  const chooseDay = (nextDay: number) => { onChange(`${year}-${month.padStart(2, '0')}-${String(nextDay).padStart(2, '0')}`); setOpen(false); setStep('YEAR'); };
-  const openPicker = () => { setStep(year ? month ? 'DAY' : 'MONTH' : 'YEAR'); setOpen(true); };
+function normalizePastedDate(rawValue: string) {
+  const raw = rawValue.trim();
+  const digits = raw.replace(/\D/g, '');
+  const currentYear = new Date().getFullYear();
+  const isValid = (year: number, month: number, day: number) => {
+    const candidate = new Date(year, month - 1, day);
+    return year >= 1900 && year <= currentYear && month >= 1 && month <= 12 && day >= 1
+      && candidate.getFullYear() === year && candidate.getMonth() === month - 1 && candidate.getDate() === day;
+  };
+  const candidates: Array<[number, number, number]> = [];
+  const separated = raw.match(/^(\d{1,4})[-/.](\d{1,2})[-/.](\d{1,4})$/);
+  if (separated) {
+    const first = Number(separated[1]); const second = Number(separated[2]); const third = Number(separated[3]);
+    if (separated[1].length === 4) {
+      candidates.push([first, second, third], [first, third, second]);
+    } else if (separated[3].length === 4) {
+      candidates.push([third, second, first], [third, first, second]);
+    }
+  } else if (digits.length === 8) {
+    candidates.push(
+      [Number(digits.slice(4, 8)), Number(digits.slice(2, 4)), Number(digits.slice(0, 2))],
+      [Number(digits.slice(4, 8)), Number(digits.slice(0, 2)), Number(digits.slice(2, 4))],
+      [Number(digits.slice(0, 4)), Number(digits.slice(4, 6)), Number(digits.slice(6, 8))],
+      [Number(digits.slice(0, 4)), Number(digits.slice(6, 8)), Number(digits.slice(4, 6))],
+    );
+  }
+  const interpreted = candidates.find(([year, month, day]) => isValid(year, month, day));
+  if (!interpreted) return null;
+  const [year, month, day] = interpreted;
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
 
-  return <div className="relative">
-    <button type="button" onClick={openPicker} className={`flex w-full items-center justify-between rounded-xl border border-blue-100 bg-white font-black text-slate-800 outline-none transition-colors hover:border-blue-400 ${compact ? 'px-3 py-2.5 text-[10px]' : 'px-4 py-3 text-xs'}`}>
-      <span>{displayValue}</span><CalendarDays size={compact ? 13 : 16} className="text-blue-600" />
-    </button>
-    {open && <div className={`absolute z-[80] mt-2 overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-2xl ${compact ? 'left-1/2 w-[330px] -translate-x-1/2' : 'left-0 w-full min-w-[300px]'}`}>
-      <div className="flex items-center justify-between border-b border-blue-50 bg-blue-50 px-4 py-3">
-        <div><p className="text-[8px] font-black uppercase tracking-widest text-blue-500">Fecha de nacimiento</p><p className="text-xs font-black uppercase">{step === 'YEAR' ? 'Selecciona el año' : step === 'MONTH' ? `Año ${year} · selecciona el mes` : `${monthNames[Number(month) - 1]} ${year} · selecciona el día`}</p></div>
-        <button type="button" onClick={() => setOpen(false)} className="rounded-lg bg-white p-2 text-slate-400"><X size={14} /></button>
-      </div>
-      <div className="max-h-64 overflow-y-auto p-3">
-        {step === 'YEAR' && <div className="grid grid-cols-4 gap-2">{Array.from({ length: new Date().getFullYear() - 1899 }, (_, index) => new Date().getFullYear() - index).map((item) => <button type="button" key={item} onClick={() => chooseYear(item)} className="rounded-xl border border-slate-100 bg-slate-50 px-2 py-3 text-xs font-black hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700">{item}</button>)}</div>}
-        {step === 'MONTH' && <div className="grid grid-cols-3 gap-2">{monthNames.map((name, index) => <button type="button" key={name} onClick={() => chooseMonth(index + 1)} className="rounded-xl border border-slate-100 bg-slate-50 px-2 py-4 text-xs font-black hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700">{name}</button>)}</div>}
-        {step === 'DAY' && <div className="grid grid-cols-7 gap-1.5">{Array.from({ length: days }, (_, index) => index + 1).map((item) => <button type="button" key={item} onClick={() => chooseDay(item)} className="aspect-square rounded-lg border border-slate-100 bg-slate-50 text-[10px] font-black hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700">{item}</button>)}</div>}
-      </div>
-      {step !== 'YEAR' && <button type="button" onClick={() => setStep(step === 'DAY' ? 'MONTH' : 'YEAR')} className="w-full border-t border-slate-100 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-blue-600">Volver a {step === 'DAY' ? 'meses' : 'años'}</button>}
-    </div>}
+function BirthDateCards({ value, onChange, compact = false }: { value: string; onChange: (value: string) => void; compact?: boolean }) {
+  const [manualValue, setManualValue] = useState('');
+  const [year = '', month = '', day = ''] = value.split('-');
+  useEffect(() => {
+    if (year && month && day) setManualValue(`${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`);
+    else if (!value) setManualValue('');
+  }, [day, month, value, year]);
+  const handleManualDate = (raw: string) => {
+    const digits = raw.replace(/\D/g, '').slice(0, 8);
+    const normalized = normalizePastedDate(raw);
+    if (normalized) {
+      const [normalizedYear, normalizedMonth, normalizedDay] = normalized.split('-');
+      setManualValue(`${normalizedDay}/${normalizedMonth}/${normalizedYear}`);
+      onChange(normalized);
+    } else setManualValue(digits);
+  };
+  const interpreted = Boolean(normalizePastedDate(manualValue));
+  const completeButInvalid = manualValue.replace(/\D/g, '').length === 8 && !interpreted;
+
+  return <div>
+    <input
+      type="text"
+      inputMode="numeric"
+      value={manualValue}
+      onChange={(event) => handleManualDate(event.target.value)}
+      onPaste={(event) => { event.preventDefault(); handleManualDate(event.clipboardData.getData('text')); }}
+      placeholder="DDMMAAAA"
+      maxLength={10}
+      aria-label="Escribir fecha de nacimiento"
+      className={`w-full rounded-xl border bg-white px-3 text-center font-bold text-slate-700 outline-none placeholder:text-slate-400 focus:ring-2 ${interpreted ? 'border-emerald-300 focus:border-emerald-400 focus:ring-emerald-100' : completeButInvalid ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : 'border-blue-200 focus:border-blue-400 focus:ring-blue-100'} ${compact ? 'py-2.5 text-[10px]' : 'py-3 text-xs'}`}
+    />
+    <p className={`mt-1 text-center text-[8px] font-black uppercase tracking-wider ${interpreted ? 'text-emerald-600' : completeButInvalid ? 'text-red-500' : 'text-slate-400'}`}>{interpreted ? 'Fecha interpretada correctamente' : completeButInvalid ? 'Fecha no válida' : 'Escribe día, mes y año'}</p>
   </div>;
 }
 
@@ -245,12 +336,13 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
 
   useEffect(() => {
     if (!showBulkUpload || !bulkDraftKey || bulkRows.length === 0) return;
-    const timeout = window.setTimeout(() => {
+    const timeout = window.setTimeout(async () => {
       try {
         window.localStorage.setItem(bulkDraftKey, JSON.stringify({ version: 2, updatedAt: Date.now(), rows: bulkRows.map(({ faceFile, facePreview, identityFile, ...row }) => row) }));
+        await saveBulkDraftFiles(bulkDraftKey, bulkRows);
         setDraftSavedAt(new Date());
       } catch {
-        toast.error('El navegador no permitió guardar el borrador local.');
+        toast.error('El navegador no permitió guardar los archivos del borrador.');
       }
     }, 250);
     return () => window.clearTimeout(timeout);
@@ -448,6 +540,12 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     }
   };
 
+  const keepBulkFieldVisible = (event: React.FocusEvent<HTMLDivElement>) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || !target.matches('input, select, button, [role="button"]')) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  };
+
   const handleBulkPaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
     const text = event.clipboardData.getData('text/plain');
     if (!text.includes('\t') && !text.includes('\n')) return;
@@ -542,20 +640,24 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     setLoading(false);
     if (uploadResults.some((upload) => !upload.success)) toast.error('Los jugadores fueron creados, pero algunos archivos no pudieron cargarse.');
     else toast.success(`${result.data.inserted} jugadores y documentos inscritos`);
-    if (bulkDraftKey) window.localStorage.removeItem(bulkDraftKey);
+    if (bulkDraftKey) {
+      window.localStorage.removeItem(bulkDraftKey);
+      await deleteBulkDraftFiles(bulkDraftKey).catch(() => undefined);
+    }
     setShowBulkUpload(false);
     setBulkRows([]);
     setDraftSavedAt(null);
     window.location.reload();
   };
 
-  const openBulkUpload = () => {
+  const openBulkUpload = async () => {
     let restoredRows: BulkPlayerRow[] | null = null;
     if (bulkDraftKey) {
       try {
-        const savedDraft = JSON.parse(window.localStorage.getItem(bulkDraftKey) || 'null');
+        const indexedDraft = await loadBulkDraftFiles(bulkDraftKey).catch(() => null);
+        const savedDraft = indexedDraft || JSON.parse(window.localStorage.getItem(bulkDraftKey) || 'null');
         if (Array.isArray(savedDraft?.rows)) {
-          restoredRows = validateBulkRows(savedDraft.rows);
+          restoredRows = validateBulkRows(restoreBulkFilePreviews(savedDraft.rows));
           setDraftSavedAt(savedDraft.updatedAt ? new Date(savedDraft.updatedAt) : new Date());
         }
       } catch {
@@ -564,22 +666,28 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     }
     setBulkRows(restoredRows || Array.from({ length: 8 }, emptyBulkRow));
     setShowBulkUpload(true);
-    if (restoredRows) toast.success('Borrador local recuperado');
+    if (restoredRows) toast.success('Borrador recuperado con sus fotos y documentos');
   };
 
-  const discardBulkDraft = () => {
-    if (bulkDraftKey) window.localStorage.removeItem(bulkDraftKey);
+  const discardBulkDraft = async () => {
+    if (bulkDraftKey) {
+      window.localStorage.removeItem(bulkDraftKey);
+      await deleteBulkDraftFiles(bulkDraftKey).catch(() => undefined);
+    }
     setBulkRows(Array.from({ length: 8 }, emptyBulkRow));
     setDraftSavedAt(null);
     toast.success('Borrador eliminado');
   };
 
-  const closeBulkUpload = () => {
+  const closeBulkUpload = async () => {
     if (bulkDraftKey && bulkRows.length > 0) {
       try {
         window.localStorage.setItem(bulkDraftKey, JSON.stringify({ version: 2, updatedAt: Date.now(), rows: bulkRows.map(({ faceFile, facePreview, identityFile, ...row }) => row) }));
+        await saveBulkDraftFiles(bulkDraftKey, bulkRows);
+        setDraftSavedAt(new Date());
       } catch {
-        toast.error('No se pudo guardar el último cambio local.');
+        toast.error('No se pudieron guardar los archivos del último cambio.');
+        return;
       }
     }
     setShowBulkUpload(false);
@@ -799,7 +907,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   <h2 id="bulk-upload-title" className="text-xl font-black uppercase tracking-tight sm:text-2xl">Inscribir jugadores y documentos</h2>
                   <p className="mt-1 text-xs font-semibold text-slate-500">Equipo: {selectedTeam?.name}</p>
                   <p className="mt-2 text-[9px] font-black uppercase tracking-widest text-emerald-600">
-                    {draftSavedAt ? `Borrador guardado localmente · ${draftSavedAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}` : 'Guardado local automático activo'}
+                    {draftSavedAt ? `Campos y archivos guardados · ${draftSavedAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}` : 'Guardado automático de campos y archivos activo'}
                   </p>
                 </div>
                 <button type="button" onClick={closeBulkUpload} className="rounded-xl bg-slate-100 p-3 text-slate-500 hover:text-slate-900" aria-label="Cerrar y continuar después"><X size={18} /></button>
@@ -844,7 +952,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 </div>
 
                 {bulkRows.length > 0 && (
-                  <div onPaste={handleBulkPaste} className="hidden overflow-x-auto rounded-2xl border border-slate-200 md:block">
+                  <div onPaste={handleBulkPaste} onFocusCapture={keepBulkFieldVisible} className="hidden scroll-smooth overflow-x-auto rounded-2xl border border-slate-200 md:block">
                     <table className="min-w-full text-left text-xs">
                       <thead className="bg-slate-950 text-[9px] font-black uppercase tracking-widest text-white">
                         <tr className="text-center"><th className="p-3">#</th><th className="p-3">Foto</th><th className="min-w-56 p-3">Nombre completo</th><th className="min-w-52 p-3">Número de identidad</th><th className="min-w-24 p-3">Dorsal</th><th className="min-w-44 p-3">Fecha de nacimiento</th><th className="min-w-52 p-3">Vínculo</th><th className="min-w-60 p-3">Promoción / Estudiante</th><th className="min-w-52 p-3">Documento</th><th className="min-w-40 p-3">Validación</th><th className="p-3"></th></tr>
