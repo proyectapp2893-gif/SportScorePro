@@ -110,6 +110,40 @@ label[for] {
   box-shadow: inset 3px 0 0 #3b82f6;
 }
 
+.delegate-module {
+  border-style: solid;
+  border-width: 1px;
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.045);
+}
+
+.delegate-module-blue { background-color: rgba(239, 246, 255, 0.88); border-color: rgb(191 219 254); }
+.delegate-module-indigo { background-color: rgba(238, 242, 255, 0.88); border-color: rgb(199 210 254); }
+.delegate-module-emerald { background-color: rgba(236, 253, 245, 0.88); border-color: rgb(167 243 208); }
+.delegate-module-amber { background-color: rgba(255, 251, 235, 0.9); border-color: rgb(253 230 138); }
+.delegate-module-violet { background-color: rgba(245, 243, 255, 0.9); border-color: rgb(221 214 254); }
+.delegate-module-sky { background-color: rgba(240, 249, 255, 0.9); border-color: rgb(186 230 253); }
+.delegate-module-cyan { background-color: rgba(236, 254, 255, 0.9); border-color: rgb(165 243 252); }
+.delegate-module-rose { background-color: rgba(255, 241, 242, 0.88); border-color: rgb(254 205 211); }
+.delegate-module-slate { background-color: rgba(248, 250, 252, 0.92); border-color: rgb(203 213 225); }
+
+@media (max-width: 639px) {
+  .delegate-portal-content {
+    gap: 1rem;
+    padding: 1rem 0.75rem 2rem;
+  }
+
+  .delegate-module {
+    border-radius: 1.25rem !important;
+    box-shadow: 0 5px 18px rgba(15, 23, 42, 0.04);
+  }
+
+  .delegate-table-scroll {
+    margin-inline: -1px;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .delegate-standing-highlight { animation: none; background: rgb(219 234 254 / 0.8); }
 }

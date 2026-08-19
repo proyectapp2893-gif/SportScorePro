@@ -747,11 +747,11 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   return (
     <main className="relative min-h-screen overflow-hidden bg-slate-50 text-slate-900">
       {selectedTeam?.schools?.logo_url && (
-        <div className="pointer-events-none absolute inset-x-0 top-40 z-0 flex justify-center overflow-hidden" aria-hidden="true">
+        <div className="pointer-events-none fixed inset-0 z-0 flex items-center justify-center overflow-hidden" aria-hidden="true">
           <img
             src={selectedTeam.schools.logo_url}
             alt=""
-            className="h-auto w-[min(78vw,760px)] select-none object-contain opacity-[0.035] grayscale"
+            className="h-auto w-[min(82vw,760px)] select-none object-contain opacity-[0.055] sm:opacity-[0.075]"
             referrerPolicy="no-referrer"
           />
         </div>
@@ -789,7 +789,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
         </div>
       </header>
 
-      <div className="relative z-10 max-w-6xl mx-auto px-4 py-8 space-y-6">
+      <div className="delegate-portal-content relative z-10 mx-auto max-w-6xl space-y-6 px-4 py-8">
         {showBulkUpload && (
           <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-sm sm:items-center sm:p-4">
             <section role="dialog" aria-modal="true" aria-labelledby="bulk-upload-title" className="flex h-[100dvh] w-full max-w-5xl flex-col overflow-hidden bg-white shadow-2xl sm:h-auto sm:max-h-[94dvh] sm:rounded-[2rem] sm:border sm:border-slate-200">
@@ -1066,7 +1066,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
             </section>
 
             <section className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
-              <div className="overflow-hidden rounded-[2rem] border border-blue-100 bg-blue-50/35">
+              <div className="delegate-module delegate-module-blue overflow-hidden rounded-[2rem] border border-blue-100 bg-blue-50/35">
                 <div className="flex items-center justify-between border-b border-blue-100 bg-blue-50/80 p-5">
                   <div>
                     <h2 className="text-lg font-black uppercase">Tabla de posiciones</h2>
@@ -1074,7 +1074,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   </div>
                   {fullSchedule.some((match: any) => match.status === 'LIVE') && <span className="rounded-full bg-red-50 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-red-600">En vivo · actualiza cada 15 s</span>}
                 </div>
-                <div className="overflow-x-auto">
+                <div className="delegate-table-scroll overflow-x-auto">
                   <table className="min-w-[650px] w-full text-xs">
                     <thead className="bg-slate-950 text-[9px] font-black uppercase tracking-widest text-white"><tr><th className="p-3 text-left">Pos.</th><th className="p-3 text-left">Equipo</th><th className="p-3">PJ</th><th className="p-3">G</th><th className="p-3">E</th><th className="p-3">P</th><th className="p-3">{sportRules.scoreLabels.for}</th><th className="p-3">{sportRules.scoreLabels.against}</th><th className="p-3">DG</th><th className="p-3">PTS</th></tr></thead>
                     <tbody className="divide-y divide-blue-100 bg-white/85">
@@ -1085,7 +1085,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 </div>
               </div>
 
-              <div className="rounded-[2rem] border border-indigo-100 bg-indigo-50/45 p-5">
+              <div className="delegate-module delegate-module-indigo rounded-[2rem] border border-indigo-100 bg-indigo-50/45 p-5">
                 <h2 className="text-lg font-black uppercase">Estadísticas del equipo</h2>
                 <p className="mb-5 text-[9px] font-black uppercase tracking-widest text-slate-400">Rendimiento oficial</p>
                 <div className="grid grid-cols-2 gap-3">
@@ -1095,14 +1095,14 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
             </section>
 
             <section className="grid gap-6 lg:grid-cols-2">
-              <div className="rounded-[2rem] border border-emerald-100 bg-emerald-50/45 p-5">
+              <div className="delegate-module delegate-module-emerald rounded-[2rem] border border-emerald-100 bg-emerald-50/45 p-5">
                 <h2 className="text-lg font-black uppercase">{sportRules.scoreLabels.scorerPlural} y goleadores</h2>
                 <div className="mt-4 divide-y divide-slate-100">
                   {scorers.map((player: any, index: number) => <div key={player.id} className="flex items-center justify-between py-3"><div className="flex items-center gap-3"><span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-xs font-black text-emerald-700">{index + 1}</span><div><p className="text-xs font-black uppercase">{player.name}</p><p className="text-[9px] font-bold uppercase text-slate-400">Dorsal #{player.shirtNumber || '-'}</p></div></div><span className="text-xl font-black text-emerald-600">{player.total}</span></div>)}
                   {scorers.length === 0 && <p className="py-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Sin anotaciones registradas</p>}
                 </div>
               </div>
-              <div className="rounded-[2rem] border border-amber-100 bg-amber-50/45 p-5">
+              <div className="delegate-module delegate-module-amber rounded-[2rem] border border-amber-100 bg-amber-50/45 p-5">
                 <h2 className="text-lg font-black uppercase">Tarjetas y sanciones</h2>
                 <div className="mt-4 divide-y divide-slate-100">
                   {cardEvents.map((event: any) => <div key={event.id} className="flex items-center justify-between gap-3 py-3"><div className="flex min-w-0 items-center gap-3"><Square size={18} className={event.event_type === 'RED' ? 'fill-red-600 text-red-600' : 'fill-yellow-400 text-yellow-400'} /><div className="min-w-0"><p className="truncate text-xs font-black uppercase">{event.players?.name || 'Jugador sin asignar'}</p><p className="text-[9px] font-bold uppercase text-slate-400">{eventLabel(event.event_type)} · vs. {eventOpponent(event)}{event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · {event.fine_status === 'PAID' ? 'Pagada' : 'Pendiente'}</p></div></div><span className="shrink-0 text-xs font-black">${eventFineAmount(event).toLocaleString('es-CO')}</span></div>)}
@@ -1111,7 +1111,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               </div>
             </section>
 
-            <section className="rounded-[2rem] border border-violet-100 bg-violet-50/50 p-5">
+            <section className="delegate-module delegate-module-violet rounded-[2rem] border border-violet-100 bg-violet-50/50 p-5">
               <div className="mb-4 flex items-center gap-3"><div className="rounded-xl bg-violet-600 p-3 text-white"><UserRoundCog size={20} /></div><div><h2 className="text-lg font-black uppercase">Cuerpo técnico</h2><p className="text-[9px] font-black uppercase tracking-widest text-violet-500">Inscripción oficial de la delegación</p></div></div>
               <form onSubmit={handleSaveStaff} className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
                 <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">Técnico<input required value={staffForm.headCoach} onChange={(event) => setStaffForm({ ...staffForm, headCoach: event.target.value.toUpperCase() })} placeholder="Nombre completo del técnico" className="mt-1.5 w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-xs font-bold uppercase outline-none focus:border-violet-500" /></label>
@@ -1121,7 +1121,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
             </section>
 
             <section className="grid grid-cols-1 gap-6">
-              <div className="self-start overflow-hidden rounded-[2rem] border border-slate-200 bg-white">
+              <div className="delegate-module delegate-module-sky self-start overflow-hidden rounded-[2rem] border border-slate-200 bg-white">
                 <button type="button" onClick={() => setShowRegistrationModule((open) => !open)} className="flex w-full flex-col gap-3 border-b border-slate-100 p-5 text-left transition-colors hover:bg-slate-50 sm:flex-row sm:items-center sm:justify-between" aria-expanded={showRegistrationModule}>
                   <div>
                     <h2 className="font-black uppercase text-xl">Nómina</h2>
@@ -1218,7 +1218,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               </div>
 
               <div className="grid gap-6 lg:grid-cols-2">
-                <div className="bg-white border border-slate-200 rounded-[2rem] p-5 space-y-3">
+                <div className="delegate-module delegate-module-rose space-y-3 rounded-[2rem] border border-slate-200 bg-white p-5">
                   <div className="flex items-center gap-3">
                     <TeamLogo team={selectedTeam} className="w-14 h-14" />
                     <div>
@@ -1237,7 +1237,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Máximo 800 KB. Formatos de imagen.</p>
                 </div>
 
-                {fixtureVisibleToDelegates ? <div id="upcoming-matches" className="scroll-mt-6 rounded-[2rem] border border-slate-200 bg-white p-5 xl:min-w-[420px]">
+                {fixtureVisibleToDelegates ? <div id="upcoming-matches" className="delegate-module delegate-module-cyan scroll-mt-6 rounded-[2rem] border border-slate-200 bg-white p-5 xl:min-w-[420px]">
                   <h2 className="font-black uppercase text-lg mb-1">Próximo partido</h2>
                   <p className="mb-4 text-[9px] font-black uppercase tracking-widest text-slate-400">Tu equipo vs. próximo rival</p>
                   <div className="space-y-3">
@@ -1249,7 +1249,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
             </section>
 
             <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="bg-white border border-slate-200 rounded-[2rem] p-5">
+              <div className="delegate-module delegate-module-slate rounded-[2rem] border border-slate-200 bg-white p-5">
                 <h2 className="font-black uppercase text-lg mb-4">Historial del equipo</h2>
                 <div className="space-y-3">
                   {historyMatches.map((match: any) => (
@@ -1261,7 +1261,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 </div>
               </div>
 
-              {fixtureVisibleToDelegates && <div className="bg-white border border-slate-200 rounded-[2rem] p-5">
+              {fixtureVisibleToDelegates && <div className="delegate-module delegate-module-blue rounded-[2rem] border border-slate-200 bg-white p-5">
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div><h2 className="font-black uppercase text-lg">Jornadas de la fase actual</h2><p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Fase {currentPhase} · incluye fechas futuras programadas</p></div>
                   {lastScheduledRound && <button type="button" onClick={() => setActiveRound(lastScheduledRound)} className="shrink-0 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100">Ver última programada</button>}
