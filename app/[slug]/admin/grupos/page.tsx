@@ -21,6 +21,16 @@ type ParsedFixtureMatch = {
   status: string;
 };
 
+function formatTime12Hour(value?: string | null) {
+  if (!value) return '--:--';
+  const [rawHour, rawMinute = '00'] = String(value).split(':');
+  const hour = Number(rawHour);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return String(value).slice(0, 5);
+  const suffix = hour >= 12 ? 'p. m.' : 'a. m.';
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${rawMinute.padStart(2, '0')} ${suffix}`;
+}
+
 function FixtureContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -121,7 +131,7 @@ function FixtureContent() {
 
     const { data: matchesData } = await supabase.from('matches')
       .select(`
-        id, status, home_score, away_score, home_sets, away_sets, scheduled_time, venue,
+        id, status, home_score, away_score, home_sets, away_sets, scheduled_time, venue, home_team_id, away_team_id,
         home_team:teams!home_team_id(id, name, schools(logo_url)), 
         away_team:teams!away_team_id(id, name, schools(logo_url)),
         matchdays!inner(id, category_id, round_number, scheduled_date)
@@ -571,7 +581,7 @@ function FixtureContent() {
           const isBye = !match.away_team_id || match.status === 'BYE';
           pdf.setDrawColor(226, 232, 240); pdf.line(12, y + 10, 285, y + 10);
           pdf.setTextColor(51, 65, 85); pdf.setFontSize(7); pdf.setFont('helvetica', 'bold');
-          pdf.text(match.scheduled_time ? String(match.scheduled_time).slice(0, 5) : '--:--', 16, y + 6.5);
+          pdf.text(formatTime12Hour(match.scheduled_time), 16, y + 6.5);
           pdf.text(String(match.venue || 'Por asignar').toUpperCase(), 39, y + 6.5);
           pdf.text(pdf.splitTextToSize(String(match.home_team?.name || 'POR DEFINIR').toUpperCase(), 78).slice(0, 1), 78, y + 6.5);
           pdf.text(isBye ? 'DESCANSA' : pdf.splitTextToSize(String(match.away_team?.name || 'POR DEFINIR').toUpperCase(), 78).slice(0, 1), 170, y + 6.5);
@@ -1265,7 +1275,7 @@ function FixtureContent() {
                             <span className="truncate text-[10px] font-black uppercase tracking-[0.12em] text-slate-500 sm:tracking-[0.2em]">
                               {match.matchdays?.scheduled_date ? new Date(match.matchdays.scheduled_date + 'T00:00:00').toLocaleDateString('es-ES', { month: 'long', day: 'numeric' }) : 'Fecha por asignar'} 
                               {' • '}
-                              {match.scheduled_time ? match.scheduled_time.substring(0, 5) : 'H:MM'}
+                              {match.scheduled_time ? formatTime12Hour(match.scheduled_time) : 'H:MM'}
                             </span>
                           </div>
 
