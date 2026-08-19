@@ -103,6 +103,12 @@ function matchStatusLabel(status: string) {
   return status || 'Sin estado';
 }
 
+function phaseForRound(roundNumber: number) {
+  if (roundNumber === 100 || roundNumber >= 201) return 3;
+  if (roundNumber >= 101) return 2;
+  return 1;
+}
+
 function ageOnDate(birthDate: string | null | undefined, referenceDate: string | null | undefined) {
   if (!birthDate) return null;
   const birth = new Date(`${birthDate}T12:00:00`);
@@ -207,14 +213,19 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const teamUpcomingMatches = matches.filter((match: any) => match.status !== 'FINISHED');
   const nextMatch = teamUpcomingMatches[0];
   const nextOpponent = nextMatch ? (nextMatch.home_team_id === selectedTeam?.id ? nextMatch.away_team : nextMatch.home_team) : null;
-  const scheduleRounds = fullSchedule.reduce((acc: Record<string, any[]>, match: any) => {
+  const currentPhase = phaseForRound(nextMatch?.matchdays?.round_number || Math.max(...fullSchedule.map((match: any) => match.matchdays?.round_number || 1), 1));
+  const currentPhaseSchedule = fullSchedule.filter((match: any) => phaseForRound(match.matchdays?.round_number || 1) === currentPhase);
+  const scheduleRounds = currentPhaseSchedule.reduce((acc: Record<string, any[]>, match: any) => {
     const round = match.matchdays?.round_number || 0;
     const key = round === 100 || round >= 201 ? 'Fase 3 · Finales' : round >= 101 ? `Fase 2 · Jornada ${round - 100}` : `Fase 1 · Jornada ${round}`;
     if (!acc[key]) acc[key] = [];
     acc[key].push(match);
     return acc;
   }, {});
-  const roundEntries = Object.entries(scheduleRounds);
+  const roundEntries = Object.entries(scheduleRounds).sort(([, matchesA], [, matchesB]) =>
+    ((matchesA as any[])[0]?.matchdays?.round_number || 0) - ((matchesB as any[])[0]?.matchdays?.round_number || 0),
+  );
+  const lastScheduledRound = roundEntries.at(-1)?.[0] || '';
   const selectedRound = activeRound && scheduleRounds[activeRound] ? activeRound : roundEntries[0]?.[0] || '';
 
   useEffect(() => {
@@ -318,6 +329,11 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       ? cardEvents.filter((event: any) => event.fine_status !== 'PAID')
       : cardEvents.filter((event: any) => event.event_type === selectedStatDetail);
   const statDetailTitle = selectedStatDetail === 'GOALS' ? 'Goles y anotadores' : selectedStatDetail === 'YELLOW' ? 'Tarjetas amarillas' : selectedStatDetail === 'RED' ? 'Tarjetas rojas' : 'Multas pendientes';
+  const eventOpponent = (event: any) => {
+    const match = fullSchedule.find((item: any) => item.id === event.match_id);
+    if (!match) return 'Rival no disponible';
+    return match.home_team_id === selectedTeam?.id ? match.away_team?.name : match.home_team?.name;
+  };
 
   const handleLogin = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -979,7 +995,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               <div className="max-h-[65vh] divide-y divide-slate-100 overflow-y-auto p-5">
                 {statDetailEvents.map((event: any) => (
                   <div key={event.id} className="flex items-center justify-between gap-4 py-3">
-                    <div className="min-w-0"><p className="truncate text-xs font-black uppercase">#{event.players?.shirt_number || '-'} {event.players?.name || 'Jugador sin asignar'}</p><p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">{eventLabel(event.event_type)}{event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · {event.period || 'Periodo sin registrar'}{event.minute_record ? ` · ${event.minute_record}'` : ''}</p></div>
+                    <div className="min-w-0"><p className="truncate text-xs font-black uppercase">#{event.players?.shirt_number || '-'} {event.players?.name || 'Jugador sin asignar'}</p><p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">{eventLabel(event.event_type)} · vs. {eventOpponent(event)}{event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · {event.period || 'Periodo sin registrar'}{event.minute_record ? ` · ${event.minute_record}'` : ''}</p></div>
                     {selectedStatDetail === 'DEBT' && <span className="shrink-0 text-sm font-black text-violet-700">${eventFineAmount(event).toLocaleString('es-CO')}</span>}
                   </div>
                 ))}
@@ -1043,8 +1059,9 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               </button>
               <button type="button" onClick={() => document.getElementById('upcoming-matches')?.scrollIntoView({ behavior: 'smooth', block: 'center' })} className="col-span-2 rounded-2xl border border-cyan-100 bg-cyan-50/70 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md md:col-span-1" aria-label="Ver próximo partido">
                 <CalendarDays className="mb-2 text-cyan-600" size={20} />
-                <p className="truncate text-sm font-black uppercase">{nextOpponent?.name || 'Sin programación'}</p>
-                <p className="mt-1 text-[9px] font-black uppercase tracking-widest text-slate-400">{nextMatch ? `${nextMatch.matchdays?.scheduled_date || 'Fecha pendiente'} · ${nextMatch.scheduled_time?.slice(0, 5) || '--:--'}` : 'Próximo partido'}</p>
+                <p className="text-[9px] font-black uppercase tracking-widest text-cyan-700">Próximo rival</p>
+                <p className="mt-1 truncate text-sm font-black uppercase">{nextOpponent?.name || 'Sin programación'}</p>
+                <p className="mt-1 text-[9px] font-black uppercase tracking-widest text-slate-400">{nextMatch ? `${nextMatch.matchdays?.scheduled_date || 'Fecha pendiente'} · ${nextMatch.scheduled_time?.slice(0, 5) || '--:--'}` : 'Sin próximo partido'}</p>
               </button>
             </section>
 
@@ -1061,7 +1078,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   <table className="min-w-[650px] w-full text-xs">
                     <thead className="bg-slate-950 text-[9px] font-black uppercase tracking-widest text-white"><tr><th className="p-3 text-left">Pos.</th><th className="p-3 text-left">Equipo</th><th className="p-3">PJ</th><th className="p-3">G</th><th className="p-3">E</th><th className="p-3">P</th><th className="p-3">{sportRules.scoreLabels.for}</th><th className="p-3">{sportRules.scoreLabels.against}</th><th className="p-3">DG</th><th className="p-3">PTS</th></tr></thead>
                     <tbody className="divide-y divide-blue-100 bg-white/85">
-                      {standings.map((team: any, index: number) => <tr key={team.id} className={team.id === selectedTeam.id ? 'delegate-standing-highlight' : ''}><td className="p-3 font-black text-slate-400">{index + 1}</td><td className="p-3 font-black uppercase"><span className={team.id === selectedTeam.id ? 'delegate-team-name-lights' : ''}>{team.name}</span></td><td className="p-3 text-center font-bold">{team.played}</td><td className="p-3 text-center font-bold">{team.won}</td><td className="p-3 text-center font-bold">{team.drawn}</td><td className="p-3 text-center font-bold">{team.lost}</td><td className="p-3 text-center font-bold">{team.goals_for}</td><td className="p-3 text-center font-bold">{team.goals_against}</td><td className="p-3 text-center font-bold">{team.goals_for - team.goals_against}</td><td className="p-3 text-center font-black text-blue-600">{team.points}</td></tr>)}
+                      {standings.map((team: any, index: number) => <tr key={team.id} className={team.id === selectedTeam.id ? 'delegate-standing-highlight' : ''}><td className="p-3 font-black text-slate-400">{index + 1}</td><td className="p-3 font-black uppercase">{team.name}</td><td className="p-3 text-center font-bold">{team.played}</td><td className="p-3 text-center font-bold">{team.won}</td><td className="p-3 text-center font-bold">{team.drawn}</td><td className="p-3 text-center font-bold">{team.lost}</td><td className="p-3 text-center font-bold">{team.goals_for}</td><td className="p-3 text-center font-bold">{team.goals_against}</td><td className="p-3 text-center font-bold">{team.goals_for - team.goals_against}</td><td className="p-3 text-center font-black text-blue-600">{team.points}</td></tr>)}
                     </tbody>
                   </table>
                   {standings.length === 0 && <p className="p-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">No hay equipos programados</p>}
@@ -1088,7 +1105,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               <div className="rounded-[2rem] border border-amber-100 bg-amber-50/45 p-5">
                 <h2 className="text-lg font-black uppercase">Tarjetas y sanciones</h2>
                 <div className="mt-4 divide-y divide-slate-100">
-                  {cardEvents.map((event: any) => <div key={event.id} className="flex items-center justify-between gap-3 py-3"><div className="flex min-w-0 items-center gap-3"><Square size={18} className={event.event_type === 'RED' ? 'fill-red-600 text-red-600' : 'fill-yellow-400 text-yellow-400'} /><div className="min-w-0"><p className="truncate text-xs font-black uppercase">{event.players?.name || 'Jugador sin asignar'}</p><p className="text-[9px] font-bold uppercase text-slate-400">{eventLabel(event.event_type)}{event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · {event.fine_status === 'PAID' ? 'Pagada' : 'Pendiente'}</p></div></div><span className="shrink-0 text-xs font-black">${eventFineAmount(event).toLocaleString('es-CO')}</span></div>)}
+                  {cardEvents.map((event: any) => <div key={event.id} className="flex items-center justify-between gap-3 py-3"><div className="flex min-w-0 items-center gap-3"><Square size={18} className={event.event_type === 'RED' ? 'fill-red-600 text-red-600' : 'fill-yellow-400 text-yellow-400'} /><div className="min-w-0"><p className="truncate text-xs font-black uppercase">{event.players?.name || 'Jugador sin asignar'}</p><p className="text-[9px] font-bold uppercase text-slate-400">{eventLabel(event.event_type)} · vs. {eventOpponent(event)}{event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · {event.fine_status === 'PAID' ? 'Pagada' : 'Pendiente'}</p></div></div><span className="shrink-0 text-xs font-black">${eventFineAmount(event).toLocaleString('es-CO')}</span></div>)}
                   {cardEvents.length === 0 && <p className="py-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Sin tarjetas ni sanciones</p>}
                 </div>
               </div>
@@ -1221,7 +1238,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 </div>
 
                 {fixtureVisibleToDelegates ? <div id="upcoming-matches" className="scroll-mt-6 rounded-[2rem] border border-slate-200 bg-white p-5 xl:min-w-[420px]">
-                  <h2 className="font-black uppercase text-lg mb-4">Partidos del equipo</h2>
+                  <h2 className="font-black uppercase text-lg mb-1">Próximo partido</h2>
+                  <p className="mb-4 text-[9px] font-black uppercase tracking-widest text-slate-400">Tu equipo vs. próximo rival</p>
                   <div className="space-y-3">
                     {teamUpcomingMatches.map((match: any) => renderMatchCard(match))}
                     {teamUpcomingMatches.length === 0 && <p className="text-center text-slate-400 text-xs font-black uppercase tracking-widest py-8">Sin partidos pendientes</p>}
@@ -1244,14 +1262,17 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               </div>
 
               {fixtureVisibleToDelegates && <div className="bg-white border border-slate-200 rounded-[2rem] p-5">
-                <h2 className="font-black uppercase text-lg mb-4">Jornadas completas</h2>
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div><h2 className="font-black uppercase text-lg">Jornadas de la fase actual</h2><p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Fase {currentPhase} · incluye fechas futuras programadas</p></div>
+                  {lastScheduledRound && <button type="button" onClick={() => setActiveRound(lastScheduledRound)} className="shrink-0 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100">Ver última programada</button>}
+                </div>
                 {roundEntries.length > 0 && (
-                  <div className="flex gap-2 overflow-x-auto pb-2 mb-4">
+                  <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
                     {roundEntries.map(([round, roundMatches]) => (
                       <button
                         key={round}
                         onClick={() => setActiveRound(round)}
-                        className={`shrink-0 rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-widest border transition-colors ${selectedRound === round ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-50 text-slate-500 border-slate-200 hover:border-blue-300'}`}
+                        className={`rounded-xl border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition-colors ${selectedRound === round ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-50 text-slate-500 border-slate-200 hover:border-blue-300'}`}
                       >
                         {round}
                         <span className={`ml-2 rounded-full px-2 py-0.5 ${selectedRound === round ? 'bg-white/20' : 'bg-white'}`}>{(roundMatches as any[]).length}</span>
@@ -1261,7 +1282,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 )}
                 <div className="space-y-2 max-h-[620px] overflow-y-auto pr-1">
                   {((scheduleRounds[selectedRound] || []) as any[]).map((match) => renderRoundMatchCard(match))}
-                  {fullSchedule.length === 0 && <p className="text-center text-slate-400 text-xs font-black uppercase tracking-widest py-8">No hay jornadas generadas</p>}
+                  {currentPhaseSchedule.length === 0 && <p className="text-center text-slate-400 text-xs font-black uppercase tracking-widest py-8">No hay jornadas generadas para esta fase</p>}
                 </div>
               </div>}
             </section>
