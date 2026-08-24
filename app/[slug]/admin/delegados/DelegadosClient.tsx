@@ -458,7 +458,7 @@ export default function DelegadosClient({ slug, initialData }: { slug: string; i
 
         {selectedDelegate && (
           <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white border border-slate-200 rounded-[1.5rem] sm:rounded-[2rem] p-4 sm:p-6 space-y-4 overflow-hidden">
+            <div className="relative z-10 bg-white border border-slate-200 rounded-[1.5rem] sm:rounded-[2rem] p-4 sm:p-6 space-y-4 overflow-visible">
               <h2 className="font-black uppercase text-lg sm:text-xl flex items-center gap-2 break-words"><UserCheck className="text-blue-600 shrink-0" /> Accesos de {selectedDelegate.name}</h2>
               <div className="flex flex-col sm:flex-row gap-2">
                 <AppSelect
