@@ -1,14 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Activity, CalendarDays, Camera, ChevronDown, ClipboardCopy, Download, ExternalLink, Eye, FileCheck2, FileSpreadsheet, KeyRound, Lock, LogOut, Plus, ShieldCheck, Square, Trash2, Trophy, Upload, UserRoundCog, Users, X } from 'lucide-react';
+import { Activity, CalendarDays, Camera, ChevronDown, CircleHelp, ClipboardCopy, Download, ExternalLink, Eye, FileCheck2, FileSpreadsheet, KeyRound, LoaderCircle, Lock, LogOut, Pencil, Plus, ShieldCheck, Square, Trash2, Trophy, Upload, UserRoundCog, Users, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '@/app/lib/sports/rules';
 import { toTeamSlug } from '@/app/lib/team-slug';
 import { DEFAULT_ROSTER_LOCKED_MESSAGE } from '@/app/lib/registration';
-import { addDelegatePlayers, changeDelegatePassword, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, saveDelegateTeamStaff, uploadDelegateSchoolLogo, uploadPlayerIdentityDocument } from './actions';
+import { addDelegatePlayers, changeDelegatePassword, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, saveDelegateTeamStaff, updateDelegatePlayer, uploadDelegateSchoolLogo, uploadPlayerIdentityDocument } from './actions';
 
 type DelegatePortalClientProps = {
   slug: string;
@@ -288,6 +288,14 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const [bulkRows, setBulkRows] = useState<BulkPlayerRow[]>([]);
   const [draftSavedAt, setDraftSavedAt] = useState<Date | null>(null);
   const [loading, setLoading] = useState(false);
+  const [autoSyncingRow, setAutoSyncingRow] = useState<number | null>(null);
+  const [autoSyncFailureCount, setAutoSyncFailureCount] = useState(0);
+  const [autoSyncRetryVersion, setAutoSyncRetryVersion] = useState(0);
+  const [editingPlayer, setEditingPlayer] = useState<any | null>(null);
+  const [rosterEditMode, setRosterEditMode] = useState(false);
+  const [showRegistrationGuide, setShowRegistrationGuide] = useState(false);
+  const [editPlayerForm, setEditPlayerForm] = useState({ name: '', identityNumber: '', shirtNumber: '', birthDate: '', vinculo: '', relationshipDetail: '' });
+  const failedAutoSyncRows = useRef(new Set<string>());
 
   const selectedTeam = data?.teams?.find((team: any) => team.id === selectedTeamId) || data?.teams?.[0];
   const selectedCategory = selectedTeam?.categories;
@@ -296,10 +304,14 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const players = data?.playersByTeam?.[selectedTeam?.id] || [];
   const teamStaff = data?.staffByTeam?.[selectedTeam?.id] || [];
   const bulkFilledRows = bulkRows.filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthDate || row.vinculo || row.relationshipDetail);
-  const events = data?.eventsByTeam?.[selectedTeam?.id] || [];
-  const matches = data?.matchesByTeam?.[selectedTeam?.id] || [];
-  const fullSchedule = data?.schedulesByTeam?.[selectedTeam?.id] || [];
-  const eventsByMatch = data?.eventsByMatch || {};
+  const firstEmptyBulkRowIndex = bulkRows.findIndex((row) => !row.name && !row.identityNumber && !row.shirtNumber && !row.birthDate && !row.vinculo && !row.relationshipDetail);
+  const bulkInvalidRows = bulkRows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => (row.name || row.identityNumber || row.shirtNumber || row.birthDate || row.vinculo || row.relationshipDetail) && row.error);
+  const events = fixtureVisibleToDelegates ? data?.eventsByTeam?.[selectedTeam?.id] || [] : [];
+  const matches = fixtureVisibleToDelegates ? data?.matchesByTeam?.[selectedTeam?.id] || [] : [];
+  const fullSchedule = fixtureVisibleToDelegates ? data?.schedulesByTeam?.[selectedTeam?.id] || [] : [];
+  const eventsByMatch = fixtureVisibleToDelegates ? data?.eventsByMatch || {} : {};
   const historyMatches = matches.filter((match: any) => match.status === 'FINISHED');
   const teamUpcomingMatches = matches.filter((match: any) => match.status !== 'FINISHED');
   const nextMatch = teamUpcomingMatches[0];
@@ -324,13 +336,34 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   }, [initialData]);
 
   useEffect(() => {
+    const refreshPortalVisibility = () => {
+      if (document.visibilityState === 'visible') router.refresh();
+    };
+    window.addEventListener('focus', refreshPortalVisibility);
+    document.addEventListener('visibilitychange', refreshPortalVisibility);
+    return () => {
+      window.removeEventListener('focus', refreshPortalVisibility);
+      document.removeEventListener('visibilitychange', refreshPortalVisibility);
+    };
+  }, [router]);
+
+  useEffect(() => {
     setActiveRound('');
     setShowRegistrationModule(false);
+    setRosterEditMode(false);
+    setEditingPlayer(null);
     setStaffForm({
       headCoach: teamStaff.find((member: any) => member.role === 'HEAD_COACH')?.full_name || '',
       assistantCoach: teamStaff.find((member: any) => member.role === 'ASSISTANT_COACH')?.full_name || '',
     });
   }, [selectedTeam?.id]);
+
+  useEffect(() => {
+    if (!fixtureVisibleToDelegates) {
+      setSelectedHistoryMatch(null);
+      setSelectedStatDetail(null);
+    }
+  }, [fixtureVisibleToDelegates]);
 
   const bulkDraftKey = selectedTeam?.id ? `sportscore:delegate:${slug}:bulk-roster:${selectedTeam.id}` : '';
 
@@ -509,6 +542,77 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     });
   };
 
+  const bulkRowFingerprint = (row: BulkPlayerRow) => JSON.stringify([
+    row.name, row.identityNumber, row.shirtNumber, row.birthDate, row.vinculo, row.relationshipDetail,
+    row.faceFile?.name, row.faceFile?.size, row.identityFile?.name, row.identityFile?.size,
+  ]);
+
+  useEffect(() => {
+    if (!showBulkUpload || !selectedTeam || loading || autoSyncingRow !== null) return;
+    const readyIndex = bulkRows.findIndex((row) =>
+      Boolean(row.name || row.identityNumber || row.shirtNumber || row.birthDate || row.vinculo || row.relationshipDetail)
+      && !row.error
+      && !failedAutoSyncRows.current.has(bulkRowFingerprint(row)),
+    );
+    if (readyIndex < 0) return;
+
+    const row = bulkRows[readyIndex];
+    const fingerprint = bulkRowFingerprint(row);
+    const timeout = window.setTimeout(async () => {
+      setAutoSyncingRow(readyIndex);
+      let playerWasCreated = false;
+      try {
+        const result = await addDelegatePlayers(slug, selectedTeam.id, [{
+          name: row.name,
+          identityNumber: row.identityNumber,
+          shirtNumber: row.shirtNumber,
+          birthYear: row.birthYear,
+          birthDate: row.birthDate,
+          vinculo: row.vinculo,
+          relationshipDetail: row.relationshipDetail,
+        }]);
+
+        if (!result.success) {
+          failedAutoSyncRows.current.add(fingerprint);
+          setAutoSyncFailureCount(failedAutoSyncRows.current.size);
+          toast.error(`Fila ${readyIndex + 1}: ${result.error}`);
+          setAutoSyncingRow(null);
+          return;
+        }
+
+        playerWasCreated = true;
+        const playerId = result.data.playerIds[0];
+        const faceUpload = await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'FACE_PHOTO', row.faceFile as File);
+        const identityUpload = await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'IDENTITY_FRONT', row.identityFile as File);
+        setBulkRows((currentRows) => currentRows.filter((currentRow) => bulkRowFingerprint(currentRow) !== fingerprint));
+        if (!faceUpload.success || !identityUpload.success) toast.error(`${row.name} fue inscrito, pero algún archivo no pudo cargarse.`);
+        else toast.success(`${row.name} inscrito automáticamente`);
+        router.refresh();
+      } catch {
+        failedAutoSyncRows.current.add(fingerprint);
+        setAutoSyncFailureCount(failedAutoSyncRows.current.size);
+        if (playerWasCreated) {
+          setBulkRows((currentRows) => currentRows.filter((currentRow) => bulkRowFingerprint(currentRow) !== fingerprint));
+          toast.error(`${row.name} fue inscrito, pero la conexión se interrumpió al cargar sus archivos.`);
+          router.refresh();
+        } else {
+          toast.error(`No se pudo inscribir la fila ${readyIndex + 1}. El borrador permanece guardado para reintentar.`);
+        }
+      } finally {
+        setAutoSyncingRow(null);
+      }
+    }, 1200);
+
+    return () => window.clearTimeout(timeout);
+  }, [autoSyncRetryVersion, autoSyncingRow, bulkRows, loading, router, selectedTeam, showBulkUpload, slug]);
+
+  const retryAutomaticSync = () => {
+    failedAutoSyncRows.current.clear();
+    setAutoSyncFailureCount(0);
+    setAutoSyncRetryVersion((version) => version + 1);
+    toast.success('Reintentando archivos pendientes');
+  };
+
   const updateBulkRow = (index: number, field: keyof BulkPlayerRow, value: string) => {
     const normalizedValue = field === 'identityNumber' ? value.replace(/\D/g, '') : value;
     const rows = bulkRows.map((row, rowIndex) => rowIndex === index ? {
@@ -629,17 +733,21 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     setLoading(false);
     if (!result.success) return toast.error(result.error);
     setLoading(true);
-    const uploads = playersToInsert.flatMap((row, index) => {
-      const playerId = result.data.playerIds[index];
-      return [
-        uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'FACE_PHOTO', row.faceFile as File),
-        uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'IDENTITY_FRONT', row.identityFile as File),
-      ];
-    });
-    const uploadResults = await Promise.all(uploads);
+    const uploadResults: Awaited<ReturnType<typeof uploadPlayerIdentityDocument>>[] = [];
+    let uploadInterrupted = false;
+    try {
+      for (const [index, row] of playersToInsert.entries()) {
+        const playerId = result.data.playerIds[index];
+        uploadResults.push(await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'FACE_PHOTO', row.faceFile as File));
+        uploadResults.push(await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'IDENTITY_FRONT', row.identityFile as File));
+      }
+    } catch {
+      uploadInterrupted = true;
+      toast.error('Los jugadores fueron inscritos, pero la conexión se interrumpió al cargar algunos archivos.');
+    }
     setLoading(false);
-    if (uploadResults.some((upload) => !upload.success)) toast.error('Los jugadores fueron creados, pero algunos archivos no pudieron cargarse.');
-    else toast.success(`${result.data.inserted} jugadores y documentos inscritos`);
+    if (!uploadInterrupted && uploadResults.some((upload) => !upload.success)) toast.error('Los jugadores fueron creados, pero algunos archivos no pudieron cargarse.');
+    else if (!uploadInterrupted) toast.success(`${result.data.inserted} jugadores y documentos inscritos`);
     if (bulkDraftKey) {
       window.localStorage.removeItem(bulkDraftKey);
       await deleteBulkDraftFiles(bulkDraftKey).catch(() => undefined);
@@ -670,6 +778,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   };
 
   const discardBulkDraft = async () => {
+    if (autoSyncingRow !== null) return toast.error('Espera a que termine la inscripción automática en curso.');
     if (bulkDraftKey) {
       window.localStorage.removeItem(bulkDraftKey);
       await deleteBulkDraftFiles(bulkDraftKey).catch(() => undefined);
@@ -680,6 +789,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   };
 
   const closeBulkUpload = async () => {
+    if (autoSyncingRow !== null) return toast.error('Espera a que termine la inscripción automática en curso.');
     if (bulkDraftKey && bulkRows.length > 0) {
       try {
         window.localStorage.setItem(bulkDraftKey, JSON.stringify({ version: 2, updatedAt: Date.now(), rows: bulkRows.map(({ faceFile, facePreview, identityFile, ...row }) => row) }));
@@ -704,6 +814,34 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       window.location.reload();
     }
     setLoading(false);
+  };
+
+  const openPlayerEditor = (player: any) => {
+    setEditingPlayer(player);
+    setEditPlayerForm({
+      name: player.name || '', identityNumber: player.identity_number || '', shirtNumber: String(player.shirt_number || ''),
+      birthDate: player.birth_date || '', vinculo: player.vinculo || '', relationshipDetail: player.relationship_detail || '',
+    });
+  };
+
+  const savePlayerEdition = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selectedTeam || !editingPlayer) return;
+    setLoading(true);
+    const result = await updateDelegatePlayer(slug, selectedTeam.id, editingPlayer.id, {
+      name: editPlayerForm.name,
+      identityNumber: editPlayerForm.identityNumber,
+      shirtNumber: editPlayerForm.shirtNumber ? Number(editPlayerForm.shirtNumber) : null,
+      birthDate: editPlayerForm.birthDate,
+      birthYear: editPlayerForm.birthDate ? Number(editPlayerForm.birthDate.slice(0, 4)) : null,
+      vinculo: editPlayerForm.vinculo,
+      relationshipDetail: editPlayerForm.relationshipDetail,
+    });
+    setLoading(false);
+    if (!result.success) return toast.error(result.error);
+    toast.success('Información del jugador actualizada');
+    setEditingPlayer(null);
+    router.refresh();
   };
 
   const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -755,7 +893,18 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     <TeamLogo team={team} className="h-16 w-16 rounded-2xl sm:h-20 sm:w-20" />
   );
 
-  const renderMatchCard = (match: any, compact = false) => (
+  const renderMatchCard = (match: any, compact = false) => {
+    const restingTeam = match.home_team || match.away_team;
+    const isBye = match.status === 'BYE' || !match.home_team || !match.away_team;
+
+    if (isBye && restingTeam) return (
+      <div key={match.id} className="rounded-2xl border-2 border-dashed border-orange-200 bg-orange-50/60 p-4 text-center sm:p-5">
+        <p className="mb-3 flex items-center justify-center gap-1 text-[9px] font-black uppercase tracking-widest text-orange-500"><CalendarDays size={12} /> Jornada {match.matchdays?.round_number || '-'} · {match.matchdays?.scheduled_date || 'Fecha pendiente'}</p>
+        <div className="flex flex-col items-center gap-2">{renderTeamMark(restingTeam)}<span className="font-black uppercase leading-tight text-slate-800">{restingTeam.name}</span><span className="rounded-full bg-orange-100 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-orange-600">Jornada de descanso</span></div>
+      </div>
+    );
+
+    return (
     <div key={match.id} className="rounded-2xl border border-slate-100 bg-white p-4 sm:p-5">
       <p className="mb-4 flex items-center justify-center gap-1 text-center text-[9px] font-black uppercase tracking-widest text-slate-400">
         <CalendarDays size={12} /> {match.matchdays?.scheduled_date || 'Sin fecha'} / {match.scheduled_time?.slice(0, 5) || '--:--'}
@@ -775,7 +924,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       </div>
       <p className={`mt-4 text-center text-[9px] font-black uppercase tracking-widest ${match.status === 'LIVE' ? 'text-red-500' : 'text-slate-400'}`}>{matchStatusLabel(match.status)}</p>
     </div>
-  );
+    );
+  };
 
   const eventLabel = (eventType: string) => {
     if (eventType === 'GOAL') return 'Gol';
@@ -794,7 +944,17 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     return 'border-slate-100 bg-slate-50 text-slate-600';
   };
 
-  const renderRoundMatchCard = (match: any) => (
+  const renderRoundMatchCard = (match: any) => {
+    const restingTeam = match.home_team || match.away_team;
+    const isBye = match.status === 'BYE' || !match.home_team || !match.away_team;
+
+    if (isBye && restingTeam) return (
+      <div key={match.id} className="rounded-xl border-2 border-dashed border-orange-200 bg-orange-50/60 p-3">
+        <div className="flex items-center gap-3"><TeamLogo team={restingTeam} className="h-10 w-10" /><div className="min-w-0"><p className="truncate text-[10px] font-black uppercase text-slate-800">{restingTeam.name}</p><p className="mt-1 text-[9px] font-black uppercase tracking-widest text-orange-600">Descansa esta jornada</p></div></div>
+      </div>
+    );
+
+    return (
     <div key={match.id} className="border border-slate-100 rounded-xl p-3 bg-white">
       <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1 mb-2">
         <CalendarDays size={12} /> {match.matchdays?.scheduled_date || 'Sin fecha'} / {match.scheduled_time?.slice(0, 5) || '--:--'}
@@ -814,12 +974,13 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       </div>
       <p className={`text-[9px] font-black uppercase mt-2 ${match.status === 'LIVE' ? 'text-red-500' : 'text-slate-400'}`}>{matchStatusLabel(match.status)}</p>
     </div>
-  );
+    );
+  };
 
   if (!data) {
     return (
       <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-4">
-        <form onSubmit={handleLogin} className="w-full max-w-md bg-white text-slate-900 rounded-[2rem] border border-slate-200 shadow-2xl p-8 space-y-5">
+        <form onSubmit={handleLogin} className="w-full max-w-md space-y-5 rounded-[1.5rem] border border-slate-200 bg-white p-5 text-slate-900 shadow-2xl sm:rounded-[2rem] sm:p-8">
           <div className="text-center">
             <ShieldCheck className="mx-auto text-blue-600 mb-3" size={42} />
             <h1 className="text-3xl font-black uppercase tracking-tighter">Portal Delegado</h1>
@@ -836,7 +997,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   if (data.delegate?.must_change_password) {
     return (
       <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-4">
-        <form onSubmit={handleForcedPasswordChange} className="w-full max-w-md bg-white text-slate-900 rounded-[2rem] border border-slate-200 shadow-2xl p-8 space-y-5">
+        <form onSubmit={handleForcedPasswordChange} className="w-full max-w-md space-y-5 rounded-[1.5rem] border border-slate-200 bg-white p-5 text-slate-900 shadow-2xl sm:rounded-[2rem] sm:p-8">
           <div className="text-center">
             <KeyRound className="mx-auto text-blue-600 mb-3" size={42} />
             <h1 className="text-3xl font-black uppercase tracking-tighter">Cambia tu contraseña</h1>
@@ -907,7 +1068,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   <h2 id="bulk-upload-title" className="text-xl font-black uppercase tracking-tight sm:text-2xl">Inscribir jugadores y documentos</h2>
                   <p className="mt-1 text-xs font-semibold text-slate-500">Equipo: {selectedTeam?.name}</p>
                   <p className="mt-2 text-[9px] font-black uppercase tracking-widest text-emerald-600">
-                    {draftSavedAt ? `Campos y archivos guardados · ${draftSavedAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}` : 'Guardado automático de campos y archivos activo'}
+                    {draftSavedAt ? `Borrador local guardado · pendiente de sincronizar · ${draftSavedAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}` : 'Borrador local con guardado automático · pendiente de sincronizar'}
                   </p>
                 </div>
                 <button type="button" onClick={closeBulkUpload} className="rounded-xl bg-slate-100 p-3 text-slate-500 hover:text-slate-900" aria-label="Cerrar y continuar después"><X size={18} /></button>
@@ -916,20 +1077,21 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               <div className="flex-1 space-y-5 overflow-y-auto overscroll-contain p-4 sm:p-6">
                 <section className="overflow-hidden rounded-2xl border border-emerald-200 bg-emerald-50/50">
                   <div className="flex flex-col gap-2 border-b border-emerald-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div><p className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-emerald-800"><Users size={15} /> Jugadores ya inscritos</p><p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-emerald-700/70">Estos registros ya están guardados y no volverán a sincronizarse</p></div>
+                    <div><p className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-emerald-800"><Users size={15} /> Jugadores ya inscritos</p><p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-emerald-700/70">Los datos básicos están en el servidor; los archivos pueden continuar pendientes</p></div>
                     <span className="w-fit rounded-full bg-emerald-600 px-3 py-1.5 text-[9px] font-black uppercase tracking-widest text-white">{players.length} inscritos</span>
                   </div>
                   {players.length > 0 ? (
                     <div className="max-h-56 divide-y divide-emerald-100 overflow-y-auto bg-white/80">
                       {players.map((player: any, index: number) => {
                         const dossier = playerDossierStatus(player.player_documents);
+                        const localFilesPending = bulkRows.some((row) => row.identityNumber === player.identity_number && row.faceFile && row.identityFile);
                         return (
                           <div key={player.id} className="grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 sm:grid-cols-[32px_minmax(0,1fr)_90px_130px_auto]">
                             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-[10px] font-black text-blue-700">#{player.shirt_number || '-'}</span>
                             <div className="min-w-0"><p className="truncate text-xs font-black uppercase text-slate-900">{index + 1}. {player.name}</p><p className="truncate text-[9px] font-bold uppercase text-slate-400 sm:hidden">ID {player.identity_number || 'sin registrar'} · {player.birth_date || player.birth_year || 'sin fecha'}</p></div>
                             <span className="hidden text-center text-[9px] font-black uppercase text-slate-500 sm:block">{player.birth_date ? String(player.birth_date).slice(0, 4) : player.birth_year || '-'}</span>
                             <span className="hidden truncate text-[9px] font-black uppercase text-slate-500 sm:block">{player.vinculo || 'Sin vínculo'}</span>
-                            <span className={`text-right text-[8px] font-black uppercase ${dossier.className}`}>{dossier.label}</span>
+                            <span className={`text-right text-[8px] font-black uppercase ${localFilesPending ? 'text-blue-600' : dossier.className}`}>{localFilesPending ? 'Archivos listos localmente · pendientes de enviar' : dossier.label}</span>
                           </div>
                         );
                       })}
@@ -948,19 +1110,28 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-[10px] font-bold uppercase leading-relaxed tracking-wider text-slate-500">
-                  Escribe directamente o pega seis columnas desde Excel: Nombre completo, Número de identidad, Dorsal, Fecha de nacimiento, Vínculo y Promoción/Estudiante. Después de sincronizar debes cargar la foto y el documento de cada jugador para habilitarlo.
+                  Escribe directamente o pega seis columnas desde Excel: Nombre completo, Número de identidad, Dorsal, Fecha de nacimiento, Vínculo y Promoción/Estudiante. Para activar la sincronización, cada jugador debe tener también su foto y documento de identidad cargados.
                 </div>
 
                 {bulkRows.length > 0 && (
-                  <div onPaste={handleBulkPaste} onFocusCapture={keepBulkFieldVisible} className="hidden scroll-smooth overflow-x-auto rounded-2xl border border-slate-200 md:block">
+                  <div onPaste={handleBulkPaste} onFocusCapture={keepBulkFieldVisible} className="hidden scroll-smooth overflow-x-auto rounded-2xl border border-slate-200 lg:block">
                     <table className="min-w-full text-left text-xs">
                       <thead className="bg-slate-950 text-[9px] font-black uppercase tracking-widest text-white">
                         <tr className="text-center"><th className="p-3">#</th><th className="p-3">Foto</th><th className="min-w-56 p-3">Nombre completo</th><th className="min-w-52 p-3">Número de identidad</th><th className="min-w-24 p-3">Dorsal</th><th className="min-w-44 p-3">Fecha de nacimiento</th><th className="min-w-52 p-3">Vínculo</th><th className="min-w-60 p-3">Promoción / Estudiante</th><th className="min-w-52 p-3">Documento</th><th className="min-w-40 p-3">Validación</th><th className="p-3"></th></tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {bulkRows.map((row, index) => (
-                          <tr key={`bulk-player-${index}`} className={row.error ? 'bg-red-50' : 'bg-white'}>
-                            <td className="p-3 font-black text-slate-400">{index + 1}</td>
+                          <tr key={`bulk-player-${index}`} className={`relative ${row.error ? 'bg-red-50' : 'bg-white'} ${autoSyncingRow === index ? '[&>td>*]:opacity-25 [&>td>*]:pointer-events-none' : ''}`}>
+                            <td className="p-3 font-black text-slate-400">
+                              {index + 1}
+                              {autoSyncingRow === index && (
+                                <div className="!pointer-events-auto !opacity-100 absolute inset-0 z-20 flex items-center justify-center bg-white/55 backdrop-blur-[1px]">
+                                  <span className="flex items-center gap-3 rounded-2xl border border-blue-200 bg-white px-6 py-4 text-xs font-black uppercase tracking-widest text-blue-700 shadow-xl">
+                                    <LoaderCircle size={26} className="animate-spin" /> Guardando jugador…
+                                  </span>
+                                </div>
+                              )}
+                            </td>
                             <td className="p-2"><label title="Subir foto del rostro" className="relative flex h-12 w-12 cursor-pointer items-center justify-center overflow-hidden rounded-full border-2 border-dashed border-cyan-300 bg-cyan-50 text-cyan-600">{row.facePreview ? <img src={row.facePreview} alt="Rostro" className="h-full w-full object-cover" /> : <Camera size={18} />}<input type="file" accept="image/jpeg,image/png,image/webp" capture="user" className="hidden" onChange={(event) => updateBulkFile(index, 'faceFile', event.target.files?.[0])} /></label></td>
                             <td className="p-2"><input value={row.name} onChange={(event) => updateBulkRow(index, 'name', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-black uppercase outline-none focus:border-blue-500" /></td>
                             <td className="p-2"><input type="text" inputMode="numeric" pattern="[0-9]*" value={row.identityNumber} onChange={(event) => updateBulkRow(index, 'identityNumber', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500" /></td>
@@ -968,7 +1139,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                             <td className="p-2"><BirthDateCards compact value={row.birthDate} onChange={(value) => updateBulkRow(index, 'birthDate', value)} /></td>
                             <td className="p-2"><select value={row.vinculo} onChange={(event) => updateBulkRow(index, 'vinculo', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500"><option value="">Seleccionar</option>{ALLOWED_RELATIONSHIPS.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}</select></td>
                             <td className="p-2">{(row.vinculo === 'PADRE DE FAMILIA' || row.vinculo === 'EX-ALUMNO') && <input type={row.vinculo === 'EX-ALUMNO' ? 'number' : 'text'} inputMode={row.vinculo === 'EX-ALUMNO' ? 'numeric' : undefined} placeholder={row.vinculo === 'EX-ALUMNO' ? 'Año de promoción' : 'Nombre completo del estudiante'} value={row.relationshipDetail} onChange={(event) => updateBulkRow(index, 'relationshipDetail', event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-bold uppercase outline-none focus:border-blue-500" />}</td>
-                            <td className="p-2"><label className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 py-2 font-black uppercase ${row.identityFile ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}><FileCheck2 size={14} /> {row.identityFile ? 'Cargado' : 'Subir'}<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" onChange={(event) => updateBulkFile(index, 'identityFile', event.target.files?.[0])} /></label></td>
+                            <td className="p-2"><label className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 py-2 font-black uppercase ${row.identityFile ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}><FileCheck2 size={14} /> {row.identityFile ? 'Listo para enviar' : 'Subir'}<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" onChange={(event) => updateBulkFile(index, 'identityFile', event.target.files?.[0])} /></label></td>
                             <td className={`p-3 text-[10px] font-black uppercase ${row.error ? 'text-red-600' : row.name ? 'text-emerald-600' : 'text-slate-300'}`}>{row.error || (row.name ? 'LISTO' : 'FILA VACÍA')}</td>
                             <td className="p-2"><button type="button" onClick={() => setBulkRows(validateBulkRows(bulkRows.filter((_, rowIndex) => rowIndex !== index)))} className="rounded-lg p-2 text-red-500 hover:bg-red-50" aria-label={`Eliminar fila ${index + 1}`}><Trash2 size={14} /></button></td>
                           </tr>
@@ -978,9 +1149,19 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   </div>
                 )}
                 {bulkRows.length > 0 && (
-                  <div onPaste={handleBulkPaste} className="space-y-3 md:hidden">
-                    {bulkRows.map((row, index) => (
-                      <article key={`mobile-${index}`} className={`rounded-2xl border p-4 shadow-sm ${row.error ? 'border-red-300 bg-red-50' : MOBILE_ROW_COLORS[index % MOBILE_ROW_COLORS.length]}`}>
+                  <div onPaste={handleBulkPaste} className="space-y-3 lg:hidden">
+                    {bulkRows.map((row, index) => ({ row, index })).filter(({ row, index }) =>
+                      Boolean(row.name || row.identityNumber || row.shirtNumber || row.birthDate || row.vinculo || row.relationshipDetail)
+                      || index === firstEmptyBulkRowIndex,
+                    ).map(({ row, index }) => (
+                      <article key={`mobile-${index}`} className={`relative rounded-2xl border p-4 shadow-sm ${autoSyncingRow === index ? 'border-blue-300 [&>*]:opacity-25 [&>*]:pointer-events-none' : row.error ? 'border-red-300 bg-red-50' : MOBILE_ROW_COLORS[index % MOBILE_ROW_COLORS.length]}`}>
+                        {autoSyncingRow === index && (
+                          <div className="!pointer-events-auto !opacity-100 absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/60 backdrop-blur-[1px]">
+                            <span className="flex items-center gap-3 rounded-2xl border border-blue-200 bg-white px-5 py-4 text-[10px] font-black uppercase tracking-widest text-blue-700 shadow-xl">
+                              <LoaderCircle size={25} className="animate-spin" /> Guardando jugador…
+                            </span>
+                          </div>
+                        )}
                         <div className="mb-3 flex items-center justify-between gap-3">
                           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Jugador {index + 1}</p>
                           <button type="button" onClick={() => setBulkRows(validateBulkRows(bulkRows.filter((_, rowIndex) => rowIndex !== index)))} className="rounded-lg p-2 text-red-500 hover:bg-red-100" aria-label={`Eliminar fila ${index + 1}`}><Trash2 size={15} /></button>
@@ -1004,19 +1185,81 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               </div>
 
               <footer className="flex flex-col gap-3 border-t border-slate-100 bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between sm:p-6">
-                <button type="button" onClick={discardBulkDraft} className="rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-widest text-red-500 hover:bg-red-50">Eliminar borrador</button>
-                <div className="flex flex-col-reverse gap-3 sm:flex-row">
-                  <button type="button" onClick={closeBulkUpload} className="rounded-xl bg-slate-100 px-5 py-3 text-xs font-black uppercase tracking-widest text-slate-600">Continuar después</button>
-                  <button type="button" disabled={loading || bulkFilledRows.length === 0 || bulkFilledRows.some((row) => row.error)} onClick={submitBulkPlayers} className="rounded-xl bg-blue-600 px-5 py-3 text-xs font-black uppercase tracking-widest text-white disabled:opacity-40">Sincronizar jugadores ({bulkFilledRows.length})</button>
+                <button type="button" disabled={autoSyncingRow !== null} onClick={discardBulkDraft} className="rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-widest text-red-500 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40">Eliminar borrador</button>
+                <div className="flex flex-1 flex-col gap-3 sm:items-end">
+                  {bulkInvalidRows.length > 0 && (
+                    <div role="alert" className="w-full rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[10px] font-black uppercase leading-relaxed tracking-wider text-amber-800 sm:max-w-xl">
+                      Sincronización bloqueada: revisa {bulkInvalidRows.length} jugador(es). Filas {bulkInvalidRows.map(({ index }) => index + 1).join(', ')}.
+                      <span className="mt-1 block font-bold normal-case tracking-normal text-amber-700">{bulkInvalidRows[0]?.row.error}</span>
+                    </div>
+                  )}
+                  {autoSyncingRow !== null && (
+                    <div role="status" className="w-full rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-[10px] font-black uppercase tracking-wider text-blue-700 sm:max-w-xl">
+                      Guardando automáticamente el jugador de la fila {autoSyncingRow + 1}… No cierres esta ventana.
+                    </div>
+                  )}
+                  {autoSyncFailureCount > 0 && autoSyncingRow === null && (
+                    <button type="button" onClick={retryAutomaticSync} className="w-full rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-[10px] font-black uppercase tracking-wider text-amber-800 hover:bg-amber-100 sm:max-w-xl">
+                      Reintentar sincronización de archivos pendientes
+                    </button>
+                  )}
+                  <div className="flex flex-col-reverse gap-3 sm:flex-row">
+                  <button type="button" disabled={autoSyncingRow !== null} onClick={closeBulkUpload} className="rounded-xl bg-slate-100 px-5 py-3 text-xs font-black uppercase tracking-widest text-slate-600 disabled:cursor-not-allowed disabled:opacity-40">Continuar después</button>
+                  <button type="button" disabled={loading || autoSyncingRow !== null || bulkFilledRows.length === 0 || bulkInvalidRows.length > 0} onClick={submitBulkPlayers} className="rounded-xl bg-blue-600 px-5 py-3 text-xs font-black uppercase tracking-widest text-white disabled:cursor-not-allowed disabled:opacity-40">Sincronizar jugadores ({bulkFilledRows.length})</button>
+                  </div>
                 </div>
               </footer>
             </section>
           </div>
         )}
 
+        {showRegistrationGuide && (
+          <div className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-950/70 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+            <section role="dialog" aria-modal="true" aria-labelledby="registration-guide-title" className="flex max-h-[96dvh] w-full max-w-3xl flex-col overflow-hidden rounded-t-[1.5rem] bg-white shadow-2xl sm:max-h-[92dvh] sm:rounded-[2rem]">
+              <header className="flex items-start justify-between gap-4 border-b border-slate-100 bg-slate-950 p-5 text-white sm:p-6">
+                <div><p className="text-[10px] font-black uppercase tracking-[0.24em] text-blue-400">Tutorial para delegaciones</p><h2 id="registration-guide-title" className="mt-1 text-xl font-black uppercase sm:text-2xl">Cómo inscribir correctamente la nómina</h2><p className="mt-2 text-xs font-semibold text-slate-300">Lee estas instrucciones antes de comenzar la carga.</p></div>
+                <button type="button" onClick={() => setShowRegistrationGuide(false)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/10 text-white hover:bg-white/20" aria-label="Cerrar tutorial"><X size={19} /></button>
+              </header>
+              <div className="flex-1 space-y-5 overflow-y-auto overscroll-contain p-4 sm:p-6">
+                <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-900"><p className="text-xs font-black uppercase tracking-wider">Importante: borrador no significa inscripción</p><p className="mt-2 text-sm font-semibold leading-relaxed">El mensaje “Borrador local guardado” indica que la información está únicamente en ese navegador. El jugador queda inscrito cuando aparece en la lista de jugadores inscritos.</p></div>
+                <ol className="space-y-3">
+                  {[
+                    ['1. Usa siempre el mismo dispositivo', 'Continúa la carga desde el mismo computador o celular, navegador, perfil y dominio donde comenzaste.'],
+                    ['2. Completa un jugador a la vez', 'Ingresa nombre, identificación, dorsal, fecha de nacimiento, vínculo y promoción o estudiante cuando corresponda.'],
+                    ['3. Adjunta los dos archivos', 'Cada jugador necesita fotografía clara del rostro y documento de identidad. Imágenes y PDF deben respetar los formatos permitidos.'],
+                    ['4. Espera el guardado automático', 'Cuando todos los campos estén válidos aparecerá “Guardando jugador…”. No cierres la ventana ni cambies de página durante ese proceso.'],
+                    ['5. Confirma la inscripción', 'El jugador debe desaparecer de la tarjeta de carga y aparecer en la nómina exterior. Verde significa que tiene ambos archivos; rojo significa que todavía falta alguno.'],
+                    ['6. Corrige desde Editar jugadores', 'Activa el botón maestro “Editar jugadores” para modificar datos, reemplazar archivos o eliminar un registro. Finaliza el modo edición al terminar.'],
+                  ].map(([title, description]) => <li key={title} className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><p className="text-xs font-black uppercase text-slate-950">{title}</p><p className="mt-1.5 text-sm font-semibold leading-relaxed text-slate-600">{description}</p></li>)}
+                </ol>
+                <div className="rounded-2xl border border-red-200 bg-red-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-red-700">¿Cuándo puede perderse un borrador local?</p><ul className="mt-3 list-disc space-y-2 pl-5 text-sm font-semibold leading-relaxed text-red-900"><li>Al borrar los datos, caché o almacenamiento del navegador.</li><li>Al usar modo incógnito o permitir que el navegador elimine datos automáticamente.</li><li>Al cambiar de computador, navegador, perfil o dominio.</li><li>Al pulsar “Eliminar borrador”.</li></ul><p className="mt-3 border-t border-red-200 pt-3 text-sm font-black text-red-800">Una actualización normal de la aplicación no elimina el borrador si se conserva el mismo navegador y dominio.</p></div>
+                <div className="grid gap-3 sm:grid-cols-3"><div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3"><p className="text-[10px] font-black uppercase text-emerald-700">Verde</p><p className="mt-1 text-xs font-bold text-emerald-900">Jugador con foto y documento.</p></div><div className="rounded-xl border border-red-200 bg-red-50 p-3"><p className="text-[10px] font-black uppercase text-red-700">Rojo</p><p className="mt-1 text-xs font-bold text-red-900">Jugador con archivos pendientes.</p></div><div className="rounded-xl border border-amber-200 bg-amber-50 p-3"><p className="text-[10px] font-black uppercase text-amber-700">Ámbar</p><p className="mt-1 text-xs font-bold text-amber-900">Archivos pendientes de revisión.</p></div></div>
+              </div>
+              <footer className="border-t border-slate-100 bg-white p-4 sm:p-5"><button type="button" onClick={() => setShowRegistrationGuide(false)} className="h-12 w-full rounded-xl bg-blue-600 text-xs font-black uppercase tracking-widest text-white">Entendido, iniciar inscripción</button></footer>
+            </section>
+          </div>
+        )}
+
+        {editingPlayer && (
+          <div className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+            <form onSubmit={savePlayerEdition} className="max-h-[94dvh] w-full max-w-2xl overflow-y-auto rounded-t-[1.5rem] bg-white p-5 shadow-2xl sm:rounded-[2rem] sm:p-6">
+              <div className="mb-5 flex items-start justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Editar jugador</p><h2 className="text-xl font-black uppercase text-slate-950">Información de inscripción</h2></div><button type="button" onClick={() => setEditingPlayer(null)} className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-500"><X size={18} /></button></div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="sm:col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Nombre completo<input required value={editPlayerForm.name} onChange={(event) => setEditPlayerForm({ ...editPlayerForm, name: event.target.value.toUpperCase() })} className="mt-1.5 h-12 w-full rounded-xl border border-slate-200 px-4 text-sm font-black uppercase text-slate-950 outline-none focus:border-blue-500" /></label>
+                <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Identificación<input required inputMode="numeric" value={editPlayerForm.identityNumber} onChange={(event) => setEditPlayerForm({ ...editPlayerForm, identityNumber: event.target.value.replace(/\D/g, '') })} className="mt-1.5 h-12 w-full rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-950 outline-none focus:border-blue-500" /></label>
+                <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Dorsal<input required type="number" min="1" max="999" value={editPlayerForm.shirtNumber} onChange={(event) => setEditPlayerForm({ ...editPlayerForm, shirtNumber: event.target.value })} className="mt-1.5 h-12 w-full rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-950 outline-none focus:border-blue-500" /></label>
+                <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Fecha de nacimiento<input required type="date" value={editPlayerForm.birthDate} onChange={(event) => setEditPlayerForm({ ...editPlayerForm, birthDate: event.target.value })} className="mt-1.5 h-12 w-full rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-950 outline-none focus:border-blue-500" /></label>
+                <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Vínculo<select required value={editPlayerForm.vinculo} onChange={(event) => setEditPlayerForm({ ...editPlayerForm, vinculo: event.target.value, relationshipDetail: '' })} className="mt-1.5 h-12 w-full rounded-xl border border-slate-200 px-4 text-sm font-bold uppercase text-slate-950 outline-none focus:border-blue-500"><option value="">Seleccionar</option>{ALLOWED_RELATIONSHIPS.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}</select></label>
+                {(editPlayerForm.vinculo === 'EX-ALUMNO' || editPlayerForm.vinculo === 'PADRE DE FAMILIA') && <label className="sm:col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">{editPlayerForm.vinculo === 'EX-ALUMNO' ? 'Año de promoción' : 'Nombre completo del estudiante'}<input required value={editPlayerForm.relationshipDetail} onChange={(event) => setEditPlayerForm({ ...editPlayerForm, relationshipDetail: event.target.value.toUpperCase() })} className="mt-1.5 h-12 w-full rounded-xl border border-slate-200 px-4 text-sm font-bold uppercase text-slate-950 outline-none focus:border-blue-500" /></label>}
+              </div>
+              <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end"><button type="button" onClick={() => setEditingPlayer(null)} className="h-12 rounded-xl bg-slate-100 px-5 text-xs font-black uppercase text-slate-600">Cancelar</button><button disabled={loading} className="h-12 rounded-xl bg-blue-600 px-6 text-xs font-black uppercase tracking-widest text-white disabled:opacity-40">Guardar cambios</button></div>
+            </form>
+          </div>
+        )}
+
         {selectedHistoryMatch && (
-          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-white rounded-[2rem] border border-slate-200 shadow-2xl w-full max-w-3xl max-h-[88vh] overflow-hidden">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-2 backdrop-blur-sm sm:p-4">
+            <div className="max-h-[94dvh] w-full max-w-3xl overflow-hidden rounded-[1.5rem] border border-slate-200 bg-white shadow-2xl sm:max-h-[88dvh] sm:rounded-[2rem]">
               <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-4">
                 <div>
                   <p className="text-blue-600 text-[10px] font-black uppercase tracking-[0.25em]">Línea de tiempo</p>
@@ -1094,8 +1337,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
         )}
 
         {selectedStatDetail && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm" onClick={() => setSelectedStatDetail(null)}>
-            <section role="dialog" aria-modal="true" aria-labelledby="stat-detail-title" className="w-full max-w-xl overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 p-2 backdrop-blur-sm sm:p-4" onClick={() => setSelectedStatDetail(null)}>
+            <section role="dialog" aria-modal="true" aria-labelledby="stat-detail-title" className="max-h-[94dvh] w-full max-w-xl overflow-hidden rounded-[1.5rem] border border-slate-200 bg-white shadow-2xl sm:rounded-[2rem]" onClick={(event) => event.stopPropagation()}>
               <header className="flex items-start justify-between gap-4 border-b border-slate-100 p-5">
                 <div><p className="text-[9px] font-black uppercase tracking-[0.25em] text-blue-600">Detalle del equipo</p><h2 id="stat-detail-title" className="text-xl font-black uppercase">{statDetailTitle}</h2></div>
                 <button type="button" onClick={() => setSelectedStatDetail(null)} className="rounded-xl bg-slate-100 p-2.5 text-slate-500" aria-label="Cerrar detalle"><X size={17} /></button>
@@ -1125,7 +1368,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
           </section>
         )}
 
-        <div className="flex overflow-x-auto gap-3 pb-2">
+        <div className="delegate-team-tabs flex gap-3 overflow-x-auto pb-2 pr-8">
           {data.teams.map((team: any) => (
             <button key={team.id} onClick={() => setSelectedTeamId(team.id)} className={`shrink-0 flex items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-all ${selectedTeam?.id === team.id ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-100' : 'bg-white text-slate-700 border-slate-200 hover:border-blue-300'}`}>
               <TeamLogo team={team} className="w-10 h-10" />
@@ -1145,6 +1388,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 <p className="text-2xl font-black">{players.length}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Inscritos</p>
               </div>
+              {fixtureVisibleToDelegates && <>
               <button type="button" onClick={() => setSelectedStatDetail('GOALS')} className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md" aria-label="Ver goleadores">
                 <Trophy className="text-emerald-600 mb-2" size={20} />
                 <p className="text-2xl font-black">{totalScoring}</p>
@@ -1171,9 +1415,10 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 <p className="mt-1 truncate text-sm font-black uppercase">{nextOpponent?.name || 'Sin programación'}</p>
                 <p className="mt-1 text-[9px] font-black uppercase tracking-widest text-slate-400">{nextMatch ? `${nextMatch.matchdays?.scheduled_date || 'Fecha pendiente'} · ${nextMatch.scheduled_time?.slice(0, 5) || '--:--'}` : 'Sin próximo partido'}</p>
               </button>
+              </>}
             </section>
 
-            <section className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
+            {fixtureVisibleToDelegates && <section className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
               <div className="delegate-module delegate-module-blue overflow-hidden rounded-[2rem] border border-blue-100 bg-blue-50/35">
                 <div className="flex items-center justify-between border-b border-blue-100 bg-blue-50/80 p-5">
                   <div>
@@ -1200,9 +1445,9 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   {[['Posición', selectedStanding ? `${standings.indexOf(selectedStanding) + 1}°` : '-'], ['Partidos', selectedStanding?.played || 0], ['Ganados', selectedStanding?.won || 0], ['Empatados', selectedStanding?.drawn || 0], ['Perdidos', selectedStanding?.lost || 0], ['Diferencia', selectedStanding ? selectedStanding.goals_for - selectedStanding.goals_against : 0]].map(([label, value]) => <div key={String(label)} className="rounded-2xl border border-indigo-100 bg-white/75 p-4"><p className="text-xl font-black">{value}</p><p className="text-[9px] font-black uppercase tracking-widest text-indigo-400">{label}</p></div>)}
                 </div>
               </div>
-            </section>
+            </section>}
 
-            <section className="grid gap-6 lg:grid-cols-2">
+            {fixtureVisibleToDelegates && <section className="grid gap-6 lg:grid-cols-2">
               <div className="delegate-module delegate-module-emerald rounded-[2rem] border border-emerald-100 bg-emerald-50/45 p-5">
                 <h2 className="text-lg font-black uppercase">{sportRules.scoreLabels.scorerPlural} y goleadores</h2>
                 <div className="mt-4 divide-y divide-slate-100">
@@ -1217,7 +1462,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   {cardEvents.length === 0 && <p className="py-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Sin tarjetas ni sanciones</p>}
                 </div>
               </div>
-            </section>
+            </section>}
 
             <section className="delegate-module delegate-module-violet rounded-[2rem] border border-violet-100 bg-violet-50/50 p-5">
               <div className="mb-4 flex items-center gap-3"><div className="rounded-xl bg-violet-600 p-3 text-white"><UserRoundCog size={20} /></div><div><h2 className="text-lg font-black uppercase">Cuerpo técnico</h2><p className="text-[9px] font-black uppercase tracking-widest text-violet-500">Inscripción oficial de la delegación</p></div></div>
@@ -1261,12 +1506,19 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                       </div>
                       <span className={`shrink-0 rounded-full px-3 py-2 text-[9px] font-black uppercase tracking-wider shadow-sm ${registrationCountdown(selectedCategory?.registration_deadline).className}`}>{registrationCountdown(selectedCategory?.registration_deadline).label}</span>
                     </div>
-                    <p className="mt-4 whitespace-nowrap text-xl font-black uppercase leading-none tracking-tight text-slate-950 sm:text-2xl">{registrationDeadlineLabel(selectedCategory?.registration_deadline)}</p>
+                    <p className="mt-4 break-words text-lg font-black uppercase leading-tight tracking-tight text-slate-950 sm:text-xl lg:text-2xl">{registrationDeadlineLabel(selectedCategory?.registration_deadline)}</p>
                     <p className="mt-4 border-t border-amber-200 pt-3 text-[9px] font-black uppercase leading-relaxed tracking-wider text-amber-800">Después de esta fecha no se podrán modificar jugadores</p>
                   </div>
                 </div>
-                {canEditRoster && (
-                  <button type="button" onClick={openBulkUpload} className="flex w-full items-center justify-center gap-2 border-b border-slate-100 bg-blue-50 px-5 py-5 text-xs font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100"><FileSpreadsheet size={17} /> Abrir planilla de inscripción</button>
+                <div className={`grid border-b border-slate-100 ${canEditRoster ? 'sm:grid-cols-2' : ''}`}>
+                  <button type="button" onClick={() => setShowRegistrationGuide(true)} className="flex min-h-14 w-full items-center justify-center gap-2 bg-amber-50 px-5 py-4 text-[10px] font-black uppercase tracking-widest text-amber-800 hover:bg-amber-100 sm:text-xs"><CircleHelp size={17} /> Ver tutorial de inscripción</button>
+                  {canEditRoster && <button type="button" onClick={openBulkUpload} className="flex min-h-14 w-full items-center justify-center gap-2 border-t border-slate-100 bg-blue-50 px-5 py-4 text-[10px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100 sm:border-l sm:border-t-0 sm:text-xs"><FileSpreadsheet size={17} /> Abrir planilla de inscripción</button>}
+                </div>
+                {canEditRoster && players.length > 0 && (
+                  <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-white px-4 py-3 sm:px-5">
+                    <div><p className="text-[10px] font-black uppercase tracking-widest text-slate-700">Control de edición</p><p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Activa las acciones para todos los jugadores</p></div>
+                    <button type="button" aria-pressed={rosterEditMode} onClick={() => setRosterEditMode((enabled) => !enabled)} className={`flex h-11 shrink-0 items-center gap-2 rounded-xl px-4 text-[10px] font-black uppercase tracking-wider transition ${rosterEditMode ? 'bg-slate-950 text-white shadow-lg' : 'border border-blue-200 bg-blue-50 text-blue-700'}`}><Pencil size={15} /> {rosterEditMode ? 'Finalizar edición' : 'Editar jugadores'}</button>
+                  </div>
                 )}
                 {!canEditRoster && (
                   <div className="border-b border-amber-200 bg-amber-50 px-5 py-4">
@@ -1276,52 +1528,86 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                     </div>
                   </div>
                 )}
-                <div className="divide-y divide-slate-50">
-                  {players.map((player: any) => (
-                    <div key={player.id} className="p-4 space-y-3">
-                      <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="font-black uppercase text-sm">{player.name}</p>
-                        <p className="text-[10px] font-bold text-slate-400">ID {player.identity_number || 'SIN REGISTRAR'} / #{player.shirt_number || '-'} / {player.birth_date || player.birth_year || 'Sin fecha'} / {ageOnDate(player.birth_date, selectedCategory?.tournaments?.schedule_dates?.[0]) ?? '-'} años en el torneo / {player.vinculo || 'Sin vínculo'}{player.relationship_detail ? ` · ${player.relationship_detail}` : ''}</p>
-                      </div>
-                      {canEditRoster && <button onClick={() => handleDeletePlayer(player.id)} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><Trash2 size={16} /></button>}
-                      </div>
-                      {(
-                        <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                          <div className="mb-2 flex items-center justify-between gap-2">
-                            <p className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-500"><FileCheck2 size={13} className="text-blue-600" /> Foto y documento obligatorios</p>
-                            <span className={`text-right text-[9px] font-black uppercase ${playerDossierStatus(player.player_documents).className}`}>{playerDossierStatus(player.player_documents).label}</span>
-                          </div>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            {(['FACE_PHOTO', 'IDENTITY_FRONT'] as const).map((documentType) => {
-                              const document = player.player_documents?.find((item: any) => item.document_type === documentType);
-                              const label = documentType === 'FACE_PHOTO' ? 'Fotografía del rostro' : 'Documento de identidad';
-                              return (
-                                <div key={documentType} className="rounded-xl border border-slate-200 bg-white p-3">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <div>
-                                      <p className="text-[10px] font-black uppercase text-slate-700">{label}</p>
-                                      <p className={`text-[9px] font-black uppercase ${document?.status === 'APPROVED' ? 'text-emerald-600' : document?.status === 'REJECTED' ? 'text-red-500' : document ? 'text-amber-500' : 'text-slate-400'}`}>
-                                        {document?.status === 'APPROVED' ? 'Aprobado' : document?.status === 'REJECTED' ? 'Rechazado' : document ? 'Cargado · pendiente de revisión' : 'Sin archivo'}
-                                      </p>
-                                    </div>
-                                    {document && <button type="button" onClick={() => openPlayerDocument(player.id, documentType)} className="rounded-lg p-2 text-blue-600 hover:bg-blue-50" aria-label={`Ver ${label}`}><Eye size={15} /></button>}
-                                  </div>
-                                  {document?.rejection_reason && <p className="mt-2 text-[9px] font-bold text-red-500">{document.rejection_reason}</p>}
-                                  <label className="mt-2 flex cursor-pointer items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-white">
-                                    <Upload size={12} /> {document ? 'Reemplazar' : 'Subir'}
-                                    <input type="file" accept={documentType === 'FACE_PHOTO' ? 'image/jpeg,image/png,image/webp' : 'image/jpeg,image/png,image/webp,application/pdf'} capture={documentType === 'FACE_PHOTO' ? 'user' : undefined} className="hidden" disabled={loading} onChange={(event) => handlePlayerDocumentUpload(player.id, documentType, event.target.files?.[0])} />
-                                  </label>
-                                </div>
-                              );
-                            })}
-                          </div>
+                {players.length > 0 ? (
+                  <>
+                  <div className="divide-y divide-sky-100 bg-white/70 lg:hidden">
+                    <div className="grid grid-cols-[64px_minmax(0,1fr)_88px] items-center bg-slate-950 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-white sm:px-5"><span>Dorsal</span><span>Jugador / estado</span><span className="text-right">Acciones</span></div>
+                    {players.map((player: any, index: number) => {
+                      const faceDocument = player.player_documents?.find((item: any) => item.document_type === 'FACE_PHOTO');
+                      const identityDocument = player.player_documents?.find((item: any) => item.document_type === 'IDENTITY_FRONT');
+                      const hasCompleteFiles = Boolean(faceDocument && identityDocument);
+                      const dossier = playerDossierStatus(player.player_documents);
+                      const compactDocumentAction = (documentType: 'FACE_PHOTO' | 'IDENTITY_FRONT', document: any, label: string) => (
+                        <div className={`flex min-w-0 items-center overflow-hidden rounded-xl border shadow-sm ${document ? 'border-slate-200 bg-white' : 'border-blue-200 bg-blue-50'}`}>
+                          {document && <button type="button" onClick={() => openPlayerDocument(player.id, documentType)} className="flex h-10 w-10 shrink-0 items-center justify-center border-r border-slate-200 text-blue-600 hover:bg-blue-50" aria-label={`Ver ${label}`}><Eye size={15} /></button>}
+                          <label className={`flex h-10 min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 px-2 text-[9px] font-black uppercase tracking-wider ${document ? 'text-slate-700 hover:bg-slate-50' : 'text-blue-700 hover:bg-blue-100'}`}>
+                            <Upload size={13} /> <span className="truncate">{document ? `Cambiar ${label}` : `Subir ${label}`}</span>
+                            <input type="file" accept={documentType === 'FACE_PHOTO' ? 'image/jpeg,image/png,image/webp' : 'image/jpeg,image/png,image/webp,application/pdf'} capture={documentType === 'FACE_PHOTO' ? 'user' : undefined} className="hidden" disabled={loading} onChange={(event) => handlePlayerDocumentUpload(player.id, documentType, event.target.files?.[0])} />
+                          </label>
                         </div>
-                      )}
-                    </div>
-                  ))}
-                  {players.length === 0 && <p className="p-8 text-center text-slate-400 text-xs font-black uppercase tracking-widest">Sin jugadores inscritos</p>}
-                </div>
+                      );
+                      return (
+                        <article key={player.id} className={`p-4 transition-colors sm:p-5 ${hasCompleteFiles ? 'bg-emerald-50/70' : 'bg-red-50/70'}`}>
+                          <div className="flex items-start gap-3">
+                            <span className="flex h-11 min-w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 px-2 text-xs font-black text-blue-700">#{player.shirt_number || '-'}</span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0"><div className="flex items-center gap-2"><p className="truncate text-sm font-black uppercase text-slate-950">{index + 1}. {player.name}</p>{rosterEditMode && <button type="button" onClick={() => openPlayerEditor(player)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-100 text-blue-700" aria-label={`Editar a ${player.name}`}><Pencil size={15} /></button>}</div><p className="mt-1 text-[11px] font-bold text-slate-500">ID {player.identity_number || 'SIN REGISTRAR'} · {player.birth_date || player.birth_year || 'SIN FECHA'}</p></div>
+                                {rosterEditMode && <button type="button" onClick={() => handleDeletePlayer(player.id)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-red-500 hover:bg-red-100" aria-label={`Eliminar a ${player.name}`}><Trash2 size={17} /></button>}
+                              </div>
+                              <p className="mt-2 text-[10px] font-black uppercase leading-relaxed tracking-wider text-slate-500">{ageOnDate(player.birth_date, selectedCategory?.tournaments?.schedule_dates?.[0]) ?? '-'} años · {player.vinculo || 'Sin vínculo'}{player.relationship_detail ? ` · ${player.relationship_detail}` : ''}</p>
+                              <p className={`mt-2 text-[10px] font-black uppercase ${dossier.className}`}>{dossier.label}</p>
+                            </div>
+                          </div>
+                          {rosterEditMode && <div className="mt-3 grid grid-cols-2 gap-2">
+                            {compactDocumentAction('FACE_PHOTO', faceDocument, 'foto')}
+                            {compactDocumentAction('IDENTITY_FRONT', identityDocument, 'documento')}
+                          </div>}
+                        </article>
+                      );
+                    })}
+                  </div>
+                  <div className="delegate-table-scroll hidden overflow-x-auto lg:block">
+                    <table className="min-w-[1180px] w-full text-left text-xs">
+                      <thead className="bg-slate-950 text-[9px] font-black uppercase tracking-widest text-white">
+                        <tr><th className="p-3 text-center">#</th><th className="p-3 text-center">Dorsal</th><th className="p-3">Jugador</th><th className="p-3">Identificación</th><th className="p-3">Nacimiento</th><th className="p-3 text-center">Edad</th><th className="p-3">Vínculo</th><th className="p-3 text-center">Foto</th><th className="p-3 text-center">Documento</th><th className="p-3">Estado</th><th className="p-3"></th></tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {players.map((player: any, index: number) => {
+                          const faceDocument = player.player_documents?.find((item: any) => item.document_type === 'FACE_PHOTO');
+                          const identityDocument = player.player_documents?.find((item: any) => item.document_type === 'IDENTITY_FRONT');
+                          const hasCompleteFiles = Boolean(faceDocument && identityDocument);
+                          const dossier = playerDossierStatus(player.player_documents);
+                          const documentCell = (documentType: 'FACE_PHOTO' | 'IDENTITY_FRONT', document: any, label: string) => (
+                            <div className="flex items-center justify-center gap-1.5">
+                              {document && <button type="button" onClick={() => openPlayerDocument(player.id, documentType)} className="rounded-lg border border-blue-100 bg-blue-50 p-2 text-blue-600 hover:bg-blue-100" aria-label={`Ver ${label}`} title={`Ver ${label}`}><Eye size={14} /></button>}
+                              {rosterEditMode && <label className={`flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-2 text-[8px] font-black uppercase tracking-wider text-white ${document ? 'bg-slate-700' : 'bg-blue-600'}`} title={document ? `Reemplazar ${label}` : `Subir ${label}`}>
+                                <Upload size={12} /> {document ? 'Cambiar' : 'Subir'}
+                                <input type="file" accept={documentType === 'FACE_PHOTO' ? 'image/jpeg,image/png,image/webp' : 'image/jpeg,image/png,image/webp,application/pdf'} capture={documentType === 'FACE_PHOTO' ? 'user' : undefined} className="hidden" disabled={loading} onChange={(event) => handlePlayerDocumentUpload(player.id, documentType, event.target.files?.[0])} />
+                              </label>}
+                            </div>
+                          );
+                          return (
+                            <tr key={player.id} className={`transition-colors ${hasCompleteFiles ? 'bg-emerald-50/60 hover:bg-emerald-50' : 'bg-red-50/60 hover:bg-red-50'}`}>
+                              <td className="p-3 text-center font-black text-slate-400">{index + 1}</td>
+                              <td className="p-3 text-center"><span className="inline-flex min-w-10 justify-center rounded-lg bg-blue-50 px-2 py-2 font-black text-blue-700">#{player.shirt_number || '-'}</span></td>
+                              <td className="p-3"><div className="flex items-center gap-2"><p className="font-black uppercase text-slate-950">{player.name}</p>{rosterEditMode && <button type="button" onClick={() => openPlayerEditor(player)} className="rounded-lg bg-blue-100 p-2 text-blue-700 hover:bg-blue-200" aria-label={`Editar a ${player.name}`}><Pencil size={14} /></button>}</div>{player.relationship_detail && <p className="mt-1 text-[9px] font-bold uppercase text-slate-400">{player.relationship_detail}</p>}</td>
+                              <td className="p-3 font-bold text-slate-600">{player.identity_number || 'SIN REGISTRAR'}</td>
+                              <td className="p-3 font-bold text-slate-600">{player.birth_date || player.birth_year || 'SIN FECHA'}</td>
+                              <td className="p-3 text-center font-black text-slate-600">{ageOnDate(player.birth_date, selectedCategory?.tournaments?.schedule_dates?.[0]) ?? '-'}</td>
+                              <td className="p-3 text-[10px] font-black uppercase text-slate-600">{player.vinculo || 'Sin vínculo'}</td>
+                              <td className="p-3">{documentCell('FACE_PHOTO', faceDocument, 'fotografía del rostro')}</td>
+                              <td className="p-3">{documentCell('IDENTITY_FRONT', identityDocument, 'documento de identidad')}</td>
+                              <td className={`p-3 text-[9px] font-black uppercase ${dossier.className}`}>{dossier.label}</td>
+                              <td className="p-3 text-center">{rosterEditMode && <button type="button" onClick={() => handleDeletePlayer(player.id)} className="rounded-lg p-2 text-red-500 hover:bg-red-100" aria-label={`Eliminar a ${player.name}`}><Trash2 size={15} /></button>}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  </>
+                ) : <p className="p-8 text-center text-slate-400 text-xs font-black uppercase tracking-widest">Sin jugadores inscritos</p>}
                 </>}
               </div>
 
@@ -1356,7 +1642,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               </div>
             </section>
 
-            <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {fixtureVisibleToDelegates && <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="delegate-module delegate-module-slate rounded-[2rem] border border-slate-200 bg-white p-5">
                 <h2 className="font-black uppercase text-lg mb-4">Historial del equipo</h2>
                 <div className="space-y-3">
@@ -1393,7 +1679,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   {currentPhaseSchedule.length === 0 && <p className="text-center text-slate-400 text-xs font-black uppercase tracking-widest py-8">No hay jornadas generadas para esta fase</p>}
                 </div>
               </div>}
-            </section>
+            </section>}
           </>
         )}
       </div>

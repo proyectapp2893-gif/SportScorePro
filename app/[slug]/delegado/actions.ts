@@ -204,6 +204,9 @@ export async function addDelegatePlayers(slug: string, teamId: string, players: 
 
     if (identityCheckError) return { success: false, error: 'No se pudo validar la identidad de los jugadores.' };
     if (existingPlayers?.length) {
+      if (formattedPlayers.length === 1 && existingPlayers[0].team_id === teamId) {
+        return { success: true, data: { inserted: 0, playerIds: [existingPlayers[0].id] } };
+      }
       return { success: false, error: `La identidad ${existingPlayers[0].identity_number} ya está inscrita en otro registro de este torneo.` };
     }
   }
@@ -260,6 +263,47 @@ export async function deleteDelegatePlayer(slug: string, teamId: string, playerI
     metadata: { slug, teamId },
   });
 
+  return { success: true, data: undefined };
+}
+
+export async function updateDelegatePlayer(slug: string, teamId: string, playerId: string, input: PlayerInput): Promise<DelegateActionResult> {
+  const access = await assertDelegateTeam(slug, teamId);
+  if (!access.success) return { success: false, error: access.error };
+  const category = (access.team as any).categories;
+  if (!isRegistrationOpen(category)) return { success: false, error: category?.roster_locked_message || 'La inscripción está cerrada.' };
+
+  const player = {
+    name: input.name.trim().toUpperCase(),
+    identity_number: input.identityNumber?.trim().replace(/\D/g, '') || '',
+    shirt_number: input.shirtNumber ?? null,
+    birth_year: input.birthDate ? Number(input.birthDate.slice(0, 4)) : input.birthYear ?? null,
+    birth_date: input.birthDate || null,
+    vinculo: input.vinculo?.trim().toUpperCase() || '',
+    relationship_detail: input.relationshipDetail?.trim().toUpperCase() || null,
+  };
+  if (!player.name) return { success: false, error: 'Ingresa el nombre completo.' };
+  if (player.identity_number.length < 5 || player.identity_number.length > 30) return { success: false, error: 'Número de identidad inválido.' };
+  if (!Number.isInteger(player.shirt_number) || Number(player.shirt_number) < 1 || Number(player.shirt_number) > 999) return { success: false, error: 'El dorsal debe estar entre 1 y 999.' };
+  if (!player.birth_date || Number.isNaN(Date.parse(player.birth_date))) return { success: false, error: 'Fecha de nacimiento inválida.' };
+  if (!['PADRE DE FAMILIA', 'EX-ALUMNO', 'COLABORADOR'].includes(player.vinculo)) return { success: false, error: 'Selecciona un vínculo válido.' };
+  if (player.vinculo === 'EX-ALUMNO' && !/^\d{4}$/.test(player.relationship_detail || '')) return { success: false, error: 'Indica el año de promoción.' };
+  if (player.vinculo === 'PADRE DE FAMILIA' && (player.relationship_detail || '').length < 5) return { success: false, error: 'Indica el nombre completo del estudiante.' };
+  if ((category?.tournaments as any)?.tournament_format === 'THREE_STAGE_35') {
+    const tournamentDate = String((category?.tournaments as any)?.schedule_dates?.[0] || `${new Date().getFullYear()}-12-31`);
+    const cutoff = new Date(`${tournamentDate}T12:00:00`);
+    cutoff.setFullYear(cutoff.getFullYear() - 35);
+    if (new Date(`${player.birth_date}T12:00:00`) > cutoff) return { success: false, error: `El participante debe tener 35 años cumplidos al iniciar el torneo (${tournamentDate}).` };
+  }
+
+  const supabase = createServerSupabaseAdminClient();
+  const { data: duplicateIdentity } = await supabase.from('players').select('id').eq('identity_number', player.identity_number).neq('id', playerId).limit(1);
+  if (duplicateIdentity?.length) return { success: false, error: 'Esta identidad ya pertenece a otro jugador.' };
+  const { data: duplicateShirt } = await supabase.from('players').select('id').eq('team_id', teamId).eq('shirt_number', player.shirt_number).neq('id', playerId).limit(1);
+  if (duplicateShirt?.length) return { success: false, error: 'Este dorsal ya está usado por otro jugador del equipo.' };
+
+  const { error } = await supabase.from('players').update(player).eq('id', playerId).eq('team_id', teamId);
+  if (error) return { success: false, error: 'No se pudo actualizar el jugador.' };
+  await logAuditEvent({ action: 'delegate.roster.player_update', actorType: 'delegate', actorId: access.delegate.id, clientId: access.delegate.client_id, targetType: 'player', targetId: playerId, metadata: { slug, teamId } });
   return { success: true, data: undefined };
 }
 

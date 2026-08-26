@@ -171,6 +171,30 @@ function assertMatchTeam(teamId: string, match: { home_team_id: string; away_tea
   }
 }
 
+export async function getFootballMatchRoster(slug: string, matchId: string) {
+  const { match } = await requireMatchAccess(slug, matchId);
+  const supabase = createPrivilegedSupabaseClient();
+  const { data: players, error } = await supabase
+    .from('players')
+    .select('id, team_id, name, shirt_number, birth_year, birth_date, identity_number, vinculo, relationship_detail, player_documents(document_type)')
+    .in('team_id', [match.home_team_id, match.away_team_id])
+    .order('shirt_number', { ascending: true });
+  if (error) throw new Error('No se pudo cargar la nómina inscrita para este partido.');
+
+  const playerIds = (players || []).map((player) => player.id);
+  const suspendedPlayers: Record<string, boolean> = {};
+  if (playerIds.length > 0) {
+    const { data: unpaidFines } = await supabase.from('match_events').select('player_id').in('player_id', playerIds).eq('fine_status', 'UNPAID');
+    (unpaidFines || []).forEach((event) => { if (event.player_id) suspendedPlayers[event.player_id] = true; });
+  }
+
+  return {
+    home: (players || []).filter((player) => player.team_id === match.home_team_id),
+    away: (players || []).filter((player) => player.team_id === match.away_team_id),
+    suspendedPlayers,
+  };
+}
+
 export async function recordFootballMatchEvent(input: RecordFootballEventInput) {
   const { match } = await requireMatchAccess(input.slug, input.matchId);
   assertMatchTeam(input.teamId, match);

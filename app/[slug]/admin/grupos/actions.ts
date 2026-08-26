@@ -85,7 +85,7 @@ export async function reorganizeCategoryFixtureTimes(slug: string, categoryId: s
 
   const { data: matches, error } = await supabase
     .from('matches')
-    .select('id, home_team_id, away_team_id, status, scheduled_time, matchdays!inner(id, round_number, category_id, scheduled_date)')
+    .select('id, home_team_id, away_team_id, status, scheduled_time, venue, matchdays!inner(id, round_number, category_id, scheduled_date)')
     .eq('matchdays.category_id', categoryId);
   if (error) return { success: false, error: 'No se pudo cargar el fixture.' };
   const validMatches = (matches || []).filter((match: any) => match.home_team_id && match.away_team_id);
@@ -106,10 +106,14 @@ export async function reorganizeCategoryFixtureTimes(slug: string, categoryId: s
   });
 
   const teamSlotCounts: Record<string, number[]> = {};
-  const roundSlotLoads: Record<string, number[]> = {};
+  const teamVenueCounts: Record<string, number[]> = {};
+  const roundOccupancy: Record<string, Set<string>> = {};
   const assignments: Array<{ id: string; time: string; venue: string }> = [];
   for (const match of validMatches as any[]) {
-    for (const teamId of [match.home_team_id, match.away_team_id]) if (!teamSlotCounts[teamId]) teamSlotCounts[teamId] = slots.map(() => 0);
+    for (const teamId of [match.home_team_id, match.away_team_id]) {
+      if (!teamSlotCounts[teamId]) teamSlotCounts[teamId] = slots.map(() => 0);
+      if (!teamVenueCounts[teamId]) teamVenueCounts[teamId] = venues.map(() => 0);
+    }
     if (match.status === 'SCHEDULED') continue;
     const currentTime = String(match.scheduled_time || '').slice(0, 5);
     const slotIndex = slots.indexOf(currentTime);
@@ -117,21 +121,31 @@ export async function reorganizeCategoryFixtureTimes(slug: string, categoryId: s
       teamSlotCounts[match.home_team_id][slotIndex] += 1;
       teamSlotCounts[match.away_team_id][slotIndex] += 1;
     }
+    const venueIndex = venues.findIndex((venue) => venue === String(match.venue || ''));
+    if (venueIndex >= 0) {
+      teamVenueCounts[match.home_team_id][venueIndex] += 1;
+      teamVenueCounts[match.away_team_id][venueIndex] += 1;
+    }
   }
   for (const match of schedulable as any[]) {
     const round = String(match.matchdays?.round_number || 0);
-    if (!roundSlotLoads[round]) roundSlotLoads[round] = slots.map(() => 0);
-    for (const teamId of [match.home_team_id, match.away_team_id]) if (!teamSlotCounts[teamId]) teamSlotCounts[teamId] = slots.map(() => 0);
-    const rankedSlots = slots.map((time, index) => ({
-      time,
-      index,
-      cost: teamSlotCounts[match.home_team_id][index] + teamSlotCounts[match.away_team_id][index] + (roundSlotLoads[round][index] >= venues.length ? 1000 : 0) + (roundSlotLoads[round][index] * 0.2),
-    })).sort((a, b) => a.cost - b.cost || a.index - b.index);
-    const chosen = rankedSlots[0];
-    assignments.push({ id: match.id, time: `${chosen.time}:00`, venue: venues[roundSlotLoads[round][chosen.index] % venues.length] });
-    teamSlotCounts[match.home_team_id][chosen.index] += 1;
-    teamSlotCounts[match.away_team_id][chosen.index] += 1;
-    roundSlotLoads[round][chosen.index] += 1;
+    if (!roundOccupancy[round]) roundOccupancy[round] = new Set();
+    const candidates = slots.flatMap((time, slotIndex) => venues.map((venue, venueIndex) => ({ time, slotIndex, venue, venueIndex })))
+      .filter((candidate) => !roundOccupancy[round].has(`${candidate.slotIndex}:${candidate.venueIndex}`))
+      .map((candidate) => ({
+        ...candidate,
+        cost: (teamSlotCounts[match.home_team_id][candidate.slotIndex] + teamSlotCounts[match.away_team_id][candidate.slotIndex])
+          + (teamVenueCounts[match.home_team_id][candidate.venueIndex] + teamVenueCounts[match.away_team_id][candidate.venueIndex])
+          + (candidate.slotIndex * 0.001) + (candidate.venueIndex * 0.0001),
+      })).sort((a, b) => a.cost - b.cost);
+    const chosen = candidates[0];
+    if (!chosen) return { success: false, error: `No hay suficientes horarios en las canchas configuradas para completar la jornada ${round}.` };
+    assignments.push({ id: match.id, time: `${chosen.time}:00`, venue: chosen.venue });
+    teamSlotCounts[match.home_team_id][chosen.slotIndex] += 1;
+    teamSlotCounts[match.away_team_id][chosen.slotIndex] += 1;
+    teamVenueCounts[match.home_team_id][chosen.venueIndex] += 1;
+    teamVenueCounts[match.away_team_id][chosen.venueIndex] += 1;
+    roundOccupancy[round].add(`${chosen.slotIndex}:${chosen.venueIndex}`);
   }
 
   for (const assignment of assignments) {

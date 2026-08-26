@@ -2,7 +2,7 @@
 
 import { useEffect, useState, Suspense } from 'react';
 import { supabase } from '../../../supabase'; 
-import { ArrowLeft, ArrowRight, CheckCircle2, Play, School, CalendarDays, Trophy, ShieldCheck, MonitorPlay, ExternalLink, House } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CheckCircle2, Play, School, CalendarDays, Trophy, ShieldCheck, MonitorPlay, ExternalLink, House, FileText } from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams, useRouter, useParams } from 'next/navigation';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 'react-icons/fa';
@@ -76,7 +76,7 @@ function MesaControlContent() {
     setLoading(true);
     const { data, error } = await supabase.from('matches')
       .select(`
-        id, status, home_score, away_score, home_sets, away_sets, scheduled_time, current_period,
+        id, status, home_score, away_score, home_sets, away_sets, scheduled_time, venue, current_period,
         is_timer_running, timer_start_time, timer_accumulated_seconds, match_duration_seconds, match_phase,
         home_team:teams!home_team_id(id, name, schools(logo_url)),
         away_team:teams!away_team_id(id, name, schools(logo_url)),
@@ -151,6 +151,7 @@ function MesaControlContent() {
             <p className="text-slate-500 font-bold uppercase text-[10px] tracking-widest mt-1">Transmisión de Resultados Oficiales</p>
           </div>
           <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+            {selectedCategory && <Link href={`/${slug}/admin/planillas?cat=${selectedCategory}`} className="w-full sm:w-auto p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-700 hover:bg-amber-600 hover:text-white transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm"><FileText size={16} /> Planillas</Link>}
             <button onClick={() => window.open('/tv', '_blank')} className="w-full sm:w-auto p-4 bg-slate-900 border border-slate-900 rounded-2xl text-white hover:bg-blue-600 hover:border-blue-600 transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest group shadow-sm">
               <MonitorPlay size={16} /> Abrir TV <ExternalLink size={14} />
             </button>

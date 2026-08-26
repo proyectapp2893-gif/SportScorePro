@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../../../supabase';
-import { ArrowLeft, CheckCircle2, Minus, Plus, School, CalendarDays, X, Radio, Square, RefreshCcw, ArrowRight, PlayCircle, AlertTriangle, Handshake, Star } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Minus, Plus, School, CalendarDays, X, Radio, Square, RefreshCcw, ArrowRight, PlayCircle, AlertTriangle, Handshake, Star, FileDown } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { FaFutbol } from 'react-icons/fa';
 
@@ -13,7 +13,7 @@ import StartingLineupModal from './modals/StartingLineupModal';
 import WalkoverModal from './modals/WalkoverModal';
 import MatchSummaryModal from './modals/MatchSummaryModal';
 import PenaltyShootout from './PenaltyShootout';
-import { applyFootballWalkover, changeMatchPeriod, finishFootballMatch, recordFootballMatchEvent, resetFootballTimer, startLiveMatch } from '../actions';
+import { applyFootballWalkover, changeMatchPeriod, finishFootballMatch, getFootballMatchRoster, recordFootballMatchEvent, resetFootballTimer, startLiveMatch } from '../actions';
 
 interface MesaFutbolProps {
   match: any;
@@ -67,20 +67,14 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
 
   useEffect(() => {
     async function loadMatchData() {
-      const { data: homeP } = await supabase.from('players').select('*, player_documents(document_type)').eq('team_id', match.home_team.id).order('shirt_number');
-      const { data: awayP } = await supabase.from('players').select('*, player_documents(document_type)').eq('team_id', match.away_team.id).order('shirt_number');
-      
-      const combinedRoster = [...(homeP || []), ...(awayP || [])];
-      setHomeRoster(homeP || []);
-      setAwayRoster(awayP || []);
-
-      const suspendedMap: Record<string, boolean> = {};
-      if (categoryData?.tournaments?.fair_play_enabled && combinedRoster.length > 0) {
-        const playerIds = combinedRoster.map(p => p.id);
-        const { data: unpaidFines } = await supabase.from('match_events').select('player_id').in('player_id', playerIds).eq('fine_status', 'UNPAID');
-        if (unpaidFines) unpaidFines.forEach(fine => { if (fine.player_id) suspendedMap[fine.player_id] = true; });
+      try {
+        const roster = await getFootballMatchRoster(slug, match.id);
+        setHomeRoster(roster.home || []);
+        setAwayRoster(roster.away || []);
+        setSuspendedPlayers(categoryData?.tournaments?.fair_play_enabled ? roster.suspendedPlayers : {});
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'No se pudo cargar la nómina del partido.');
       }
-      setSuspendedPlayers(suspendedMap);
       await fetchLiveEvents();
 
       if (match.status === 'LIVE' || match.status === 'FINISHED') {
@@ -92,7 +86,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
       }
     }
     loadMatchData();
-  }, [match.id, categoryData]);
+  }, [match.id, categoryData, slug]);
 
   const playerAgeAtTournament = (player: any) => {
     if (!player.birth_date) return player.birth_year ? new Date().getFullYear() - Number(player.birth_year) : null;
@@ -156,7 +150,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   const toggleStartingPlayer = (team: 'HOME' | 'AWAY', playerId: string) => {
     if (suspendedPlayers[playerId]) return toast.error('Bloqueado.');
     const player = [...homeRoster, ...awayRoster].find((item) => item.id === playerId);
-    if (!player || !hasRequiredFiles(player)) return toast.error('El jugador debe completar fotografía y documento antes de jugar.');
+    if (!player) return toast.error('Jugador no encontrado en la nómina.');
     if (team === 'HOME') {
       if (homeStartingLineup.includes(playerId)) setHomeStartingLineup(prev => prev.filter(id => id !== playerId));
       else { if (homeStartingLineup.length >= maxPlayers) return toast.error(`Máximo ${maxPlayers}`); setHomeStartingLineup(prev => [...prev, playerId]); }
@@ -338,6 +332,50 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
     else { const periods = ['1T', '2T', 'PEN']; const nextIdx = periods.indexOf(currentPeriod) + 1; if (nextIdx < periods.length) requestPeriodChange(periods[nextIdx]); }
   };
 
+  const handlePrintMatchSheet = async () => {
+    if (homeRoster.length === 0 && awayRoster.length === 0) return toast.error('No hay jugadores cargados para crear la planilla.');
+    const { jsPDF } = await import('jspdf');
+    const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    pdf.setFillColor(7, 15, 36); pdf.rect(0, 0, 297, 28, 'F');
+    pdf.setTextColor(255, 255, 255); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(16); pdf.text('PLANILLA MANUAL DE PARTIDO', 12, 12);
+    pdf.setFontSize(9); pdf.text(`${String(match.home_team?.name || '').toUpperCase()}  VS  ${String(match.away_team?.name || '').toUpperCase()}`, 12, 21);
+    pdf.setTextColor(71, 85, 105); pdf.setFontSize(8);
+    const date = match.matchdays?.scheduled_date || 'Fecha pendiente';
+    const time = match.scheduled_time?.slice(0, 5) || '--:--';
+    pdf.text(`${date} · ${time} · ${String(match.venue || 'Cancha pendiente').toUpperCase()} · Jornada ${match.matchdays?.round_number || '-'}`, 285, 20, { align: 'right' });
+
+    const drawRoster = (title: string, roster: any[], x: number) => {
+      const widths = [10, 16, 65, 13, 13, 13, 15];
+      const headers = ['#', 'Dorsal', 'Jugador', 'Gol', 'TA', 'TR', 'Min.'];
+      const rowCount = Math.max(roster.length, 16);
+      const rowHeight = Math.min(7, 137 / rowCount);
+      let y = 36;
+      pdf.setFillColor(219, 234, 254); pdf.roundedRect(x, y, 137, 9, 2, 2, 'F');
+      pdf.setTextColor(29, 78, 216); pdf.setFontSize(8); pdf.setFont('helvetica', 'bold'); pdf.text(title.toUpperCase(), x + 4, y + 6);
+      y += 11;
+      pdf.setFillColor(241, 245, 249); pdf.rect(x, y, 137, 8, 'F');
+      let columnX = x;
+      headers.forEach((header, index) => { pdf.setTextColor(71, 85, 105); pdf.setFontSize(6); pdf.text(header, columnX + 2, y + 5); columnX += widths[index]; });
+      y += 8;
+      roster.forEach((player, index) => {
+        pdf.setDrawColor(203, 213, 225); pdf.rect(x, y, 137, rowHeight);
+        const values = [String(index + 1), String(player.shirt_number || '-'), String(player.name || '').toUpperCase(), '', '', '', ''];
+        let valueX = x;
+        values.forEach((value, valueIndex) => { pdf.setTextColor(15, 23, 42); pdf.setFontSize(Math.min(6.5, rowHeight)); pdf.text(pdf.splitTextToSize(value, widths[valueIndex] - 3).slice(0, 1), valueX + 2, y + Math.min(4.8, rowHeight - 1)); valueX += widths[valueIndex]; if (valueIndex < widths.length - 1) { pdf.line(valueX, y, valueX, y + rowHeight); } });
+        y += rowHeight;
+      });
+      for (let index = roster.length; index < rowCount; index += 1) { pdf.setDrawColor(226, 232, 240); pdf.rect(x, y, 137, rowHeight); y += rowHeight; }
+    };
+    drawRoster(match.home_team?.name || 'Local', homeRoster, 10);
+    drawRoster(match.away_team?.name || 'Visitante', awayRoster, 150);
+    pdf.setTextColor(71, 85, 105); pdf.setFontSize(7); pdf.text('Marcador final: LOCAL ______  VISITANTE ______     Árbitro: ______________________________     Firma mesa: ______________________________', 12, 198);
+    pdf.autoPrint();
+    const url = URL.createObjectURL(pdf.output('blob'));
+    const opened = window.open(url, '_blank', 'noopener,noreferrer');
+    if (!opened) { pdf.save(`planilla-${match.home_team?.name || 'local'}-${match.away_team?.name || 'visitante'}.pdf`); URL.revokeObjectURL(url); }
+    else window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
+
   return (
     <div className="absolute inset-0 z-50 flex flex-col overflow-hidden text-white font-sans animate-in slide-in-from-right duration-300 bg-[url('/bg-futbol.jpg')] bg-cover bg-center">
       
@@ -354,6 +392,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
               <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
         </div>
+        <div className="absolute right-4 top-4 z-50"><button type="button" onClick={handlePrintMatchSheet} className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/90 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-white shadow-lg hover:bg-blue-600 sm:px-4 sm:py-3"><FileDown size={16} /> <span className="hidden sm:inline">Planilla impresa</span></button></div>
 
         {/* EL MARCADOR EXACTO */}
         <div className="w-full flex flex-col items-center justify-center pt-6 sm:pt-10 z-40 relative">
@@ -556,7 +595,6 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
                   if (scoringAction.type === 'SUB' && !subOutPlayer && !isCurrentlyOnPitch) shouldDisable = true;
                   if (scoringAction.type === 'SUB' && subOutPlayer && (isCurrentlyOnPitch || isSuspended)) shouldDisable = true;
                   if (hasRed && scoringAction.type !== 'SUB') shouldDisable = true;
-                  if (!hasRequiredFiles(player)) shouldDisable = true;
 
                   return (
                     <button key={player.id} onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points, player.id)} disabled={shouldDisable} className={`p-3 sm:p-4 rounded-xl border flex flex-col items-center relative ${hasRed ? 'bg-red-50 border-red-200 opacity-50' : shouldDisable ? 'bg-slate-100 opacity-50' : 'hover:bg-emerald-50'} ${isOut ? 'ring-2 ring-red-400' : ''}`}>
@@ -565,7 +603,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
                       <span className="text-xl sm:text-2xl font-black">{player.shirt_number || '-'}</span>
                       <span className="text-[8px] sm:text-[9px] font-bold uppercase mt-1 text-center truncate w-full">{player.name}</span>
                       <span className="mt-1 text-[8px] font-black uppercase text-blue-500">{playerAgeAtTournament(player) ?? '-'} años</span>
-                      {!hasRequiredFiles(player) && <span className="mt-1 text-[7px] font-black uppercase text-red-500">Documentos pendientes</span>}
+                      {!hasRequiredFiles(player) && <span className="mt-1 text-[7px] font-black uppercase text-amber-600">Documentos pendientes</span>}
                     </button>
                   );
                 })}

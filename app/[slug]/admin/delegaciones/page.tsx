@@ -3,12 +3,12 @@
 import { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { supabase } from '../../../supabase';
-import { ArrowLeft, Search, Users, School, ShieldCheck, AlertCircle, Download, FileSpreadsheet, Activity, X, BadgeCheck, IdCard, FileDown } from 'lucide-react';
+import { ArrowLeft, Search, Users, School, ShieldCheck, AlertCircle, Download, FileSpreadsheet, Activity, X, BadgeCheck, IdCard, FileDown, Upload } from 'lucide-react';
 import Link from 'next/link';
 import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
 import AppSelect from '@/app/components/AppSelect';
-import { getAdminPlayerCardPhotoUrl, getAdminTeamCardPhotoUrls } from './actions';
+import { exportDelegationsBackup, getAdminPlayerCardPhotoUrl, getAdminTeamCardPhotoUrls, importDelegationsBackup } from './actions';
 
 function ageOnDate(birthDate: string | null | undefined, referenceDate: string | null | undefined, birthYear?: number | null) {
   if (!birthDate) {
@@ -37,6 +37,7 @@ export default function ControlDelegacionesPage() {
   const [filteredSchools, setFilteredSchools] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const [backupLoading, setBackupLoading] = useState(false);
 
   // Estados para la Vista de Detalle
   const [selectedSchool, setSelectedSchool] = useState<any | null>(null);
@@ -133,6 +134,35 @@ export default function ControlDelegacionesPage() {
       setFilteredSchools(sortedSchools);
     }
     setLoading(false);
+  }
+
+  async function downloadDelegationsBackup() {
+    if (!selectedTournamentId) return toast.error('Selecciona el torneo que deseas respaldar.');
+    setBackupLoading(true);
+    const result = await exportDelegationsBackup(slug, selectedTournamentId);
+    setBackupLoading(false);
+    if (!result.success) return toast.error(result.error);
+    const tournamentName = tournaments.find((tournament) => tournament.id === selectedTournamentId)?.name || 'torneo';
+    const blob = new Blob([JSON.stringify(result.data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `respaldo-delegaciones-${String(tournamentName).replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.json`;
+    document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+    toast.success('Respaldo masivo descargado.');
+  }
+
+  async function restoreDelegationsBackup(file?: File) {
+    if (!file || !selectedTournamentId) return;
+    if (!file.name.toLowerCase().endsWith('.json')) return toast.error('Selecciona un respaldo JSON de SportScore.');
+    setBackupLoading(true);
+    try {
+      const result = await importDelegationsBackup(slug, selectedTournamentId, await file.text());
+      if (!result.success) return toast.error(result.error);
+      await fetchOverviewData();
+      const unmatched = result.data.unmatchedCategories.length;
+      toast.success(`${result.data.teamsCreated} equipos y ${result.data.playersCreated} jugadores restaurados${unmatched ? `. ${unmatched} categorías no coincidieron.` : '.'}`, { duration: 7000 });
+    } finally { setBackupLoading(false); }
   }
 
   async function handleSelectSchool(school: any) {
@@ -501,10 +531,10 @@ export default function ControlDelegacionesPage() {
             <h1 className="text-4xl font-black uppercase tracking-tighter">Control de <span className="text-blue-600">Delegaciones</span></h1>
             <p className="text-slate-500 font-bold uppercase text-[10px] tracking-widest mt-1">Supervisión de inscripciones por institución y torneo</p>
           </div>
-          <Link href={`/${slug}/admin`} className="p-4 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-slate-900 hover:bg-slate-50 transition-all flex items-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm shrink-0">
-            <ArrowLeft size={16} /> Panel principal
-          </Link>
+          <div className="flex flex-col gap-2 sm:flex-row"><button type="button" disabled={backupLoading || !selectedTournamentId} onClick={downloadDelegationsBackup} className="flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 p-4 text-xs font-black uppercase tracking-widest text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"><Download size={16} /> Descargar respaldo</button><label className={`flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-xs font-black uppercase tracking-widest text-blue-700 shadow-sm hover:bg-blue-100 ${backupLoading || !selectedTournamentId ? 'pointer-events-none opacity-50' : ''}`}><Upload size={16} /> Restaurar respaldo<input type="file" accept="application/json,.json" className="hidden" disabled={backupLoading || !selectedTournamentId} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; restoreDelegationsBackup(file); }} /></label><Link href={`/${slug}/admin`} className="p-4 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-slate-900 hover:bg-slate-50 transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm shrink-0"><ArrowLeft size={16} /> Panel principal</Link></div>
         </div>
+
+        <div className="mb-6 rounded-2xl border border-indigo-100 bg-indigo-50 p-4 text-[10px] font-bold uppercase leading-relaxed tracking-wider text-indigo-700"><span className="font-black">Respaldo portable:</span> conserva instituciones, equipos, categorías de referencia, jugadores y cuerpo técnico. Al restaurar se usa el torneo seleccionado y se omiten duplicados. No incluye fixture, resultados, contraseñas ni documentos de identidad.</div>
 
         {/* BUSCADOR */}
         <div className="flex flex-col lg:flex-row gap-3 mb-8 w-full max-w-4xl relative z-20">

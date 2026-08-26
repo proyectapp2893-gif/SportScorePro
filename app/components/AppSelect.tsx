@@ -18,6 +18,7 @@ type AppSelectProps = {
   className?: string;
   compact?: boolean;
   disabled?: boolean;
+  menuPlacement?: 'bottom' | 'top';
 };
 
 export default function AppSelect({
@@ -28,6 +29,7 @@ export default function AppSelect({
   className = '',
   compact = false,
   disabled = false,
+  menuPlacement = 'bottom',
 }: AppSelectProps) {
   const [open, setOpen] = useState(false);
   const selected = useMemo(() => options.find((option) => option.value === value), [options, value]);
@@ -54,7 +56,7 @@ export default function AppSelect({
       {open && (
         <>
           <button type="button" aria-label="Cerrar selector" className="fixed inset-0 z-30 cursor-default" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-40 max-h-[50dvh] overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl shadow-slate-300/40 sm:max-h-80">
+          <div className={`absolute left-0 right-0 z-40 max-h-[50dvh] overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl shadow-slate-300/40 sm:max-h-80 ${menuPlacement === 'top' ? 'bottom-[calc(100%+0.5rem)]' : 'top-[calc(100%+0.5rem)]'}`}>
             {options.map((option) => {
               const active = option.value === value;
               return (

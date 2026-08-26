@@ -18,6 +18,7 @@ import {
   isBasketballSport,
   isSetBasedSport,
 } from '../../lib/sports/rules';
+import { inferMissingTeamByes } from '@/app/lib/tournaments/byes';
 
 const marqueeStyles = `
   @keyframes marquee {
@@ -198,6 +199,8 @@ export default function ResultadosPublicos() {
       .eq('category_id', categoryId);
 
     if (teamsData && matchesData) {
+      const inferredByes = inferMissingTeamByes(matchesData, teamsData);
+      setMatches((currentMatches) => [...currentMatches.filter((match: any) => !match.inferred), ...inferredByes]);
       const cardDeductionsByTeam: Record<string, number> = {};
       teamsData.forEach((team: any) => {
         cardDeductionsByTeam[team.id] = 0;

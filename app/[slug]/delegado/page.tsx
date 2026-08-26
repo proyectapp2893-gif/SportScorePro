@@ -1,6 +1,7 @@
 import { getDelegateSession } from '@/app/lib/auth';
 import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import DelegatePortalClient from './DelegatePortalClient';
+import { inferMissingTeamByes } from '@/app/lib/tournaments/byes';
 
 async function loadTeamAccess(supabase: ReturnType<typeof createServerSupabaseAdminClient>, delegateId: string) {
   const fullQuery = await supabase
@@ -181,7 +182,10 @@ async function loadDelegatePortalData(slug: string) {
       .order('matchdays(scheduled_date)', { ascending: true });
 
     for (const team of teams) {
-      schedulesByTeam[team.id] = (categoryMatches || []).filter((match: any) => match.matchdays?.category_id === team.category_id);
+      const categorySchedule = (categoryMatches || []).filter((match: any) => match.matchdays?.category_id === team.category_id);
+      const inferredByes = inferMissingTeamByes(categorySchedule, [team]);
+      schedulesByTeam[team.id] = [...categorySchedule, ...inferredByes];
+      if (inferredByes.length > 0) matchesByTeam[team.id] = [...(matchesByTeam[team.id] || []), ...inferredByes];
     }
   }
 

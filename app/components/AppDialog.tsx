@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { AlertTriangle, KeyRound, X } from 'lucide-react';
+import AppPortal from './AppPortal';
 
 type ConfirmOptions = {
   title: string;
@@ -86,7 +87,7 @@ export function AppDialogHost() {
   const isDanger = current.tone === 'danger';
   const promptInvalid = current.kind === 'prompt' && inputValue.trim().length < (current.minLength || 0);
 
-  return (
+  return <AppPortal>
     <div className="fixed inset-0 z-[10000] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
       <section role="dialog" aria-modal="true" aria-labelledby="app-dialog-title" className="relative w-full max-w-md max-h-[92dvh] overflow-y-auto rounded-t-[2rem] border border-slate-200 bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl sm:rounded-[2rem] sm:p-8">
         <div className={`absolute inset-x-0 top-0 h-1.5 ${isDanger ? 'bg-red-600' : 'bg-blue-600'}`} />
@@ -127,5 +128,5 @@ export function AppDialogHost() {
         </div>
       </section>
     </div>
-  );
+  </AppPortal>;
 }

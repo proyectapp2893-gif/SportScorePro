@@ -142,6 +142,12 @@ label[for] {
     overscroll-behavior-x: contain;
     scrollbar-width: thin;
   }
+
+  .delegate-team-tabs {
+    mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 2rem), transparent 100%);
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -571,6 +571,13 @@ export default function AdminHub() {
               <div className="mt-auto flex items-center text-[10px] font-black text-purple-600 uppercase tracking-widest w-full justify-between pt-4 border-t border-slate-50">Abrir Marcador En Vivo <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" /></div>
             </button>
 
+            <button onClick={() => goToCategoryModule('planillas')} className="group flex flex-col items-start p-6 sm:p-8 lg:p-10 bg-white border border-slate-200 rounded-[2rem] lg:rounded-[3rem] hover:border-amber-400 hover:shadow-2xl transition-all text-left shadow-sm relative overflow-hidden h-full">
+              <div className="p-4 bg-amber-50 rounded-2xl text-amber-600 mb-6 group-hover:scale-110 transition-transform border border-amber-100"><FileText size={32} /></div>
+              <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tighter mb-3">Planillas de Partido</h3>
+              <p className="text-slate-500 text-sm font-medium leading-relaxed mb-8">Genera planillas individuales o descarga todas las planillas organizadas por fase y jornada.</p>
+              <div className="mt-auto flex items-center text-[10px] font-black text-amber-600 uppercase tracking-widest w-full justify-between pt-4 border-t border-slate-50">Preparar Impresión <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" /></div>
+            </button>
+
             <button onClick={() => window.open('/tv', '_blank')} className="group flex flex-col items-start p-6 sm:p-8 lg:p-10 bg-white border border-slate-200 rounded-[2rem] lg:rounded-[3rem] hover:border-sky-400 hover:shadow-2xl transition-all text-left shadow-sm relative overflow-hidden h-full">
               <div className="p-4 bg-sky-50 rounded-2xl text-sky-600 mb-6 group-hover:scale-110 transition-transform border border-sky-100"><MonitorPlay size={32} /></div>
               <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tighter mb-3">TV / Pantalla</h3>

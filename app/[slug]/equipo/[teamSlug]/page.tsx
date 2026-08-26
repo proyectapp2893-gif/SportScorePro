@@ -5,6 +5,7 @@ import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '@/app/lib/sports/rules';
 import { toTeamSlug } from '@/app/lib/team-slug';
 import PublicQrCard from '@/app/components/PublicQrCard';
+import { inferMissingTeamByes } from '@/app/lib/tournaments/byes';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,6 +14,11 @@ function TeamLogo({ team, size = 'h-14 w-14' }: { team: any; size?: string }) {
 }
 
 function MatchCard({ match, selectedTeamId }: { match: any; selectedTeamId: string }) {
+  const restingTeam = match.home_team || match.away_team;
+  const isBye = match.status === 'BYE' || !match.home_team || !match.away_team;
+  if (isBye && restingTeam) return <article className="rounded-2xl border-2 border-dashed border-orange-200 bg-orange-50/60 p-5 text-center">
+    <div className="flex flex-col items-center gap-2"><TeamLogo team={restingTeam} size="h-14 w-14" /><p className="font-black uppercase text-slate-800">{restingTeam.name}</p><p className="rounded-full bg-orange-100 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-orange-600">Jornada {match.matchdays?.round_number || '-'} · Descansa</p></div>
+  </article>;
   const isLive = match.status === 'LIVE';
   const status = isLive ? 'En vivo' : match.status === 'FINISHED' ? 'Finalizado' : 'Programado';
   return <article className={`rounded-2xl border p-4 ${isLive ? 'border-red-200 bg-red-50/70' : 'border-slate-200 bg-white'}`}>
@@ -28,11 +34,12 @@ function MatchCard({ match, selectedTeamId }: { match: any; selectedTeamId: stri
 export default async function PublicTeamPage({ params }: { params: Promise<{ slug: string; teamSlug: string }> }) {
   const { slug, teamSlug } = await params;
   const supabase = createServerSupabaseAdminClient();
-  const { data: teams } = await supabase.from('teams').select('id, name, category_id, schools(name, logo_url), categories!inner(id, name, sports(name), tournaments!inner(id, name, client_id, clients!inner(slug, is_active)))').eq('categories.tournaments.clients.slug', slug).eq('categories.tournaments.clients.is_active', true);
+  const { data: teams } = await supabase.from('teams').select('id, name, category_id, schools(name, logo_url), categories!inner(id, name, sports(name), tournaments!inner(id, name, client_id, fixture_visible_to_delegates, clients!inner(slug, is_active)))').eq('categories.tournaments.clients.slug', slug).eq('categories.tournaments.clients.is_active', true);
   const team: any = (teams || []).find((item: any) => toTeamSlug(item.name) === teamSlug);
   if (!team) notFound();
 
   const category = team.categories as any;
+  const fixtureVisible = Boolean(category?.tournaments?.fixture_visible_to_delegates);
   const sportRules = getSportRules(category?.sports?.name);
   const [{ data: categoryTeams }, { data: matches }, { data: events }] = await Promise.all([
     supabase.from('teams').select('id, name, schools(name, logo_url)').eq('category_id', team.category_id),
@@ -52,7 +59,8 @@ export default async function PublicTeamPage({ params }: { params: Promise<{ slu
   });
   const standings = Object.values(standingsById).sort((a: any, b: any) => compareTeamsForStandings(a, b, sportRules));
   const teamStanding = standings.find((item: any) => item.id === team.id);
-  const teamMatches = (matches || []).filter((match: any) => match.home_team_id === team.id || match.away_team_id === team.id);
+  const inferredByes = inferMissingTeamByes(matches || [], [team]);
+  const teamMatches = fixtureVisible ? [...(matches || []), ...inferredByes].filter((match: any) => match.home_team_id === team.id || match.away_team_id === team.id) : [];
   const upcoming = teamMatches.filter((match: any) => match.status !== 'FINISHED');
   const history = teamMatches.filter((match: any) => match.status === 'FINISHED').reverse();
   const scorersById: Record<string, any> = {};
@@ -74,9 +82,11 @@ export default async function PublicTeamPage({ params }: { params: Promise<{ slu
       <div className="flex justify-end">
         <div className="grid w-full gap-2 sm:flex sm:w-auto"><Link href={`/${slug}/fases`} className="flex items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-5 py-3 text-[10px] font-black uppercase tracking-widest text-indigo-700 transition-colors hover:bg-indigo-100"><Trophy size={16} /> Ver fases y finales</Link><Link href={`/${slug}/resultados`} className="flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-5 py-3 text-[10px] font-black uppercase tracking-widest text-blue-700 transition-colors hover:bg-blue-100"><BarChart3 size={16} /> Ver resultados generales</Link></div>
       </div>
+      {!fixtureVisible ? <section className="rounded-[2rem] border border-indigo-100 bg-indigo-50 p-8 text-center"><Clock3 className="mx-auto text-indigo-400" size={28} /><h2 className="mt-3 text-lg font-black uppercase text-indigo-800">Fixture pendiente de publicación</h2><p className="mt-2 text-[10px] font-bold uppercase tracking-widest text-indigo-400">La información de partidos se mostrará cuando la organización publique el fixture.</p></section> : <>
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4"><div className="rounded-2xl border border-blue-100 bg-blue-50 p-4"><Trophy size={18} className="text-blue-600" /><p className="mt-2 text-2xl font-black">{teamStanding ? standings.indexOf(teamStanding) + 1 : '-'}</p><p className="text-[9px] font-black uppercase tracking-widest text-blue-400">Posición</p></div><div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4"><p className="text-2xl font-black">{teamStanding?.points || 0}</p><p className="text-[9px] font-black uppercase tracking-widest text-emerald-500">Puntos</p></div><div className="rounded-2xl border border-amber-100 bg-amber-50 p-4"><Square size={17} className="fill-amber-400 text-amber-400" /><p className="mt-2 text-2xl font-black">{yellow}</p><p className="text-[9px] font-black uppercase tracking-widest text-amber-500">Amarillas</p></div><div className="rounded-2xl border border-red-100 bg-red-50 p-4"><Square size={17} className="fill-red-500 text-red-500" /><p className="mt-2 text-2xl font-black">{red}</p><p className="text-[9px] font-black uppercase tracking-widest text-red-500">Rojas</p></div></section>
       <section className="grid gap-6 lg:grid-cols-2"><div className="rounded-[2rem] border border-blue-100 bg-blue-50/40 p-5"><h2 className="text-xl font-black uppercase">Próximos partidos</h2><p className="mb-4 text-[9px] font-black uppercase tracking-widest text-slate-400"><Clock3 size={12} className="inline" /> Programación oficial</p><div className="space-y-3">{upcoming.map((match: any) => <MatchCard key={match.id} match={match} selectedTeamId={team.id} />)}{upcoming.length === 0 && <p className="rounded-2xl bg-white p-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Sin partidos pendientes</p>}</div></div><div className="rounded-[2rem] border border-slate-200 bg-white p-5"><h2 className="text-xl font-black uppercase">Últimos resultados</h2><p className="mb-4 text-[9px] font-black uppercase tracking-widest text-slate-400">Historial del equipo</p><div className="space-y-3">{history.slice(0, 6).map((match: any) => <MatchCard key={match.id} match={match} selectedTeamId={team.id} />)}{history.length === 0 && <p className="p-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Sin resultados registrados</p>}</div></div></section>
       <section className="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]"><div className="overflow-hidden rounded-[2rem] border border-indigo-100 bg-white"><div className="bg-indigo-50 p-5"><h2 className="text-xl font-black uppercase">Tabla de posiciones</h2></div><div className="overflow-x-auto"><table className="min-w-[580px] w-full text-xs"><thead className="bg-slate-950 text-[9px] uppercase tracking-widest text-white"><tr><th className="p-3">#</th><th className="p-3 text-left">Equipo</th><th>PJ</th><th>G</th><th>E</th><th>P</th><th>DG</th><th>PTS</th></tr></thead><tbody className="divide-y divide-slate-100">{standings.map((item: any, index: number) => <tr key={item.id} className={item.id === team.id ? 'bg-indigo-50' : ''}><td className="p-3 text-center font-black">{index + 1}</td><td className="p-3 font-black uppercase">{item.name}</td><td className="text-center">{item.played}</td><td className="text-center">{item.won}</td><td className="text-center">{item.drawn}</td><td className="text-center">{item.lost}</td><td className="text-center">{item.goals_for - item.goals_against}</td><td className="text-center font-black text-blue-600">{item.points}</td></tr>)}</tbody></table></div></div><div className="rounded-[2rem] border border-emerald-100 bg-emerald-50/50 p-5"><h2 className="text-xl font-black uppercase">Goleadores</h2><div className="mt-4 divide-y divide-emerald-100">{scorers.map((player: any, index: number) => <Link href={`/${slug}/jugador/${player.id}`} key={player.id || `${player.name}-${index}`} className="flex items-center justify-between py-3 transition-colors hover:text-emerald-700"><div><p className="text-xs font-black uppercase">{player.name}</p><p className="text-[9px] font-bold uppercase text-slate-400">Dorsal #{player.shirt_number || '-'} · Ver carné</p></div><span className="text-xl font-black text-emerald-600">{player.total}</span></Link>)}{scorers.length === 0 && <p className="py-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Sin anotaciones</p>}</div></div></section>
+      </>}
       <PublicQrCard path={`/${slug}/equipo/${teamSlug}`} title="QR del equipo" fileName={`equipo-${teamSlug}`} />
     </div>
   </main>;

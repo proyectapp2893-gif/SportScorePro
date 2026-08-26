@@ -11,6 +11,8 @@ import { createCategoryFixture, deleteCategoryFixture, randomizeCategoryGroups, 
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '../../../lib/sports/rules';
 import AppSelect from '@/app/components/AppSelect';
 import { advanceThreeStageTournament, getThreeStageStatus, startThreeStageTournament } from './stage-actions';
+import { findTeamsMissingFromEveryRegularRound, generateBalancedRoundRobin, inferMissingTeamByes } from '@/app/lib/tournaments/byes';
+import AppPortal from '@/app/components/AppPortal';
 
 type ParsedFixtureMatch = {
   round_number: number;
@@ -57,6 +59,8 @@ function FixtureContent() {
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showPlayoffConfirm, setShowPlayoffConfirm] = useState(false);
+  const [showFirstByeModal, setShowFirstByeModal] = useState(false);
+  const [firstByeByGroup, setFirstByeByGroup] = useState<Record<string, string>>({});
   
   const [editingMatch, setEditingMatch] = useState<any>(null);
   const [editDate, setEditDate] = useState('');
@@ -416,52 +420,40 @@ function FixtureContent() {
     setLoading(false);
   };
 
-  const handleAutoGenerateFixture = async () => {
+  const handleAutoGenerateFixture = async (selectedFirstByes?: Record<string, string>) => {
     if (teams.length < 2) return toast.error('Se necesitan al menos 2 delegaciones para generar un fixture.');
+
+    const groupedTeams = teams.reduce((groups: Record<string, any[]>, team) => {
+      const group = team.group_name || 'A';
+      if (!groups[group]) groups[group] = [];
+      groups[group].push(team);
+      return groups;
+    }, {});
+    const oddGroups = Object.entries(groupedTeams).filter(([, groupTeams]) => groupTeams.length % 2 !== 0);
+    if (oddGroups.length > 0 && !selectedFirstByes) {
+      setFirstByeByGroup(Object.fromEntries(oddGroups.map(([group, groupTeams]) => [group, groupTeams[0]?.id || ''])));
+      setShowFirstByeModal(true);
+      return;
+    }
 
     setLoading(true);
     const toastId = toast.loading('Calculando cruces, canchas y descansos...');
 
     try {
-      const groups: Record<string, any[]> = {};
-      teams.forEach(t => {
-        const g = t.group_name || 'A';
-        if (!groups[g]) groups[g] = [];
-        groups[g].push(t);
-      });
-
       const globalRounds: any[][] = [];
 
-      Object.keys(groups).forEach(groupName => {
-        const groupTeams = [...groups[groupName]];
-        
-        groupTeams.sort(() => Math.random() - 0.5);
-
-        if (groupTeams.length % 2 !== 0) groupTeams.push(null);
-
-        const numRounds = groupTeams.length - 1;
-        const halfSize = groupTeams.length / 2;
-
-        for (let round = 0; round < numRounds; round++) {
+      Object.entries(groupedTeams).forEach(([groupName, groupTeams]) => {
+        const generatedRounds = generateBalancedRoundRobin(groupTeams, selectedFirstByes?.[groupName]);
+        generatedRounds.forEach((pairs, round) => {
           if (!globalRounds[round]) globalRounds[round] = [];
-
-          let canchaIndex = 1;
-
-          for (let i = 0; i < halfSize; i++) {
-            const team1 = groupTeams[i];
-            const team2 = groupTeams[groupTeams.length - 1 - i];
-
+          pairs.forEach(({ home: team1, away: team2 }) => {
             if (team1 !== null && team2 !== null) {
-              const home = (i === 0 && round % 2 === 1) ? team2 : team1;
-              const away = (i === 0 && round % 2 === 1) ? team1 : team2;
-
               globalRounds[round].push({
-                home_team_id: home.id,
-                away_team_id: away.id,
+                home_team_id: team1.id,
+                away_team_id: team2.id,
                 status: 'SCHEDULED',
-                venue: `Cancha ${canchaIndex}`
+                venue: null
               });
-              canchaIndex++;
             } else {
               const byeTeam = team1 !== null ? team1 : team2;
               globalRounds[round].push({
@@ -471,9 +463,8 @@ function FixtureContent() {
                 venue: 'Descansa'
               });
             }
-          }
-          groupTeams.splice(1, 0, groupTeams.pop());
-        }
+          });
+        });
       });
 
       const roundsPayload = globalRounds.map((matchesToInsert, index) => ({
@@ -490,7 +481,11 @@ function FixtureContent() {
       const result = await createCategoryFixture(slug, selectedCategory!, roundsPayload);
       if (!result.success) throw new Error(result.error);
 
-      toast.success(`Matriz creada con canchas y descansos`, { id: toastId });
+      const scheduleResult = await reorganizeCategoryFixtureTimes(slug, selectedCategory!);
+      if (!scheduleResult.success) throw new Error(`Los cruces fueron creados, pero no se pudieron programar: ${scheduleResult.error}`);
+
+      toast.success(`Fixture creado y programado desde la fecha inicial`, { id: toastId });
+      setShowFirstByeModal(false);
       loadCategoryData(); 
 
     } catch (error: any) {
@@ -541,7 +536,8 @@ function FixtureContent() {
       const { jsPDF } = await import('jspdf');
       const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4', compress: true });
       const category = categories.find((item) => item.id === selectedCategory);
-      const orderedMatches = [...matches].sort((a: any, b: any) => Number(a.matchdays?.round_number || 0) - Number(b.matchdays?.round_number || 0) || String(a.scheduled_time || '').localeCompare(String(b.scheduled_time || '')));
+      const exportMatches = [...matches, ...inferMissingTeamByes(matches, teams)];
+      const orderedMatches = exportMatches.sort((a: any, b: any) => Number(a.matchdays?.round_number || 0) - Number(b.matchdays?.round_number || 0) || (a.status === 'BYE' ? -1 : b.status === 'BYE' ? 1 : String(a.scheduled_time || '').localeCompare(String(b.scheduled_time || ''))));
       const grouped = orderedMatches.reduce((acc: Map<number, any[]>, match: any) => {
         const round = Number(match.matchdays?.round_number || 0);
         if (!acc.has(round)) acc.set(round, []);
@@ -579,13 +575,22 @@ function FixtureContent() {
         for (const match of roundMatches) {
           addPageIfNeeded(11);
           const isBye = !match.away_team_id || match.status === 'BYE';
+          if (isBye) {
+            const restingTeam = match.home_team || match.away_team;
+            pdf.setFillColor(255, 247, 237); pdf.roundedRect(12, y + 1, 273, 9, 1.5, 1.5, 'F');
+            pdf.setTextColor(234, 88, 12); pdf.setFontSize(7); pdf.setFont('helvetica', 'bold');
+            pdf.text(`DESCANSA: ${String(restingTeam?.name || 'EQUIPO POR DEFINIR').toUpperCase()}`, 16, y + 6.8);
+            pdf.setTextColor(154, 52, 18); pdf.text('JORNADA DE DESCANSO', 281, y + 6.8, { align: 'right' });
+            y += 11;
+            continue;
+          }
           pdf.setDrawColor(226, 232, 240); pdf.line(12, y + 10, 285, y + 10);
           pdf.setTextColor(51, 65, 85); pdf.setFontSize(7); pdf.setFont('helvetica', 'bold');
           pdf.text(formatTime12Hour(match.scheduled_time), 16, y + 6.5);
           pdf.text(String(match.venue || 'Por asignar').toUpperCase(), 39, y + 6.5);
           pdf.text(pdf.splitTextToSize(String(match.home_team?.name || 'POR DEFINIR').toUpperCase(), 78).slice(0, 1), 78, y + 6.5);
-          pdf.text(isBye ? 'DESCANSA' : pdf.splitTextToSize(String(match.away_team?.name || 'POR DEFINIR').toUpperCase(), 78).slice(0, 1), 170, y + 6.5);
-          const status = isBye ? 'DESCANSA' : match.status === 'FINISHED' ? 'FINALIZADO' : match.status === 'LIVE' ? 'EN VIVO' : 'PROGRAMADO';
+          pdf.text(pdf.splitTextToSize(String(match.away_team?.name || 'POR DEFINIR').toUpperCase(), 78).slice(0, 1), 170, y + 6.5);
+          const status = match.status === 'FINISHED' ? 'FINALIZADO' : match.status === 'LIVE' ? 'EN VIVO' : 'PROGRAMADO';
           pdf.setTextColor(match.status === 'LIVE' ? 220 : 71, match.status === 'LIVE' ? 38 : 85, match.status === 'LIVE' ? 38 : 105); pdf.text(status, 269, y + 6.5, { align: 'center' });
           y += 11;
         }
@@ -750,16 +755,26 @@ function FixtureContent() {
     return { phase: 'Fase 1', round: `Jornada ${roundNumber}` };
   };
 
-  const matchesToShow = matches.filter(m => m.matchdays?.round_number === activeRound);
+  const inferredByeMatches = inferMissingTeamByes(matches, teams);
+  const teamsOutsideFixture = findTeamsMissingFromEveryRegularRound(matches, teams);
+  const matchesToShow = [...matches, ...inferredByeMatches].filter(m => m.matchdays?.round_number === activeRound);
   
   const normalMatches = matchesToShow.filter(m => m.status !== 'BYE');
   const byeMatches = matchesToShow.filter(m => m.status === 'BYE');
 
   const uniqueSports = Array.from(new Set(categories.map(c => c.sports?.name).filter(Boolean)));
   const hasFaseFinal = availableRounds.includes(100);
+  const oddTeamGroups = Object.entries(teams.reduce((groups: Record<string, any[]>, team) => {
+    const group = team.group_name || 'A';
+    if (!groups[group]) groups[group] = [];
+    groups[group].push(team);
+    return groups;
+  }, {})).filter(([, groupTeams]) => groupTeams.length % 2 !== 0);
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900 font-sans relative pb-20">
+      <AppPortal>
+      <>
       {reorganizing && (
         <div className="fixed inset-0 z-[500] flex items-center justify-center bg-slate-950/75 p-4" role="status" aria-live="assertive" aria-label="Reorganizando fixture">
           <div className="w-full max-w-sm animate-in zoom-in-95 rounded-[2rem] border border-blue-400/20 bg-white p-7 text-center shadow-2xl sm:p-9">
@@ -933,6 +948,19 @@ function FixtureContent() {
         </div>
       )}
 
+      {showFirstByeModal && (
+        <div className="fixed inset-0 z-[220] flex items-start justify-center overflow-y-auto bg-slate-950/60 p-4 backdrop-blur-sm sm:items-center" role="dialog" aria-modal="true" aria-label="Elegir primer descanso">
+          <div className="my-auto w-full max-w-lg rounded-[2.5rem] border border-blue-100 bg-white shadow-2xl animate-in zoom-in-95">
+            <div className="bg-slate-950 p-7 text-white"><CalendarDays className="mb-4 text-blue-400" size={32} /><h2 className="text-2xl font-black uppercase tracking-tight">Primer descanso</h2><p className="mt-2 text-[10px] font-bold uppercase leading-relaxed tracking-widest text-slate-400">Selecciona quién descansará en la jornada 1. El sistema rotará los demás descansos de forma equilibrada.</p></div>
+            <div className="space-y-4 p-7">
+              {oddTeamGroups.map(([group, groupTeams]) => <div key={group}><label className="mb-2 block text-[10px] font-black uppercase tracking-widest text-slate-500">{oddTeamGroups.length > 1 ? `Grupo ${group}` : 'Equipo que descansa'} · {groupTeams.length} equipos</label><AppSelect value={firstByeByGroup[group] || ''} onChange={(value) => setFirstByeByGroup((current) => ({ ...current, [group]: value }))} options={groupTeams.map((team) => ({ value: team.id, label: team.name }))} placeholder="Selecciona un equipo" menuPlacement="top" /></div>)}
+              <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-[9px] font-bold uppercase leading-relaxed tracking-wider text-emerald-700">Cada equipo descansará exactamente una vez. Ningún cruce se repetirá y todos los equipos se enfrentarán entre sí dentro de su grupo.</div>
+              <div className="flex gap-3 pt-2"><button type="button" onClick={() => setShowFirstByeModal(false)} className="flex-1 rounded-2xl bg-slate-100 px-5 py-4 text-[10px] font-black uppercase tracking-widest text-slate-600">Cancelar</button><button type="button" disabled={loading || oddTeamGroups.some(([group]) => !firstByeByGroup[group])} onClick={() => handleAutoGenerateFixture(firstByeByGroup)} className="flex-[1.5] rounded-2xl bg-blue-600 px-5 py-4 text-[10px] font-black uppercase tracking-widest text-white shadow-lg shadow-blue-200 disabled:opacity-50">Generar fixture</button></div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL: DESTRUCCIÓN DE FIXTURE */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
@@ -968,6 +996,8 @@ function FixtureContent() {
           </div>
         </div>
       )}
+      </>
+      </AppPortal>
 
       <div className="max-w-6xl mx-auto px-4 py-8 sm:py-12 relative">
         
@@ -1121,7 +1151,7 @@ function FixtureContent() {
                   {matches.length > 0 && <button type="button" onClick={handleExportFixturePdf} disabled={loading} className="flex min-h-16 items-center justify-center gap-2 rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-cyan-700 shadow-sm transition-all hover:-translate-y-0.5 hover:bg-cyan-600 hover:text-white hover:shadow-md disabled:opacity-50"><FileDown size={16} /> Exportar PDF</button>}
                   {!stageStatus?.enabled && teams.length > 0 && matches.length === 0 && (
                     <div className="col-span-2 flex flex-col gap-2 sm:flex-row xl:col-span-4">
-                      <button onClick={handleAutoGenerateFixture} disabled={loading} className="w-full sm:w-auto flex items-center justify-center gap-2 bg-blue-600 text-white px-8 py-4 rounded-xl hover:bg-blue-500 transition-all font-black uppercase text-[10px] tracking-widest shadow-lg shadow-blue-200 disabled:opacity-50">
+                      <button onClick={() => handleAutoGenerateFixture()} disabled={loading} className="w-full sm:w-auto flex items-center justify-center gap-2 bg-blue-600 text-white px-8 py-4 rounded-xl hover:bg-blue-500 transition-all font-black uppercase text-[10px] tracking-widest shadow-lg shadow-blue-200 disabled:opacity-50">
                         <CalendarDays size={16} /> Autogenerar Cruces
                       </button>
                       <button onClick={() => setShowGridModal(true)} disabled={loading} className="w-full sm:w-auto flex items-center justify-center gap-2 bg-emerald-600 text-white px-8 py-4 rounded-xl hover:bg-emerald-500 transition-all font-black uppercase text-[10px] tracking-widest shadow-lg shadow-emerald-200 disabled:opacity-50">
@@ -1215,6 +1245,7 @@ function FixtureContent() {
 
             {viewMode === 'FIXTURE' && matches.length > 0 && (
               <div className="bg-white border border-slate-200 rounded-[2rem] sm:rounded-[2.5rem] overflow-hidden shadow-sm flex flex-col min-h-[520px] md:min-h-[600px] animate-in fade-in slide-in-from-bottom-4">
+                {teamsOutsideFixture.length > 0 && <div className="m-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-800 sm:m-6"><div className="flex items-start gap-3"><AlertTriangle className="mt-0.5 shrink-0 text-red-600" size={20} /><div><p className="text-xs font-black uppercase tracking-widest">Fixture desactualizado</p><p className="mt-1 text-[10px] font-bold uppercase leading-relaxed tracking-wider">{teamsOutsideFixture.map((team) => team.name).join(', ')} no participa en ninguna jornada. Este equipo fue agregado después de generar el calendario. Limpia y regenera el fixture para obtener 9 jornadas con descansos rotativos.</p></div></div></div>}
                 
                 <div className="flex overflow-x-auto bg-slate-50 px-4 pt-4 border-b border-slate-100 gap-2 scrollbar-hide">
                   {availableRounds.map((round) => (

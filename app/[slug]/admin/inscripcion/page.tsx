@@ -50,7 +50,7 @@ export default function InscripcionPage() {
   // Estados para Carga Masiva Pro
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [pasteRows, setPasteRows] = useState(
-    Array.from({ length: 10 }, () => ({ name: '', birth_year: '', vinculo: '', shirt_number: '' }))
+    Array.from({ length: 10 }, () => ({ name: '', identity_number: '', shirt_number: '', birth_date: '', vinculo: '', relationship_detail: '' }))
   );
 
   // 1. Carga inicial de datos del Tenant (Inquilino)
@@ -224,15 +224,50 @@ export default function InscripcionPage() {
 
   const downloadTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([
-      { "NOMBRE COMPLETO": "PEREZ JUAN", "ANO DE NACIMIENTO": 2011, "VINCULO CON EL COLEGIO": "ALUMNO", "NUMERO DE DORSAL": 10 },
-      { "NOMBRE COMPLETO": "DOMINGUEZ LUIS", "ANO DE NACIMIENTO": "26-06-2010", "VINCULO CON EL COLEGIO": "PADRE DE FAMILIA", "NUMERO DE DORSAL": 7 }
+      { "NOMBRE COMPLETO": "PEREZ JUAN", "NUMERO DE IDENTIDAD": "1234567890", DORSAL: 10, "FECHA DE NACIMIENTO": "1985-05-20", "VINCULO CON EL COLEGIO": "EX-ALUMNO", "PROMOCION O NOMBRE DEL ESTUDIANTE": "2003" }
     ]);
-    
-    ws['!cols'] = [{ wch: 30 }, { wch: 20 }, { wch: 25 }, { wch: 20 }];
+    ws['!cols'] = [{ wch: 32 }, { wch: 24 }, { wch: 12 }, { wch: 22 }, { wch: 28 }, { wch: 38 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "INSCRIPCION");
     XLSX.writeFile(wb, `Plantilla_${slug.toUpperCase()}_Nomina.xlsx`);
     toast.success('Plantilla generada y lista');
+  };
+
+  const normalizeRosterDate = (value: string) => {
+    const raw = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const match = raw.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
+    if (!match) return raw;
+    return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+  };
+
+  const normalizeRosterHeader = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+
+  const handleRosterExcelFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]; event.target.value = '';
+    if (!file) return;
+    if (!/\.(xlsx|xls)$/i.test(file.name)) return toast.error('Selecciona un archivo Excel .xlsx o .xls.');
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: '' });
+      const parsedRows = rawRows.map((rawRow) => {
+        const row = Object.fromEntries(Object.entries(rawRow).map(([key, value]) => [normalizeRosterHeader(key), value]));
+        return {
+          name: String(row['NOMBRE COMPLETO'] || '').trim().toUpperCase(),
+          identity_number: String(row['NUMERO DE IDENTIDAD'] || '').replace(/\D/g, ''),
+          shirt_number: String(row.DORSAL || '').trim(),
+          birth_date: normalizeRosterDate(String(row['FECHA DE NACIMIENTO'] || '')),
+          vinculo: String(row['VINCULO CON EL COLEGIO'] || '').trim().toUpperCase(),
+          relationship_detail: String(row['PROMOCION O NOMBRE DEL ESTUDIANTE'] || '').trim().toUpperCase(),
+        };
+      }).filter((row) => row.name || row.identity_number || row.shirt_number || row.birth_date || row.vinculo || row.relationship_detail);
+      if (!parsedRows.length) return toast.error('El archivo no contiene jugadores o no usa la plantilla oficial.');
+      setPasteRows([...parsedRows, ...Array.from({ length: Math.max(0, 10 - parsedRows.length) }, () => ({ name: '', identity_number: '', shirt_number: '', birth_date: '', vinculo: '', relationship_detail: '' }))]);
+      toast.success(`${parsedRows.length} jugadores cargados desde Excel`);
+    } catch {
+      toast.error('No fue posible leer el archivo Excel.');
+    }
   };
 
   const extractYearFromExcelValue = (value: any): number => {
@@ -260,9 +295,11 @@ export default function InscripcionPage() {
       const cols = row.split('\t');
       const rowData = {
         name: cols[0]?.trim() || '',
-        birth_year: cols[1]?.trim() || '',
-        vinculo: cols[2]?.trim() || '',
-        shirt_number: cols[3]?.trim() || ''
+        identity_number: cols[1]?.trim().replace(/\D/g, '') || '',
+        shirt_number: cols[2]?.trim() || '',
+        birth_date: normalizeRosterDate(cols[3] || ''),
+        vinculo: cols[4]?.trim().toUpperCase() || '',
+        relationship_detail: cols[5]?.trim().toUpperCase() || '',
       };
       
       if (i < newRows.length) {
@@ -274,7 +311,7 @@ export default function InscripcionPage() {
     
     // Garantizar que visualmente siempre se vean al menos 10 filas
     while (newRows.length < 10) {
-      newRows.push({ name: '', birth_year: '', vinculo: '', shirt_number: '' });
+      newRows.push({ name: '', identity_number: '', shirt_number: '', birth_date: '', vinculo: '', relationship_detail: '' });
     }
     
     setPasteRows(newRows);
@@ -299,9 +336,13 @@ export default function InscripcionPage() {
 
       const formattedPlayers = validRows.map(row => ({
         name: String(row.name).toUpperCase().trim(),
+        identityNumber: row.identity_number,
         shirtNumber: parseInt(row.shirt_number) || null,
-        birthYear: extractYearFromExcelValue(row.birth_year),
-        vinculo: String(row.vinculo).toUpperCase().trim()
+        birthYear: Number(row.birth_date.slice(0, 4)) || null,
+        birthDate: row.birth_date,
+        vinculo: String(row.vinculo).toUpperCase().trim(),
+        relationshipDetail: String(row.relationship_detail).toUpperCase().trim(),
+        strictRegistration: true,
       }));
 
       const result = await addRosterPlayers(slug, team.id, formattedPlayers);
@@ -310,10 +351,10 @@ export default function InscripcionPage() {
       toast.success(`Carga exitosa: ${result.data.inserted} atletas inscritos`, { id: toastId });
       fetchPlayers();
       setShowPasteModal(false);
-      setPasteRows(Array.from({ length: 10 }, () => ({ name: '', birth_year: '', vinculo: '', shirt_number: '' })));
+      setPasteRows(Array.from({ length: 10 }, () => ({ name: '', identity_number: '', shirt_number: '', birth_date: '', vinculo: '', relationship_detail: '' })));
     } catch (err: any) {
       console.error(err);
-      toast.error('Error al procesar los datos ingresados.', { id: toastId });
+      toast.error(err instanceof Error ? err.message : 'Error al procesar los datos ingresados.', { id: toastId });
     }
     setLoading(false);
   };
@@ -450,7 +491,7 @@ export default function InscripcionPage() {
       {/* --- MODAL CARGA MASIVA PRO --- */}
       {showPasteModal && (
         <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-3xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[95vh] animate-in zoom-in-95 duration-200 overflow-hidden">
+          <div className="bg-white rounded-3xl w-full max-w-7xl shadow-2xl flex flex-col max-h-[95dvh] animate-in zoom-in-95 duration-200 overflow-hidden">
             {/* Cabecera Carga Masiva */}
             <div className="flex items-center justify-between p-6 md:p-8 border-b border-slate-100 bg-white">
               <div>
@@ -468,15 +509,18 @@ export default function InscripcionPage() {
 
             {/* Cuerpo Tabla Paste */}
             <div className="flex-1 overflow-auto p-6 md:p-8 bg-slate-50/50">
+              <div className="mb-4 grid gap-3 sm:grid-cols-2"><button type="button" onClick={downloadTemplate} className="flex min-h-12 items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 text-[10px] font-black uppercase tracking-widest text-blue-700"><Download size={15} /> Descargar plantilla oficial</button><label className="flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 text-[10px] font-black uppercase tracking-widest text-white"><FileSpreadsheet size={15} /> Seleccionar archivo Excel<input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleRosterExcelFile} /></label></div>
               <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-[10px] text-slate-500 uppercase font-black tracking-[0.15em]">
                       <th className="p-4 w-16 text-center border-r border-slate-100">Fila</th>
                       <th className="p-4 border-r border-slate-100">Nombre Completo</th>
-                      <th className="p-4 border-r border-slate-100">Año Nac.</th>
+                      <th className="p-4 border-r border-slate-100">Identificación</th>
+                      <th className="p-4 border-r border-slate-100">Dorsal</th>
+                      <th className="p-4 border-r border-slate-100">Fecha de nacimiento</th>
                       <th className="p-4 border-r border-slate-100">Vínculo</th>
-                      <th className="p-4">Dorsal</th>
+                      <th className="p-4">Promoción / Estudiante</th>
                     </tr>
                   </thead>
                   {/* Se intercepta el evento onPaste directamente en el cuerpo de la tabla */}
@@ -498,27 +542,31 @@ export default function InscripcionPage() {
                         <td className="p-0 border-r border-slate-100">
                           <input 
                             type="text" 
-                            value={row.birth_year} 
-                            onChange={(e) => handleCellChange(index, 'birth_year', e.target.value)} 
+                            inputMode="numeric"
+                            value={row.identity_number}
+                            onChange={(e) => handleCellChange(index, 'identity_number', e.target.value.replace(/\D/g, ''))}
                             className="w-full p-4 text-xs font-bold text-slate-700 outline-none focus:bg-emerald-50 transition-colors bg-transparent" 
                           />
                         </td>
                         <td className="p-0 border-r border-slate-100">
                           <input 
                             type="text" 
-                            value={row.vinculo} 
-                            onChange={(e) => handleCellChange(index, 'vinculo', e.target.value)} 
+                            inputMode="numeric"
+                            value={row.shirt_number}
+                            onChange={(e) => handleCellChange(index, 'shirt_number', e.target.value)}
                             className="w-full p-4 text-xs font-bold text-slate-700 outline-none focus:bg-emerald-50 transition-colors bg-transparent" 
                           />
                         </td>
                         <td className="p-0">
                           <input 
                             type="text" 
-                            value={row.shirt_number} 
-                            onChange={(e) => handleCellChange(index, 'shirt_number', e.target.value)} 
+                            value={row.birth_date}
+                            onChange={(e) => handleCellChange(index, 'birth_date', normalizeRosterDate(e.target.value))}
                             className="w-full p-4 text-xs font-bold text-slate-700 outline-none focus:bg-emerald-50 transition-colors bg-transparent" 
                           />
                         </td>
+                        <td className="p-0 border-r border-slate-100"><select value={row.vinculo} onChange={(e) => handleCellChange(index, 'vinculo', e.target.value)} className="w-full p-4 text-xs font-bold text-slate-700 outline-none focus:bg-emerald-50 bg-transparent"><option value="">Seleccionar</option><option value="PADRE DE FAMILIA">PADRE DE FAMILIA</option><option value="EX-ALUMNO">EX-ALUMNO</option><option value="COLABORADOR">COLABORADOR</option></select></td>
+                        <td className="p-0"><input type="text" value={row.relationship_detail} onChange={(e) => handleCellChange(index, 'relationship_detail', e.target.value.toUpperCase())} placeholder={row.vinculo === 'EX-ALUMNO' ? 'Año de promoción' : row.vinculo === 'PADRE DE FAMILIA' ? 'Nombre del estudiante' : ''} className="w-full p-4 text-xs font-bold text-slate-700 outline-none focus:bg-emerald-50 bg-transparent" /></td>
                       </tr>
                     ))}
                   </tbody>
@@ -526,7 +574,7 @@ export default function InscripcionPage() {
               </div>
               
               <button 
-                onClick={() => setPasteRows([...pasteRows, ...Array.from({ length: 10 }, () => ({ name: '', birth_year: '', vinculo: '', shirt_number: '' }))])} 
+                onClick={() => setPasteRows([...pasteRows, ...Array.from({ length: 10 }, () => ({ name: '', identity_number: '', shirt_number: '', birth_date: '', vinculo: '', relationship_detail: '' }))])}
                 className="w-full mt-6 p-4 border-2 border-dashed border-slate-200 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 hover:bg-white hover:border-slate-300 hover:text-slate-600 transition-all flex items-center justify-center gap-2"
               >
                 <Plus size={14} /> Añadir 10 filas más
@@ -536,7 +584,7 @@ export default function InscripcionPage() {
             {/* Footer Carga Masiva */}
             <div className="p-6 md:p-8 border-t border-slate-100 bg-white flex flex-col sm:flex-row justify-between gap-4">
               <button 
-                onClick={() => setPasteRows(Array.from({ length: 10 }, () => ({ name: '', birth_year: '', vinculo: '', shirt_number: '' })))} 
+                onClick={() => setPasteRows(Array.from({ length: 10 }, () => ({ name: '', identity_number: '', shirt_number: '', birth_date: '', vinculo: '', relationship_detail: '' })))}
                 className="px-8 py-4 bg-slate-50 text-slate-500 rounded-2xl font-black uppercase tracking-widest text-[10px] hover:bg-slate-100 hover:text-slate-700 transition-colors flex items-center justify-center gap-2"
               >
                 <Eraser size={16} /> Limpiar Todo
