@@ -14,6 +14,8 @@ import WalkoverModal from './modals/WalkoverModal';
 import MatchSummaryModal from './modals/MatchSummaryModal';
 import PenaltyShootout from './PenaltyShootout';
 import { applyFootballWalkover, changeMatchPeriod, finishFootballMatch, getFootballMatchRoster, recordFootballMatchEvent, resetFootballTimer, startLiveMatch } from '../actions';
+import { DEMO_SLUG } from '@/app/lib/demo/config';
+import { applyDemoWalkover, changeDemoMatchPeriod, finishDemoFootballMatch, getDemoFootballRoster, recordDemoFootballEvent, startDemoFootballMatch } from '@/app/lib/demo/actions';
 
 interface MesaFutbolProps {
   match: any;
@@ -24,6 +26,7 @@ interface MesaFutbolProps {
 }
 
 export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate, slug }: MesaFutbolProps) {
+  const isDemo = slug === DEMO_SLUG;
   const [homeScore, setHomeScore] = useState(match.home_score || 0);
   const [awayScore, setAwayScore] = useState(match.away_score || 0);
   const [currentPeriod, setCurrentPeriod] = useState(match.current_period || '1T');
@@ -32,7 +35,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   const [homeRoster, setHomeRoster] = useState<any[]>([]);
   const [awayRoster, setAwayRoster] = useState<any[]>([]);
   const [liveEvents, setLiveEvents] = useState<any[]>([]);
-  const [suspendedPlayers, setSuspendedPlayers] = useState<Record<string, boolean>>({});
+  const [suspendedPlayers, setSuspendedPlayers] = useState<Record<string, boolean | string>>({});
 
   const [showStartingLineupModal, setShowStartingLineupModal] = useState(false);
   const [homeStartingLineup, setHomeStartingLineup] = useState<string[]>([]);
@@ -68,7 +71,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   useEffect(() => {
     async function loadMatchData() {
       try {
-        const roster = await getFootballMatchRoster(slug, match.id);
+        const roster = isDemo ? getDemoFootballRoster(match.id) : await getFootballMatchRoster(slug, match.id);
         setHomeRoster(roster.home || []);
         setAwayRoster(roster.away || []);
         setSuspendedPlayers(categoryData?.tournaments?.fair_play_enabled ? roster.suspendedPlayers : {});
@@ -111,7 +114,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
     setLoading(true);
     const toastId = toast.loading('Iniciando partido rápido...');
     try {
-      await startLiveMatch({ slug, matchId: match.id, period: '1T' });
+      if (isDemo) startDemoFootballMatch(match.id); else await startLiveMatch({ slug, matchId: match.id, period: '1T' });
       setIsMatchLive(true);
       setCurrentPeriod('1T');
       setShowStartingLineupModal(false);
@@ -127,7 +130,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
     setLoading(true);
     const toastId = toast.loading('Registrando acta...');
     try {
-      await startLiveMatch({
+      const startInput = {
         slug,
         matchId: match.id,
         period: '1T',
@@ -135,7 +138,8 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
           ...homeStartingLineup.map((pid) => ({ playerId: pid, teamId: match.home_team.id, period: '0T' })),
           ...awayStartingLineup.map((pid) => ({ playerId: pid, teamId: match.away_team.id, period: '0T' })),
         ],
-      });
+      };
+      if (isDemo) startDemoFootballMatch(match.id, startInput.lineups); else await startLiveMatch(startInput);
       await fetchLiveEvents();
       setIsMatchLive(true); 
       setCurrentPeriod('1T'); 
@@ -164,7 +168,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
     setLoading(true);
     const toastId = toast.loading("Procesando W.O...");
     try {
-      await applyFootballWalkover({
+      if (isDemo) applyDemoWalkover(match.id, absentTeamId); else await applyFootballWalkover({
         slug,
         matchId: match.id,
         absentTeamId,
@@ -186,11 +190,11 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   const executePeriodChange = async () => {
     const period = showPeriodConfirm.targetPeriod;
     setCurrentPeriod(period);
-    await changeMatchPeriod({ slug, matchId: match.id, period });
+    if (isDemo) changeDemoMatchPeriod(match.id, period); else await changeMatchPeriod({ slug, matchId: match.id, period });
     setShowPeriodConfirm({ isOpen: false, targetPeriod: '' });
     
     if (period !== 'PEN') {
-       await resetFootballTimer({ slug, matchId: match.id });
+       if (!isDemo) await resetFootballTimer({ slug, matchId: match.id });
        toast.success(`Preparando ${period}.`);
        setShowPeriodStartOverlay(true);
     } else {
@@ -242,17 +246,18 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
         if (!subOutPlayer) { setSubOutPlayer(playerId); toast.success('Seleccione quién ENTRA.'); return; } 
         else {
           try {
-            await recordFootballMatchEvent({
+            const substitutionInput = {
               slug,
               matchId: match.id,
               teamId,
               playerId,
-              eventType: 'SUB',
+              eventType: 'SUB' as const,
               period: currentPeriod,
               matchSecond: exactSecond,
               minuteRecord,
               subOutPlayerId: subOutPlayer,
-            });
+            };
+            if (isDemo) recordDemoFootballEvent(substitutionInput); else await recordFootballMatchEvent(substitutionInput);
 
             if (team === 'HOME') setHomeStartingLineup(prev => prev.map(id => id === subOutPlayer ? playerId : id)); else setAwayStartingLineup(prev => prev.map(id => id === subOutPlayer ? playerId : id));
             toast.success('Sustitución', { icon: '🔄' }); setScoringAction(null); setSubOutPlayer(null); await fetchLiveEvents(); return;
@@ -264,19 +269,20 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
       }
 
       try {
-        const result = await recordFootballMatchEvent({
+        const eventInput = {
           slug,
           matchId: match.id,
           teamId,
           playerId: playerId || null,
-          eventType: type === 'SCORE' ? (points < 0 ? 'SCORE_ADJUST' : 'GOAL') : type,
+          eventType: (type === 'SCORE' ? (points < 0 ? 'SCORE_ADJUST' : 'GOAL') : type) as 'RED' | 'YELLOW' | 'GOAL' | 'SCORE_ADJUST' | 'SUB' | 'ASSIST' | 'MVP',
           period: currentPeriod,
           matchSecond: exactSecond,
           minuteRecord,
           scoreDelta: type === 'SCORE' ? points : 0,
           fairPlayDelta: fairPlayPenalty,
           generatedRed: Boolean(generatedRedEvent),
-        });
+        };
+        const result = isDemo ? recordDemoFootballEvent(eventInput) : await recordFootballMatchEvent(eventInput);
 
         if (typeof result?.home_score === 'number') setHomeScore(result.home_score);
         if (typeof result?.away_score === 'number') setAwayScore(result.away_score);
@@ -311,7 +317,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   const confirmFinishMatch = async () => {
     setShowSummaryModal(false); setLoading(true); const toastId = toast.loading('Cerrando acta...');
     try {
-      await finishFootballMatch({
+      if (isDemo) finishDemoFootballMatch(match.id, homeScore, awayScore, currentPeriod); else await finishFootballMatch({
         slug,
         matchId: match.id,
         homeScore,

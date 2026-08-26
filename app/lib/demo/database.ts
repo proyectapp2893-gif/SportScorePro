@@ -76,6 +76,12 @@ function buildDemoCompetition() {
     if (!match || !player) return;
     matchEvents.push({ id: `demo-event-${matchEvents.length + 1}`, match_id: match.id, team_id: team.id, player_id: player.id, event_type: 'YELLOW', period: '2T', minute_record: `${42 + teamIndex}'`, fine_status: teamIndex % 3 === 0 ? 'PAID' : 'UNPAID', fine_amount: tournament.fine_yellow_amount, created_at: new Date(`${match.matchdays.scheduled_date}T${match.scheduled_time}:00`).toISOString(), players: { name: player.name, shirt_number: player.shirt_number, teams: team }, teams: team, matches: match });
   });
+  [teams[0], teams[5]].forEach((team, index) => {
+    const match = matches.find((item) => item.status === 'FINISHED' && (item.home_team_id === team.id || item.away_team_id === team.id));
+    const player = players.find((item) => item.team_id === team.id && item.shirt_number === 8) || players.find((item) => item.team_id === team.id);
+    if (!match || !player || matchEvents.some((event) => event.team_id === team.id && event.player_id === player.id && event.event_type === 'RED')) return;
+    matchEvents.push({ id: `demo-event-${matchEvents.length + 1}`, match_id: match.id, team_id: team.id, player_id: player.id, event_type: 'RED', period: '2T', minute_record: `${70 + index * 5}'`, fine_status: 'UNPAID', fine_amount: tournament.fine_red_amount, created_at: new Date(`${match.matchdays.scheduled_date}T${match.scheduled_time}:00`).toISOString(), players: { name: player.name, shirt_number: player.shirt_number, teams: team }, teams: team, matches: match });
+  });
   return { matchdays, matches, matchEvents };
 }
 

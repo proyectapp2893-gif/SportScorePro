@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../../supabase'; 
 import { autoStopFootballTimer, endFootballTimer, pauseFootballTimer, resetFootballTimer, startFootballTimer } from '../../admin/mesa/actions';
 import { confirmDialog } from '@/app/components/AppDialog';
+import { DEMO_SLUG } from '@/app/lib/demo/config';
 
 interface TimerState {
   is_timer_running: boolean;
@@ -12,6 +13,7 @@ interface TimerState {
 }
 
 export function useMatchTimer(slug: string, matchId: string, initialData: TimerState, isAdmin: boolean = false) {
+  const isDemo = slug === DEMO_SLUG;
   const [timerState, setTimerState] = useState<TimerState>(initialData);
   const [displaySeconds, setDisplaySeconds] = useState(initialData.timer_accumulated_seconds || 0);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -30,7 +32,7 @@ export function useMatchTimer(slug: string, matchId: string, initialData: TimerS
           clearInterval(intervalRef.current!);
           setDisplaySeconds(timerState.match_duration_seconds || 2400);
 
-          if (isAdmin) {
+          if (isAdmin && !isDemo) {
             autoStopFootballTimer({ slug, matchId, duration: timerState.match_duration_seconds || 2400 }).catch(console.error);
           }
         } else {
@@ -86,7 +88,8 @@ export function useMatchTimer(slug: string, matchId: string, initialData: TimerS
         match_phase: 'REGULAR',
       };
       setTimerState(currentTimerState);
-      await resetFootballTimer({ slug, matchId });
+      if (isDemo) await supabase.from('matches').update({ is_timer_running: false, timer_start_time: null, timer_accumulated_seconds: 0, match_phase: 'REGULAR' }).eq('id', matchId);
+      else await resetFootballTimer({ slug, matchId });
     }
 
     const currentlyRunning = currentTimerState.is_timer_running;
@@ -97,8 +100,15 @@ export function useMatchTimer(slug: string, matchId: string, initialData: TimerS
       timer_start_time: !currentlyRunning ? new Date().toISOString() : prev.timer_start_time
     }));
 
-    const timerAction = currentlyRunning ? pauseFootballTimer : startFootballTimer;
-    timerAction({ slug, matchId }).catch((error) => console.error('Fallo en acción de cronómetro:', error));
+    if (isDemo) {
+      const accumulated = currentlyRunning && currentTimerState.timer_start_time
+        ? currentTimerState.timer_accumulated_seconds + Math.max(0, Math.floor((Date.now() - new Date(currentTimerState.timer_start_time).getTime()) / 1000))
+        : currentTimerState.timer_accumulated_seconds;
+      await supabase.from('matches').update({ is_timer_running: !currentlyRunning, timer_start_time: currentlyRunning ? null : new Date().toISOString(), timer_accumulated_seconds: accumulated }).eq('id', matchId);
+    } else {
+      const timerAction = currentlyRunning ? pauseFootballTimer : startFootballTimer;
+      timerAction({ slug, matchId }).catch((error) => console.error('Fallo en acción de cronómetro:', error));
+    }
   };
 
   const endMatch = async () => {
@@ -108,7 +118,8 @@ export function useMatchTimer(slug: string, matchId: string, initialData: TimerS
       confirmLabel: 'Finalizar',
     })) {
       setTimerState(prev => ({ ...prev, is_timer_running: false, match_phase: 'FINISHED' }));
-      await endFootballTimer({ slug, matchId });
+      if (isDemo) await supabase.from('matches').update({ is_timer_running: false, match_phase: 'FINISHED' }).eq('id', matchId);
+      else await endFootballTimer({ slug, matchId });
     }
   };
 
@@ -125,7 +136,8 @@ export function useMatchTimer(slug: string, matchId: string, initialData: TimerS
         timer_start_time: null,
         timer_accumulated_seconds: 0
       }));
-      await resetFootballTimer({ slug, matchId });
+      if (isDemo) await supabase.from('matches').update({ is_timer_running: false, timer_start_time: null, timer_accumulated_seconds: 0 }).eq('id', matchId);
+      else await resetFootballTimer({ slug, matchId });
     }
   };
 

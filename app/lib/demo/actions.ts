@@ -137,3 +137,33 @@ export function addDemoDocument(playerId: string, documentType: string, filename
 export function updateDemoTeamGroup(teamId: string, groupName: string) { const db = loadDemoDatabase(); const team = db.teams.find((item) => item.id === teamId); if (team) team.group_name = groupName; saveDemoDatabase(db); return { success: true, error: undefined }; }
 export function randomizeDemoGroups(categoryId: string, count: number) { const db = loadDemoDatabase(); const assignments = db.teams.filter((team) => team.category_id === categoryId).map((team, index) => ({ teamId: team.id, groupName: String.fromCharCode(65 + (index % count)) })); assignments.forEach(({ teamId, groupName }) => { const team = db.teams.find((item) => item.id === teamId); if (team) team.group_name = groupName; }); saveDemoDatabase(db); return { success: true, assignments, error: undefined }; }
 export function setDemoFixtureVisibility(categoryId: string, visible: boolean) { const db = loadDemoDatabase(); const category = db.categories.find((item) => item.id === categoryId); const tournament = db.tournaments.find((item) => item.id === category?.tournament_id); if (tournament) tournament.fixture_visible_to_delegates = visible; db.categories.filter((item) => item.tournament_id === tournament?.id).forEach((item) => { item.tournaments = tournament; }); saveDemoDatabase(db); return { success: true, error: undefined }; }
+
+export function getDemoFootballRoster(matchId: string) {
+  const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === matchId);
+  if (!match) throw new Error('Partido demo no encontrado.');
+  const home = db.players.filter((player) => player.team_id === match.home_team_id);
+  const away = db.players.filter((player) => player.team_id === match.away_team_id);
+  const suspendedPlayers: Record<string, string> = {};
+  db.match_events.filter((event) => event.event_type === 'RED').forEach((event) => { suspendedPlayers[event.player_id] = event.fine_status === 'PAID' ? 'TARJETA ROJA' : 'ROJA · MULTA PENDIENTE'; });
+  return { home, away, suspendedPlayers };
+}
+
+export function startDemoFootballMatch(matchId: string, lineups: Array<{ playerId: string; teamId: string; period: string }> = []) {
+  const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === matchId); if (!match) throw new Error('Partido demo no encontrado.');
+  Object.assign(match, { status: 'LIVE', current_period: '1T', is_timer_running: true, timer_start_time: new Date().toISOString(), timer_accumulated_seconds: 0, match_phase: 'REGULAR' });
+  lineups.forEach((lineup) => { const player = db.players.find((item) => item.id === lineup.playerId); db.match_events.push({ id: id('demo-event'), match_id: matchId, team_id: lineup.teamId, player_id: lineup.playerId, event_type: 'STARTING_LINEUP', period: lineup.period, created_at: new Date().toISOString(), players: player ? { name: player.name, shirt_number: player.shirt_number, teams: player.teams } : null, matches: match }); });
+  saveDemoDatabase(db); return { success: true };
+}
+
+export function recordDemoFootballEvent(input: any) {
+  const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === input.matchId); if (!match) throw new Error('Partido demo no encontrado.');
+  const player = db.players.find((item) => item.id === input.playerId); const team = db.teams.find((item) => item.id === input.teamId); const tournamentRow = db.tournaments.find((item) => item.id === team?.categories?.tournament_id) || db.tournaments[0];
+  const eventType = input.eventType; const isCard = eventType === 'YELLOW' || eventType === 'RED';
+  db.match_events.push({ id: id('demo-event'), match_id: input.matchId, team_id: input.teamId, player_id: input.playerId || null, event_type: eventType, period: input.period, minute_record: input.minuteRecord ? `${input.minuteRecord}'` : null, match_second: input.matchSecond, fine_status: isCard ? 'UNPAID' : 'NONE', fine_amount: eventType === 'RED' ? tournamentRow?.fine_red_amount || 0 : eventType === 'YELLOW' ? tournamentRow?.fine_yellow_amount || 0 : 0, created_at: new Date().toISOString(), players: player ? { name: player.name, shirt_number: player.shirt_number, teams: team } : null, teams: team, matches: match });
+  if (eventType === 'GOAL' || eventType === 'SCORE_ADJUST') { const field = input.teamId === match.home_team_id ? 'home_score' : 'away_score'; match[field] = Math.max(0, Number(match[field] || 0) + Number(input.scoreDelta || 0)); }
+  saveDemoDatabase(db); return { success: true, home_score: match.home_score || 0, away_score: match.away_score || 0 };
+}
+
+export function changeDemoMatchPeriod(matchId: string, period: string) { const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === matchId); if (match) match.current_period = period; saveDemoDatabase(db); return { success: true }; }
+export function finishDemoFootballMatch(matchId: string, homeScore: number, awayScore: number, currentPeriod: string) { const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === matchId); if (match) Object.assign(match, { status: 'FINISHED', home_score: homeScore, away_score: awayScore, current_period: currentPeriod, is_timer_running: false, timer_start_time: null, match_phase: 'FINISHED' }); saveDemoDatabase(db); return { success: true }; }
+export function applyDemoWalkover(matchId: string, absentTeamId: string) { const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === matchId); if (match) Object.assign(match, { status: 'FINISHED', home_score: absentTeamId === match.home_team_id ? 0 : 3, away_score: absentTeamId === match.away_team_id ? 0 : 3, is_timer_running: false }); saveDemoDatabase(db); return { success: true }; }

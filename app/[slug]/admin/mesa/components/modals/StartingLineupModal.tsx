@@ -8,7 +8,7 @@ interface StartingLineupModalProps {
   minPlayers: number;
   homeRoster: any[];
   awayRoster: any[];
-  suspendedPlayers: Record<string, boolean>;
+  suspendedPlayers: Record<string, boolean | string>;
   homeStartingLineup: string[];
   awayStartingLineup: string[];
   toggleStartingPlayer: (team: 'HOME' | 'AWAY', playerId: string) => void;
@@ -55,7 +55,7 @@ export default function StartingLineupModal({
             const isStarter = lineup.includes(player.id);
             const isSuspended = suspendedPlayers[player.id];
             return (
-              <button key={player.id} disabled={isSuspended} onClick={() => toggleStartingPlayer(team, player.id)} className={`w-full flex items-center justify-between p-3 px-5 rounded-2xl border transition-all text-left ${isSuspended ? 'bg-slate-100 border-slate-300 opacity-60 cursor-not-allowed' : isStarter ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-slate-700 hover:border-blue-400'}`}>
+              <button key={player.id} disabled={Boolean(isSuspended)} onClick={() => toggleStartingPlayer(team, player.id)} className={`w-full flex items-center justify-between p-3 px-5 rounded-2xl border transition-all text-left ${isSuspended ? 'bg-slate-100 border-slate-300 opacity-60 cursor-not-allowed' : isStarter ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-slate-700 hover:border-blue-400'}`}>
                 <div className="flex items-center gap-4">
                   <span className={`text-xl font-black ${isStarter ? 'text-blue-200' : 'text-slate-400'} w-8`}>{player.shirt_number || '-'}</span>
                   <div className="flex flex-col">
@@ -63,7 +63,7 @@ export default function StartingLineupModal({
                     {player.date_of_birth && <span className={`text-[9px] uppercase font-bold tracking-widest mt-0.5 ${isStarter ? 'text-blue-300' : 'text-slate-400'}`}>{calculateAge(player.date_of_birth)}</span>}
                   </div>
                 </div>
-                {isSuspended ? <div className="bg-slate-800 text-white p-1.5 rounded-lg flex gap-1 items-center text-[9px] font-black tracking-widest"><Lock size={12}/> MULTA</div> : 
+                {isSuspended ? <div className="bg-red-700 text-white p-1.5 rounded-lg flex gap-1 items-center text-[9px] font-black tracking-widest"><Lock size={12}/> {typeof isSuspended === 'string' ? isSuspended : 'NO HABILITADO'}</div> :
                 <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${isStarter ? 'bg-white border-white text-blue-600' : 'border-slate-300'}`}>{isStarter && <CheckCircle2 size={16}/>}</div>}
               </button>
             );
