@@ -6,7 +6,7 @@ type Row = Record<string, any>;
 type Database = Record<string, Row[]>;
 
 const sport = { id: 'demo-sport', name: 'FÚTBOL', scoring_system: 'GOALS' };
-const tournament = { id: 'demo-tournament', client_id: 'demo-client', name: 'TORNEO DEMOSTRATIVO', tournament_format: 'ROUND_ROBIN', is_active: true, created_at: '2026-08-26T12:00:00Z', schedule_dates: ['2026-09-05'], schedule_time_slots: ['14:00', '16:00'], available_venues: ['Cancha 1', 'Cancha 2'], fixture_visible_to_delegates: true, fair_play_enabled: true, fp_starting_points: 100, fp_yellow_deduction: 1, fp_red_deduction: 3, fine_yellow_amount: 0, fine_red_amount: 0 };
+const tournament = { id: 'demo-tournament', client_id: 'demo-client', name: 'TORNEO DEMOSTRATIVO', tournament_format: 'ROUND_ROBIN', is_active: true, created_at: '2026-08-26T12:00:00Z', schedule_dates: ['2026-09-05'], schedule_time_slots: ['14:00', '16:00'], available_venues: ['Cancha 1', 'Cancha 2'], fixture_visible_to_delegates: true, fair_play_enabled: true, fp_starting_points: 100, fp_yellow_deduction: 1, fp_red_deduction: 3, fine_yellow_amount: 30000, fine_red_amount: 80000 };
 const category = { id: 'demo-category', tournament_id: tournament.id, name: 'CATEGORÍA DEMO', gender: 'MASCULINO', sport_id: sport.id, sports: sport, tournaments: tournament, registration_open: true, min_roster_size: 5, max_roster_size: 25, schedule_dates: tournament.schedule_dates };
 const teamNames = ['EQUIPO AURORA', 'EQUIPO HORIZONTE', 'EQUIPO CENTRAL', 'EQUIPO CAPITAL', 'EQUIPO NORTE', 'EQUIPO SUR', 'EQUIPO ÉLITE', 'EQUIPO UNIÓN', 'EQUIPO VANGUARDIA'];
 const schools = teamNames.map((name, index) => ({ id: `demo-school-${index + 1}`, client_id: 'demo-client', name, logo_url: null }));
@@ -56,12 +56,14 @@ function buildDemoCompetition() {
       if (isFinished || isLive) {
         const addEvent = (team: Row, eventType: string, sequence: number) => {
           const roster = players.filter((player) => player.team_id === team.id); const player = roster[(roundIndex + pairIndex + sequence) % roster.length];
-          matchEvents.push({ id: `demo-event-${matchEvents.length + 1}`, match_id: match.id, team_id: team.id, player_id: player.id, event_type: eventType, period: sequence % 2 ? '2T' : '1T', minute_record: `${12 + sequence * 7}'`, created_at: new Date(`${matchday.scheduled_date}T${match.scheduled_time}:00`).toISOString(), players: { name: player.name, shirt_number: player.shirt_number }, teams: team, matches: match });
+          const isCard = eventType === 'YELLOW' || eventType === 'RED';
+          const fineStatus = isCard ? (matchEvents.filter((event) => event.event_type === 'YELLOW' || event.event_type === 'RED').length % 3 === 0 ? 'PAID' : 'UNPAID') : 'NONE';
+          matchEvents.push({ id: `demo-event-${matchEvents.length + 1}`, match_id: match.id, team_id: team.id, player_id: player.id, event_type: eventType, period: sequence % 2 ? '2T' : '1T', minute_record: `${12 + sequence * 7}'`, fine_status: fineStatus, fine_amount: eventType === 'RED' ? tournament.fine_red_amount : eventType === 'YELLOW' ? tournament.fine_yellow_amount : 0, created_at: new Date(`${matchday.scheduled_date}T${match.scheduled_time}:00`).toISOString(), players: { name: player.name, shirt_number: player.shirt_number, teams: team }, teams: team, matches: match });
         };
         for (let goal = 0; goal < Number(homeScore); goal += 1) addEvent(home, 'GOAL', goal);
         for (let goal = 0; goal < Number(awayScore); goal += 1) addEvent(away, 'GOAL', goal + 2);
         if ((roundIndex + pairIndex) % 2 === 0) addEvent(away, 'YELLOW', 5);
-        if (roundIndex === 2 && pairIndex === 1) addEvent(home, 'RED', 6);
+        if ((roundIndex === 1 && pairIndex === 2) || (roundIndex === 2 && pairIndex === 1) || (roundIndex === 3 && pairIndex === 0)) addEvent(home, 'RED', 6);
       }
     }
     const fixed = rotating[0]; const tail = rotating.slice(1); tail.unshift(tail.pop()!); rotating.splice(0, rotating.length, fixed, ...tail);
