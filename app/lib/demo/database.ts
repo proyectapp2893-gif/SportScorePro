@@ -68,6 +68,14 @@ function buildDemoCompetition() {
     }
     const fixed = rotating[0]; const tail = rotating.slice(1); tail.unshift(tail.pop()!); rotating.splice(0, rotating.length, fixed, ...tail);
   }
+  teams.forEach((team, teamIndex) => {
+    const hasYellow = matchEvents.some((event) => event.team_id === team.id && event.event_type === 'YELLOW');
+    if (hasYellow) return;
+    const match = matches.find((item) => item.status === 'FINISHED' && (item.home_team_id === team.id || item.away_team_id === team.id));
+    const player = players.find((item) => item.team_id === team.id);
+    if (!match || !player) return;
+    matchEvents.push({ id: `demo-event-${matchEvents.length + 1}`, match_id: match.id, team_id: team.id, player_id: player.id, event_type: 'YELLOW', period: '2T', minute_record: `${42 + teamIndex}'`, fine_status: teamIndex % 3 === 0 ? 'PAID' : 'UNPAID', fine_amount: tournament.fine_yellow_amount, created_at: new Date(`${match.matchdays.scheduled_date}T${match.scheduled_time}:00`).toISOString(), players: { name: player.name, shirt_number: player.shirt_number, teams: team }, teams: team, matches: match });
+  });
   return { matchdays, matches, matchEvents };
 }
 
