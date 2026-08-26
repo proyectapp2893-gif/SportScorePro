@@ -11,13 +11,69 @@ const category = { id: 'demo-category', tournament_id: tournament.id, name: 'CAT
 const teamNames = ['EQUIPO AURORA', 'EQUIPO HORIZONTE', 'EQUIPO CENTRAL', 'EQUIPO CAPITAL', 'EQUIPO NORTE', 'EQUIPO SUR', 'EQUIPO ÉLITE', 'EQUIPO UNIÓN', 'EQUIPO VANGUARDIA'];
 const schools = teamNames.map((name, index) => ({ id: `demo-school-${index + 1}`, client_id: 'demo-client', name, logo_url: null }));
 const teams = teamNames.map((name, index) => ({ id: `demo-team-${index + 1}`, category_id: category.id, school_id: schools[index].id, name, schools: schools[index], categories: category }));
-const players = [
-  { id: 'demo-player-1', team_id: teams[0].id, name: 'JUGADOR DEMO 01', identity_number: '10000001', shirt_number: 10, birth_year: 1985, birth_date: '1985-05-20', vinculo: 'EX-ALUMNO', relationship_detail: '2003', player_documents: [] },
-  { id: 'demo-player-2', team_id: teams[0].id, name: 'JUGADOR DEMO 02', identity_number: '10000002', shirt_number: 7, birth_year: 1983, birth_date: '1983-08-14', vinculo: 'PADRE DE FAMILIA', relationship_detail: 'ESTUDIANTE DEMO', player_documents: [] },
-];
+const players = teams.flatMap((team, teamIndex) => Array.from({ length: 8 }, (_, playerIndex) => {
+  const number = playerIndex + 1;
+  return {
+    id: `demo-player-${teamIndex + 1}-${number}`,
+    team_id: team.id,
+    name: `JUGADOR ${teamNames[teamIndex].replace('EQUIPO ', '')} ${String(number).padStart(2, '0')}`,
+    identity_number: `${11000000 + teamIndex * 100 + number}`,
+    shirt_number: number === 1 ? 1 : number + 6,
+    birth_year: 1980 + ((teamIndex + playerIndex) % 12),
+    birth_date: `${1980 + ((teamIndex + playerIndex) % 12)}-${String((playerIndex % 9) + 1).padStart(2, '0')}-15`,
+    vinculo: playerIndex % 2 ? 'PADRE DE FAMILIA' : 'EX-ALUMNO',
+    relationship_detail: playerIndex % 2 ? `ESTUDIANTE DEMO ${number}` : `${1998 + playerIndex}`,
+    teams: team,
+    player_documents: [],
+  };
+}));
+
+function buildDemoCompetition() {
+  const rotating: Array<(typeof teams)[number] | null> = [...teams, null];
+  const matchdays: Row[] = [];
+  const matches: Row[] = [];
+  const matchEvents: Row[] = [];
+  for (let roundIndex = 0; roundIndex < rotating.length - 1; roundIndex += 1) {
+    const date = new Date('2026-09-05T12:00:00'); date.setDate(date.getDate() + roundIndex * 7);
+    const matchday = { id: `demo-matchday-${roundIndex + 1}`, category_id: category.id, round_number: roundIndex + 1, scheduled_date: date.toISOString().slice(0, 10), categories: category };
+    matchdays.push(matchday);
+    for (let pairIndex = 0; pairIndex < rotating.length / 2; pairIndex += 1) {
+      const first = rotating[pairIndex]; const second = rotating[rotating.length - 1 - pairIndex];
+      const matchId = `demo-match-${roundIndex + 1}-${pairIndex + 1}`;
+      if (!first || !second) {
+        const resting = first || second;
+        matches.push({ id: matchId, matchday_id: matchday.id, home_team_id: resting?.id, away_team_id: null, home_team: resting, away_team: null, matchdays: matchday, status: 'BYE', venue: 'Descansa', scheduled_time: null, home_score: null, away_score: null });
+        continue;
+      }
+      const home = (roundIndex + pairIndex) % 2 === 0 ? first : second;
+      const away = home.id === first.id ? second : first;
+      const isFinished = roundIndex < 3;
+      const isLive = roundIndex === 3 && pairIndex === 0;
+      const homeScore = isFinished ? (roundIndex + pairIndex + 1) % 4 : isLive ? 1 : null;
+      const awayScore = isFinished ? (roundIndex * 2 + pairIndex) % 3 : isLive ? 1 : null;
+      const match = { id: matchId, matchday_id: matchday.id, home_team_id: home.id, away_team_id: away.id, home_team: home, away_team: away, matchdays: matchday, status: isFinished ? 'FINISHED' : isLive ? 'LIVE' : 'SCHEDULED', venue: `Cancha ${(pairIndex % 2) + 1}`, scheduled_time: pairIndex < 2 ? '14:00' : '16:00', home_score: homeScore, away_score: awayScore, current_period: isLive ? '2T' : null };
+      matches.push(match);
+      if (isFinished || isLive) {
+        const addEvent = (team: Row, eventType: string, sequence: number) => {
+          const roster = players.filter((player) => player.team_id === team.id); const player = roster[(roundIndex + pairIndex + sequence) % roster.length];
+          matchEvents.push({ id: `demo-event-${matchEvents.length + 1}`, match_id: match.id, team_id: team.id, player_id: player.id, event_type: eventType, period: sequence % 2 ? '2T' : '1T', minute_record: `${12 + sequence * 7}'`, created_at: new Date(`${matchday.scheduled_date}T${match.scheduled_time}:00`).toISOString(), players: { name: player.name, shirt_number: player.shirt_number }, teams: team, matches: match });
+        };
+        for (let goal = 0; goal < Number(homeScore); goal += 1) addEvent(home, 'GOAL', goal);
+        for (let goal = 0; goal < Number(awayScore); goal += 1) addEvent(away, 'GOAL', goal + 2);
+        if ((roundIndex + pairIndex) % 2 === 0) addEvent(away, 'YELLOW', 5);
+        if (roundIndex === 2 && pairIndex === 1) addEvent(home, 'RED', 6);
+      }
+    }
+    const fixed = rotating[0]; const tail = rotating.slice(1); tail.unshift(tail.pop()!); rotating.splice(0, rotating.length, fixed, ...tail);
+  }
+  return { matchdays, matches, matchEvents };
+}
 
 export function initialDemoDatabase(): Database {
-  return { clients: [{ id: 'demo-client', name: 'INSTITUCIÓN DEMOSTRATIVA', slug: 'experiencia-7c9f3a', logo_url: null, is_active: true }], tournaments: [tournament], sports: [sport], categories: [category], schools, teams, players, matchdays: [], matches: [], match_events: [], player_documents: [], team_staff: [], delegate_users: [{ id: 'demo-delegate', client_id: 'demo-client', school_id: schools[0].id, name: 'DELEGADO DEMO', username: 'demo', is_active: true, must_change_password: false }], delegate_team_access: [{ delegate_user_id: 'demo-delegate', team_id: teams[0].id, teams: teams[0] }] };
+  const competition = buildDemoCompetition();
+  const scorekeepers = ['JUEZ DEMO NORTE', 'JUEZ DEMO CENTRAL', 'JUEZ DEMO SUR'].map((name, index) => ({ id: `demo-scorekeeper-${index + 1}`, client_id: 'demo-client', name, role: index === 2 ? 'PLANILLERO' : 'JUEZ', username: `juez.demo${index + 1}`, assigned_password: 'demo1234', must_change_password: false, is_active: true, created_at: '2026-08-26T12:00:00Z' }));
+  const scorekeeperAccess = competition.matches.filter((match) => match.status !== 'BYE').slice(0, 9).map((match, index) => ({ scorekeeper_user_id: scorekeepers[index % scorekeepers.length].id, match_id: match.id, matches: match }));
+  return { clients: [{ id: 'demo-client', name: 'INSTITUCIÓN DEMOSTRATIVA', slug: 'experiencia-7c9f3a', logo_url: null, is_active: true }], tournaments: [tournament], sports: [sport], categories: [category], schools, teams, players, matchdays: competition.matchdays, matches: competition.matches, match_events: competition.matchEvents, player_documents: [], team_staff: teams.flatMap((team, index) => [{ id: `demo-staff-${index + 1}`, team_id: team.id, role: 'ENTRENADOR', full_name: `ENTRENADOR DEMO ${index + 1}` }]), scorekeeper_users: scorekeepers, scorekeeper_match_access: scorekeeperAccess, delegate_users: [{ id: 'demo-delegate', client_id: 'demo-client', school_id: schools[0].id, name: 'DELEGADO DEMO', username: 'demo', is_active: true, must_change_password: false }], delegate_team_access: teams.slice(0, 3).map((team) => ({ delegate_user_id: 'demo-delegate', team_id: team.id, teams: team })) };
 }
 
 export function loadDemoDatabase(): Database {
