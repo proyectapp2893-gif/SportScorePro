@@ -3,6 +3,7 @@ import { hasAdminSession } from '@/app/lib/auth';
 import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import { getClientIdBySlug } from '@/app/lib/tenant';
 import DelegadosClient from './DelegadosClient';
+import { DEMO_SLUG } from '@/app/lib/demo/config';
 
 async function loadDelegateRows(supabase: ReturnType<typeof createServerSupabaseAdminClient>, clientId: string) {
   const fullQuery = await supabase
@@ -119,6 +120,7 @@ async function loadCategories(supabase: ReturnType<typeof createServerSupabaseAd
 
 export default async function DelegadosPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
+  if (slug === DEMO_SLUG) return <DelegadosClient slug={slug} initialData={{ delegates: [{ id: 'demo-delegate', name: 'DELEGADO DEMO', username: 'demo', email: 'demo@ejemplo.local', whatsapp_phone: '', assigned_password: 'demo', must_change_password: false, is_active: true, created_at: new Date().toISOString(), schools: { id: 'demo-school-1', name: 'EQUIPO AURORA' }, delegate_team_access: [] }], schools: [{ id: 'demo-school-1', name: 'EQUIPO AURORA' }], teams: [{ id: 'demo-team-1', name: 'EQUIPO AURORA', school_id: 'demo-school-1', categories: { id: 'demo-category', name: 'CATEGORÍA DEMO', tournament_id: 'demo-tournament', tournaments: { id: 'demo-tournament', name: 'TORNEO DEMOSTRATIVO' } } }], tournaments: [{ id: 'demo-tournament', name: 'TORNEO DEMOSTRATIVO', created_at: new Date().toISOString() }], categories: [{ id: 'demo-category', name: 'CATEGORÍA DEMO', registration_open: true, tournaments: { id: 'demo-tournament', name: 'TORNEO DEMOSTRATIVO' }, sports: { id: 'demo-sport', name: 'FÚTBOL' } }], schemaReady: true }} />;
 
   if (!(await hasAdminSession(slug))) {
     redirect(`/${slug}/login`);

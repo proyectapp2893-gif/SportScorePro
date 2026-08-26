@@ -6,6 +6,8 @@ import Link from 'next/link';
 import { ArrowLeft, CalendarDays, Download, FileDown, Files, House, School } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { loadMatchSheets } from './actions';
+import { DEMO_SLUG } from '@/app/lib/demo/config';
+import { loadDemoDatabase } from '@/app/lib/demo/database';
 
 function phaseForRound(round: number) {
   if (round === 100 || round >= 201) return 'Fase 3 · Finales';
@@ -42,7 +44,15 @@ async function drawMatchSheet(pdf: any, match: any, category: any, addPage: bool
 export default function MatchSheetsPage() {
   const params = useParams(); const searchParams = useSearchParams(); const slug = params.slug as string; const categoryId = searchParams.get('cat') || '';
   const [data, setData] = useState<any>(null); const [loading, setLoading] = useState(true); const [phase, setPhase] = useState('Fase 1');
-  useEffect(() => { if (!categoryId) { setLoading(false); return; } loadMatchSheets(slug, categoryId).then((result) => { if (!result.success) toast.error(result.error); else setData(result.data); setLoading(false); }); }, [slug, categoryId]);
+  useEffect(() => {
+    if (!categoryId) { setLoading(false); return; }
+    if (slug === DEMO_SLUG) {
+      const db = loadDemoDatabase(); const category = db.categories.find((item) => item.id === categoryId);
+      const matches = db.matches.filter((match) => match.matchdays?.category_id === categoryId && match.status !== 'BYE').map((match) => ({ ...match, home_team: { ...match.home_team, players: db.players.filter((player) => player.team_id === match.home_team_id) }, away_team: { ...match.away_team, players: db.players.filter((player) => player.team_id === match.away_team_id) } }));
+      setData({ category, matches }); setLoading(false); return;
+    }
+    loadMatchSheets(slug, categoryId).then((result) => { if (!result.success) toast.error(result.error); else setData(result.data); setLoading(false); });
+  }, [slug, categoryId]);
   const phases = useMemo(() => Array.from(new Set<string>((data?.matches || []).map((match: any) => phaseForRound(Number(match.matchdays?.round_number || 0))))), [data]);
   const phaseMatches = (data?.matches || []).filter((match: any) => phaseForRound(Number(match.matchdays?.round_number || 0)) === phase);
   useEffect(() => { if (phases.length > 0 && !phases.includes(phase)) setPhase(phases[0]); }, [phases, phase]);

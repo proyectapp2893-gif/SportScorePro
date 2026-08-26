@@ -9,6 +9,8 @@ import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, g
 import { toTeamSlug } from '@/app/lib/team-slug';
 import { DEFAULT_ROSTER_LOCKED_MESSAGE } from '@/app/lib/registration';
 import { addDelegatePlayers, changeDelegatePassword, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, saveDelegateTeamStaff, updateDelegatePlayer, uploadDelegateSchoolLogo, uploadPlayerIdentityDocument } from './actions';
+import { DEMO_SLUG } from '@/app/lib/demo/config';
+import { addDemoDocument, addDemoPlayers, deleteDemoPlayer, saveDemoStaff, updateDemoPlayer } from '@/app/lib/demo/actions';
 
 type DelegatePortalClientProps = {
   slug: string;
@@ -273,6 +275,7 @@ function TeamLogo({ team, className = 'w-10 h-10' }: { team: any; className?: st
 }
 
 export default function DelegatePortalClient({ slug, initialData }: DelegatePortalClientProps) {
+  const isDemo = slug === DEMO_SLUG;
   const router = useRouter();
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [data, setData] = useState<any | null>(initialData);
@@ -473,6 +476,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   };
 
   const handleLogout = async () => {
+    if (isDemo) { window.location.href = `/${DEMO_SLUG}/admin`; return; }
     await logoutDelegate(slug);
     window.location.reload();
   };
@@ -500,9 +504,9 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     event.preventDefault();
     if (!selectedTeam) return;
     setLoading(true);
-    const result = await saveDelegateTeamStaff(slug, selectedTeam.id, staffForm);
+    const result = isDemo ? saveDemoStaff(selectedTeam.id, staffForm) : await saveDelegateTeamStaff(slug, selectedTeam.id, staffForm);
     setLoading(false);
-    if (!result.success) return toast.error(result.error);
+    if (!result.success) return toast.error(result.error || 'No se pudo guardar');
     toast.success('Cuerpo técnico guardado');
     window.location.reload();
   };
@@ -562,7 +566,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       setAutoSyncingRow(readyIndex);
       let playerWasCreated = false;
       try {
-        const result = await addDelegatePlayers(slug, selectedTeam.id, [{
+        const playerInput = [{
           name: row.name,
           identityNumber: row.identityNumber,
           shirtNumber: row.shirtNumber,
@@ -570,7 +574,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
           birthDate: row.birthDate,
           vinculo: row.vinculo,
           relationshipDetail: row.relationshipDetail,
-        }]);
+        }];
+        const result = isDemo ? addDemoPlayers(selectedTeam.id, playerInput) : await addDelegatePlayers(slug, selectedTeam.id, playerInput);
 
         if (!result.success) {
           failedAutoSyncRows.current.add(fingerprint);
@@ -582,8 +587,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
 
         playerWasCreated = true;
         const playerId = result.data.playerIds[0];
-        const faceUpload = await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'FACE_PHOTO', row.faceFile as File);
-        const identityUpload = await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'IDENTITY_FRONT', row.identityFile as File);
+        const faceUpload = isDemo ? addDemoDocument(playerId, 'FACE_PHOTO', row.faceFile?.name || 'foto-demo.jpg') : await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'FACE_PHOTO', row.faceFile as File);
+        const identityUpload = isDemo ? addDemoDocument(playerId, 'IDENTITY_FRONT', row.identityFile?.name || 'documento-demo.jpg') : await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'IDENTITY_FRONT', row.identityFile as File);
         setBulkRows((currentRows) => currentRows.filter((currentRow) => bulkRowFingerprint(currentRow) !== fingerprint));
         if (!faceUpload.success || !identityUpload.success) toast.error(`${row.name} fue inscrito, pero algún archivo no pudo cargarse.`);
         else toast.success(`${row.name} inscrito automáticamente`);
@@ -721,7 +726,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     const playersToInsert = bulkRows.filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthDate || row.vinculo || row.relationshipDetail);
     if (!selectedTeam || playersToInsert.length === 0 || playersToInsert.some((row) => row.error)) return;
     setLoading(true);
-    const result = await addDelegatePlayers(slug, selectedTeam.id, playersToInsert.map((row) => ({
+    const playerInputs = playersToInsert.map((row) => ({
       name: row.name,
       identityNumber: row.identityNumber,
       shirtNumber: row.shirtNumber,
@@ -729,17 +734,18 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       birthDate: row.birthDate,
       vinculo: row.vinculo,
       relationshipDetail: row.relationshipDetail,
-    })));
+    }));
+    const result = isDemo ? addDemoPlayers(selectedTeam.id, playerInputs) : await addDelegatePlayers(slug, selectedTeam.id, playerInputs);
     setLoading(false);
-    if (!result.success) return toast.error(result.error);
+    if (!result.success) return toast.error(result.error || 'No se pudieron inscribir los jugadores');
     setLoading(true);
     const uploadResults: Awaited<ReturnType<typeof uploadPlayerIdentityDocument>>[] = [];
     let uploadInterrupted = false;
     try {
       for (const [index, row] of playersToInsert.entries()) {
         const playerId = result.data.playerIds[index];
-        uploadResults.push(await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'FACE_PHOTO', row.faceFile as File));
-        uploadResults.push(await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'IDENTITY_FRONT', row.identityFile as File));
+        uploadResults.push(isDemo ? addDemoDocument(playerId, 'FACE_PHOTO', row.faceFile?.name || 'foto-demo.jpg') as any : await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'FACE_PHOTO', row.faceFile as File));
+        uploadResults.push(isDemo ? addDemoDocument(playerId, 'IDENTITY_FRONT', row.identityFile?.name || 'documento-demo.jpg') as any : await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, 'IDENTITY_FRONT', row.identityFile as File));
       }
     } catch {
       uploadInterrupted = true;
@@ -807,8 +813,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const handleDeletePlayer = async (playerId: string) => {
     if (!selectedTeam) return;
     setLoading(true);
-    const result = await deleteDelegatePlayer(slug, selectedTeam.id, playerId);
-    if (!result.success) toast.error(result.error);
+    const result = isDemo ? deleteDemoPlayer(playerId) : await deleteDelegatePlayer(slug, selectedTeam.id, playerId);
+    if (!result.success) toast.error(result.error || 'No se pudo eliminar el jugador');
     else {
       toast.success('Jugador removido');
       window.location.reload();
@@ -828,7 +834,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     event.preventDefault();
     if (!selectedTeam || !editingPlayer) return;
     setLoading(true);
-    const result = await updateDelegatePlayer(slug, selectedTeam.id, editingPlayer.id, {
+    const updateInput = {
       name: editPlayerForm.name,
       identityNumber: editPlayerForm.identityNumber,
       shirtNumber: editPlayerForm.shirtNumber ? Number(editPlayerForm.shirtNumber) : null,
@@ -836,9 +842,10 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       birthYear: editPlayerForm.birthDate ? Number(editPlayerForm.birthDate.slice(0, 4)) : null,
       vinculo: editPlayerForm.vinculo,
       relationshipDetail: editPlayerForm.relationshipDetail,
-    });
+    };
+    const result = isDemo ? updateDemoPlayer(editingPlayer.id, updateInput) : await updateDelegatePlayer(slug, selectedTeam.id, editingPlayer.id, updateInput);
     setLoading(false);
-    if (!result.success) return toast.error(result.error);
+    if (!result.success) return toast.error(result.error || 'No se pudo actualizar el jugador');
     toast.success('Información del jugador actualizada');
     setEditingPlayer(null);
     router.refresh();
@@ -852,8 +859,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     if (file.size > 800 * 1024) return toast.error('El logo no puede superar 800 KB.');
 
     setLoading(true);
-    const result = await uploadDelegateSchoolLogo(slug, selectedTeam.id, file);
-    if (!result.success) toast.error(result.error);
+    const result = isDemo ? { success: true, error: undefined } : await uploadDelegateSchoolLogo(slug, selectedTeam.id, file);
+    if (!result.success) toast.error(result.error || 'No se pudo actualizar el logo');
     else {
       toast.success('Logo actualizado');
       window.location.reload();
@@ -875,14 +882,15 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const handlePlayerDocumentUpload = async (playerId: string, documentType: 'FACE_PHOTO' | 'IDENTITY_FRONT' | 'IDENTITY_BACK', file?: File) => {
     if (!selectedTeam || !file) return;
     setLoading(true);
-    const result = await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, documentType, file);
-    if (!result.success) toast.error(result.error);
+    const result = isDemo ? addDemoDocument(playerId, documentType, file.name) : await uploadPlayerIdentityDocument(slug, selectedTeam.id, playerId, documentType, file);
+    if (!result.success) toast.error(result.error || 'No se pudo guardar el documento');
     else { toast.success('Documento enviado para revisión'); window.location.reload(); }
     setLoading(false);
   };
 
   const openPlayerDocument = async (playerId: string, documentType: 'FACE_PHOTO' | 'IDENTITY_FRONT' | 'IDENTITY_BACK') => {
     if (!selectedTeam) return;
+    if (isDemo) return toast('Archivo simulado: la demo no sube documentos a servidores.');
     const result = await getPlayerIdentityDocumentUrl(slug, selectedTeam.id, playerId, documentType);
     if (!result.success) return toast.error(result.error);
     window.open(result.data.url, '_blank', 'noopener,noreferrer');

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
-import DemoExperience from './DemoExperience';
+import { redirect } from 'next/navigation';
+import { DEMO_SLUG } from '@/app/lib/demo/config';
 
 export const metadata: Metadata = {
   title: 'Demo privada | SportScore Pro',
@@ -8,5 +9,5 @@ export const metadata: Metadata = {
 };
 
 export default function PrivateDemoPage() {
-  return <DemoExperience />;
+  redirect(`/${DEMO_SLUG}/admin`);
 }

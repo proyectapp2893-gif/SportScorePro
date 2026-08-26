@@ -3,6 +3,7 @@ import { hasAdminSession } from '@/app/lib/auth';
 import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import { getClientIdBySlug } from '@/app/lib/tenant';
 import PlanillerosClient from './PlanillerosClient';
+import { DEMO_SLUG } from '@/app/lib/demo/config';
 
 async function loadScorekeeperRows(supabase: ReturnType<typeof createServerSupabaseAdminClient>, clientId: string) {
   const query = await supabase
@@ -47,6 +48,7 @@ async function loadScorekeeperRows(supabase: ReturnType<typeof createServerSupab
 
 export default async function PlanillerosPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
+  if (slug === DEMO_SLUG) return <PlanillerosClient slug={slug} initialData={{ schemaReady: true, scorekeepers: [], tournaments: [{ id: 'demo-tournament', name: 'TORNEO DEMOSTRATIVO', created_at: new Date().toISOString() }], matches: [] }} />;
   if (!(await hasAdminSession(slug))) redirect(`/${slug}/login`);
 
   const clientId = await getClientIdBySlug(slug);

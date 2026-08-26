@@ -13,6 +13,8 @@ import AppSelect from '@/app/components/AppSelect';
 import { advanceThreeStageTournament, getThreeStageStatus, startThreeStageTournament } from './stage-actions';
 import { findTeamsMissingFromEveryRegularRound, generateBalancedRoundRobin, inferMissingTeamByes } from '@/app/lib/tournaments/byes';
 import AppPortal from '@/app/components/AppPortal';
+import { DEMO_SLUG } from '@/app/lib/demo/config';
+import { createDemoFixture, deleteDemoFixture, randomizeDemoGroups, scheduleDemoFixture, setDemoFixtureVisibility, updateDemoMatch, updateDemoTeamGroup } from '@/app/lib/demo/actions';
 
 type ParsedFixtureMatch = {
   round_number: number;
@@ -38,6 +40,7 @@ function FixtureContent() {
   const router = useRouter();
   const params = useParams();
   const slug = params.slug as string; 
+  const isDemo = slug === DEMO_SLUG;
   const urlCategory = searchParams.get('cat'); 
 
   const [categories, setCategories] = useState<any[]>([]);
@@ -204,7 +207,7 @@ function FixtureContent() {
 
   const handleUpdateTeamGroup = async (teamId: string, newGroup: string) => {
     const toastId = toast.loading('Asignando grupo...');
-    const result = await updateTeamGroup(slug, teamId, newGroup);
+    const result = isDemo ? updateDemoTeamGroup(teamId, newGroup) : await updateTeamGroup(slug, teamId, newGroup);
     
     if (result.success) {
       setTeams(teams.map(t => t.id === teamId ? { ...t, group_name: newGroup } : t));
@@ -221,7 +224,7 @@ function FixtureContent() {
     setLoading(true);
     const toastId = toast.loading('Distribuyendo grupos aleatoriamente...');
 
-    const result = await randomizeCategoryGroups(slug, selectedCategory, randomGroupCount);
+    const result = isDemo ? randomizeDemoGroups(selectedCategory, randomGroupCount) : await randomizeCategoryGroups(slug, selectedCategory, randomGroupCount);
 
     if (result.success) {
       const assignmentsMap = new Map(result.assignments.map((assignment) => [assignment.teamId, assignment.groupName]));
@@ -406,7 +409,7 @@ function FixtureContent() {
           })),
       }));
 
-      const result = await createCategoryFixture(slug, selectedCategory!, roundsPayload);
+      const result = isDemo ? createDemoFixture(selectedCategory!, roundsPayload) : await createCategoryFixture(slug, selectedCategory!, roundsPayload);
       if (!result.success) throw new Error(result.error);
 
       toast.success(`¡Éxito! ${result.insertedMatches} partidos sincronizados.`, { id: toastId });
@@ -478,10 +481,10 @@ function FixtureContent() {
         })),
       })).filter(round => round.matches.length > 0);
 
-      const result = await createCategoryFixture(slug, selectedCategory!, roundsPayload);
+      const result = isDemo ? createDemoFixture(selectedCategory!, roundsPayload) : await createCategoryFixture(slug, selectedCategory!, roundsPayload);
       if (!result.success) throw new Error(result.error);
 
-      const scheduleResult = await reorganizeCategoryFixtureTimes(slug, selectedCategory!);
+      const scheduleResult = isDemo ? scheduleDemoFixture(selectedCategory!) : await reorganizeCategoryFixtureTimes(slug, selectedCategory!);
       if (!scheduleResult.success) throw new Error(`Los cruces fueron creados, pero no se pudieron programar: ${scheduleResult.error}`);
 
       toast.success(`Fixture creado y programado desde la fecha inicial`, { id: toastId });
@@ -502,8 +505,8 @@ function FixtureContent() {
     setReorganizing(true);
     const toastId = toast.loading('Organizando fechas y equilibrando horarios...');
     try {
-      const result = await reorganizeCategoryFixtureTimes(slug, selectedCategory);
-      if (!result.success) toast.error(result.error, { id: toastId });
+    const result = isDemo ? scheduleDemoFixture(selectedCategory) : await reorganizeCategoryFixtureTimes(slug, selectedCategory);
+      if (!result.success) toast.error(result.error || 'No se pudo reorganizar', { id: toastId });
       else {
         toast.success(`${result.updatedMatches} partidos reorganizados equitativamente.`, { id: toastId });
         await loadCategoryData();
@@ -521,9 +524,9 @@ function FixtureContent() {
     const category = categories.find((item) => item.id === selectedCategory);
     const nextVisible = !Boolean(category?.tournaments?.fixture_visible_to_delegates);
     setLoading(true);
-    const result = await updateTournamentFixtureVisibility(slug, selectedCategory, nextVisible);
+    const result = isDemo ? setDemoFixtureVisibility(selectedCategory, nextVisible) : await updateTournamentFixtureVisibility(slug, selectedCategory, nextVisible);
     setLoading(false);
-    if (!result.success) return toast.error(result.error);
+    if (!result.success) return toast.error(result.error || 'No se pudo cambiar la visibilidad');
     setCategories((current) => current.map((item) => item.id === selectedCategory ? { ...item, tournaments: { ...item.tournaments, fixture_visible_to_delegates: nextVisible } } : item));
     toast.success(nextVisible ? 'Fixture publicado para los delegados' : 'Fixture ocultado para los delegados');
   };
@@ -657,7 +660,7 @@ function FixtureContent() {
     }
 
     if (newMatches.length > 0) {
-      const result = await createCategoryFixture(slug, selectedCategory!, [{
+      const result = isDemo ? createDemoFixture(selectedCategory!, [{
         roundNumber: 100,
         scheduledDate: null,
         matches: newMatches.map(m => ({
@@ -666,10 +669,14 @@ function FixtureContent() {
           venue: m.venue,
           status: m.status,
         })),
+      }]) : await createCategoryFixture(slug, selectedCategory!, [{
+        roundNumber: 100,
+        scheduledDate: null,
+        matches: newMatches.map(m => ({ homeTeamId: m.home_team_id, awayTeamId: m.away_team_id, venue: m.venue, status: m.status })),
       }]);
       if (!result.success) {
         setLoading(false);
-        return toast.error(result.error, { id: toastId });
+        return toast.error(result.error || 'No se pudo crear la fase final', { id: toastId });
       }
       toast.success('Llaves de Fase Final sincronizadas', { id: toastId });
       loadCategoryData();
@@ -687,7 +694,7 @@ function FixtureContent() {
     setShowDeleteConfirm(false);
     setLoading(true);
     const toastId = toast.loading('Removiendo fixture del sistema...');
-    const result = await deleteCategoryFixture(slug, selectedCategory);
+    const result = isDemo ? deleteDemoFixture(selectedCategory) : await deleteCategoryFixture(slug, selectedCategory);
     
     if (!result.success) toast.error(result.error || 'No se pudo limpiar la base de datos', { id: toastId });
     else {
@@ -713,7 +720,7 @@ function FixtureContent() {
     const toastId = toast.loading('Sincronizando cambios manuales...');
 
     const isResettingToScheduled = editingMatch.status !== 'SCHEDULED' && editStatus === 'SCHEDULED';
-    const result = await updateFixtureMatch(slug, {
+    const updatePayload = {
       matchId: editingMatch.id,
       scheduledDate: editDate || null,
       scheduledTime: editTime || null,
@@ -721,7 +728,8 @@ function FixtureContent() {
       homeScore: editHomeScore !== '' ? Number(editHomeScore) : null,
       awayScore: editAwayScore !== '' ? Number(editAwayScore) : null,
       status: editStatus,
-    });
+    };
+    const result = isDemo ? updateDemoMatch(editingMatch.id, updatePayload) : await updateFixtureMatch(slug, updatePayload);
 
     if (isResettingToScheduled && result.success) {
       localStorage.removeItem(`timer_basket_${editingMatch.id}`);

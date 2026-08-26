@@ -2,6 +2,8 @@ import { getDelegateSession } from '@/app/lib/auth';
 import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import DelegatePortalClient from './DelegatePortalClient';
 import { inferMissingTeamByes } from '@/app/lib/tournaments/byes';
+import { DEMO_SLUG } from '@/app/lib/demo/config';
+import DemoDelegatePortal from './DemoDelegatePortal';
 
 async function loadTeamAccess(supabase: ReturnType<typeof createServerSupabaseAdminClient>, delegateId: string) {
   const fullQuery = await supabase
@@ -209,6 +211,7 @@ async function loadDelegatePortalData(slug: string) {
 
 export default async function DelegatePortalPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
+  if (slug === DEMO_SLUG) return <DemoDelegatePortal slug={slug} />;
   const initialData = await loadDelegatePortalData(slug);
   return <DelegatePortalClient slug={slug} initialData={initialData} />;
 }

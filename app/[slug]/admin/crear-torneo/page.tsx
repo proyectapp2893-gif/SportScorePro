@@ -12,6 +12,8 @@ import { createSchools, deleteSchool, updateSchoolName, uploadSchoolLogo } from 
 import { saveTournamentWizard, uploadTournamentLogo } from './actions';
 import Image from 'next/image';
 import AppSelect from '@/app/components/AppSelect';
+import { DEMO_SLUG } from '@/app/lib/demo/config';
+import { createDemoSchools, deleteDemoSchool, saveDemoTournament, updateDemoSchool } from '@/app/lib/demo/actions';
 
 export default function CrearTorneoPage() {
   const router = useRouter();
@@ -19,6 +21,7 @@ export default function CrearTorneoPage() {
   const searchParams = useSearchParams();
   
   const slug = params?.slug as string;
+  const isDemo = slug === DEMO_SLUG;
   const editingTournamentId = searchParams.get('edit');
 
   const [clientInfo, setClientInfo] = useState<{ id: string; name: string } | null>(null);
@@ -187,10 +190,10 @@ export default function CrearTorneoPage() {
     if (!newSchoolName.trim() || !clientInfo) return;
 
     setLoading(true);
-    const result = await createSchools(slug, [newSchoolName]);
+    const result = isDemo ? createDemoSchools([newSchoolName]) : await createSchools(slug, [newSchoolName]);
     
     if (!result.success) {
-      toast.error(result.error);
+      toast.error(result.error || 'No se pudo crear la institución');
     } else {
       toast.success('Institución añadida al Directorio');
       setNewSchoolName('');
@@ -209,6 +212,10 @@ export default function CrearTorneoPage() {
     const toastId = toast.loading('Subiendo escudo institucional...');
 
     try {
+      if (isDemo) {
+        toast.success('Imagen conservada únicamente durante esta demostración', { id: toastId });
+        return;
+      }
       const result = await uploadSchoolLogo(slug, schoolId, file);
       if (!result.success) throw new Error(result.error);
 
@@ -224,9 +231,9 @@ export default function CrearTorneoPage() {
   const handleUpdateSchoolName = async (schoolId: string) => {
     if (!editSchoolName.trim() || !clientInfo) return;
     setLoading(true);
-    const result = await updateSchoolName(slug, schoolId, editSchoolName);
+    const result = isDemo ? updateDemoSchool(schoolId, editSchoolName) : await updateSchoolName(slug, schoolId, editSchoolName);
     
-    if (!result.success) toast.error(result.error);
+    if (!result.success) toast.error(result.error || 'No se pudo actualizar');
     else {
       toast.success('Nombre actualizado');
       setEditingSchoolId(null);
@@ -239,10 +246,10 @@ export default function CrearTorneoPage() {
     if (!showDeleteConfirm.id || !clientInfo) return;
     setLoading(true);
     const toastId = toast.loading('Eliminando institución...');
-    const result = await deleteSchool(slug, showDeleteConfirm.id);
+    const result = isDemo ? deleteDemoSchool(showDeleteConfirm.id) : await deleteSchool(slug, showDeleteConfirm.id);
     
     if (!result.success) {
-      toast.error(result.error, { id: toastId });
+      toast.error(result.error || 'No se pudo eliminar', { id: toastId });
     } else {
       toast.success('Institución eliminada', { id: toastId });
       setShowDeleteConfirm({ isOpen: false, id: null, name: '' });
@@ -275,7 +282,7 @@ export default function CrearTorneoPage() {
     const toastId = toast.loading('Procesando lista...');
 
     try {
-      const result = await createSchools(slug, validEntries);
+      const result = isDemo ? createDemoSchools(validEntries) : await createSchools(slug, validEntries);
       if (!result.success) throw new Error(result.error);
 
       toast.success(`¡Éxito! ${result.data.inserted} instituciones creadas.`, { id: toastId });
@@ -341,7 +348,7 @@ export default function CrearTorneoPage() {
     
     try {
       let finalLogoUrl = existingLogoUrl;
-      if (logoFile) {
+      if (logoFile && !isDemo) {
         const uploadResult = await uploadTournamentLogo(slug, logoFile);
         if (!uploadResult.success) throw new Error(uploadResult.error);
         finalLogoUrl = uploadResult.publicUrl;
@@ -367,14 +374,15 @@ export default function CrearTorneoPage() {
         fixture_visible_to_delegates: fixtureVisibleToDelegates,
       };
 
-      const result = await saveTournamentWizard(slug, {
+      const wizardInput = {
         editingTournamentId,
         tournament: tournamentPayload,
         sportId: selectedSport.id,
         categories: categoriesToCreate,
         deletedCategoryIds,
         teamsMap,
-      });
+      };
+      const result = isDemo ? saveDemoTournament(wizardInput) : await saveTournamentWizard(slug, wizardInput);
       if (!result.success) throw new Error(result.error);
 
       toast.success('¡Torneo estructurado correctamente!', { id: toastId });

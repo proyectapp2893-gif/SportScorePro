@@ -9,12 +9,18 @@ import AppSelect from '@/app/components/AppSelect';
 import { logoutClientAccess } from './actions';
 import { deleteTournament } from './crear-torneo/actions';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '../../lib/sports/rules';
+import { DEMO_SLUG } from '@/app/lib/demo/config';
+import { loadDemoDatabase, saveDemoDatabase } from '@/app/lib/demo/database';
 
-export default function AdminHub() {
+type AdminHubProps = { demoMode?: boolean; demoBasePath?: string };
+
+export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3a-sportscore' }: AdminHubProps = {}) {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
   const slug = params?.slug as string;
+  const isDemo = demoMode || slug === DEMO_SLUG;
+  const activeDemoBasePath = slug === DEMO_SLUG ? `/${DEMO_SLUG}` : demoBasePath;
 
   const [tournaments, setTournaments] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
@@ -28,16 +34,27 @@ export default function AdminHub() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<{ isOpen: boolean; id: string | null; name: string }>({ isOpen: false, id: null, name: '' });
 
   useEffect(() => {
+    if (demoMode) {
+      const saved = window.localStorage.getItem('sportscore:private-demo:v3');
+      const demo = saved ? JSON.parse(saved) : null;
+      const tournament = demo?.tournament || { name: 'Torneo Demostrativo', sport: 'Fútbol', category: 'Categoría Única' };
+      setClientInfo({ id: 'demo-client', name: 'INSTITUCIÓN DEMOSTRATIVA', logo_url: '' });
+      setTournaments([{ id: 'demo-tournament', name: tournament.name, is_active: true, created_at: new Date().toISOString(), tournament_format: tournament.format }]);
+      setCategories([{ id: 'demo-category', name: tournament.category, tournament_id: 'demo-tournament', sports: { name: tournament.sport } }]);
+      setSelectedTournamentId('demo-tournament');
+      return;
+    }
     if (slug) {
       fetchClientData();
     }
-  }, [slug]);
+  }, [demoMode, slug]);
 
   useEffect(() => {
+    if (demoMode) return;
     if (clientInfo?.id) {
       fetchTournaments();
     }
-  }, [clientInfo]);
+  }, [clientInfo, demoMode]);
 
   async function fetchClientData() {
     const { data } = await supabase.from('clients').select('id, name, logo_url').eq('slug', slug).single();
@@ -63,12 +80,13 @@ export default function AdminHub() {
   }
 
   const handleLogout = async () => {
+    if (isDemo) { window.location.href = '/demo-7c9f3a-sportscore'; return; }
     await logoutClientAccess(slug);
     window.location.href = '/';
   };
 
   const handleCopyLink = () => {
-    const url = `${window.location.origin}/${slug}/resultados${selectedTournamentId ? `?tournament=${selectedTournamentId}` : ''}`;
+    const url = isDemo ? `${window.location.origin}/${DEMO_SLUG}/resultados` : `${window.location.origin}/${slug}/resultados${selectedTournamentId ? `?tournament=${selectedTournamentId}` : ''}`;
     navigator.clipboard.writeText(url);
     toast.success('¡Enlace copiado al portapapeles!');
   };
@@ -90,7 +108,7 @@ export default function AdminHub() {
   };
 
   const goToTournamentModule = (path: string) => {
-    requireTournament(() => router.push(`/${slug}/admin/${path}${tournamentQuery ? `?${tournamentQuery}` : ''}`));
+    requireTournament(() => router.push(isDemo ? `${activeDemoBasePath}/admin/${path}${tournamentQuery ? `?${tournamentQuery}` : ''}` : `/${slug}/admin/${path}${tournamentQuery ? `?${tournamentQuery}` : ''}`));
   };
 
   const goToCategoryModule = (path: string) => {
@@ -99,7 +117,7 @@ export default function AdminHub() {
         toast.error('El torneo seleccionado no tiene categorías configuradas.');
         return;
       }
-      router.push(`/${slug}/admin/${path}?${categoryQuery}`);
+      router.push(isDemo ? `${activeDemoBasePath}/admin/${path}?${categoryQuery}` : `/${slug}/admin/${path}?${categoryQuery}`);
     });
   };
 
@@ -110,6 +128,16 @@ export default function AdminHub() {
 
   const executeDeleteTournament = async () => {
     if (!showDeleteConfirm.id) return;
+    if (isDemo) {
+      const db = loadDemoDatabase();
+      const categoryIds = db.categories.filter((category) => category.tournament_id === showDeleteConfirm.id).map((category) => category.id);
+      const teamIds = db.teams.filter((team) => categoryIds.includes(team.category_id)).map((team) => team.id);
+      const matchdayIds = db.matchdays.filter((day) => categoryIds.includes(day.category_id)).map((day) => day.id);
+      db.tournaments = db.tournaments.filter((tournament) => tournament.id !== showDeleteConfirm.id);
+      db.categories = db.categories.filter((category) => !categoryIds.includes(category.id)); db.teams = db.teams.filter((team) => !teamIds.includes(team.id)); db.players = db.players.filter((player) => !teamIds.includes(player.team_id)); db.matchdays = db.matchdays.filter((day) => !matchdayIds.includes(day.id)); db.matches = db.matches.filter((match) => !matchdayIds.includes(match.matchday_id));
+      saveDemoDatabase(db); toast.success('Torneo demo eliminado'); window.location.reload();
+      return;
+    }
     const toastId = toast.loading('Eliminando torneo...');
     const result = await deleteTournament(slug, showDeleteConfirm.id);
     
@@ -124,6 +152,7 @@ export default function AdminHub() {
 
   const generateTournamentReport = async (e: React.MouseEvent, tournament: any) => {
     e.stopPropagation();
+    if (isDemo) { toast.success('Reporte demo disponible desde Resultados'); router.push(`/${DEMO_SLUG}/resultados`); return; }
     setIsGeneratingReport(true);
     const toastId = toast.loading(`Recopilando datos de ${tournament.name}...`);
 
@@ -501,7 +530,7 @@ export default function AdminHub() {
                 </div>
               </div>
               <button
-                onClick={() => router.push(`/${slug}/admin/torneo/${selectedTournament.id}`)}
+                onClick={() => router.push(isDemo ? `${activeDemoBasePath}/admin/torneo/${selectedTournament.id}` : `/${slug}/admin/torneo/${selectedTournament.id}`)}
                 className="bg-white text-blue-600 border border-blue-100 rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-widest hover:bg-blue-600 hover:text-white transition-colors"
               >
                 Configurar torneo
@@ -607,7 +636,7 @@ export default function AdminHub() {
             <h2 className="text-xl sm:text-2xl font-black text-slate-800 uppercase tracking-widest print:text-3xl print:text-blue-700">Eventos Registrados</h2>
           </div>
           <button 
-            onClick={() => router.push(`/${slug}/admin/crear-torneo`)}
+            onClick={() => router.push(isDemo ? `${activeDemoBasePath}/admin/crear-torneo` : `/${slug}/admin/crear-torneo`)}
             disabled={isGeneratingReport}
             className="no-print flex items-center gap-2 bg-slate-900 text-white px-6 py-3 rounded-2xl hover:bg-blue-600 transition-all text-xs font-black uppercase tracking-widest shadow-md shadow-slate-200 disabled:opacity-50"
           >
@@ -617,10 +646,10 @@ export default function AdminHub() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 print:grid-cols-1 print:gap-4">
           {tournaments.map(t => (
-            <div key={t.id} onClick={() => { if (!isGeneratingReport) router.push(`/${slug}/admin/torneo/${t.id}`); }} className="print-break-inside-avoid group flex flex-col p-6 sm:p-8 lg:p-10 bg-white border border-slate-200 rounded-[2rem] lg:rounded-[3rem] hover:border-blue-400 hover:shadow-xl transition-all text-left shadow-sm relative overflow-hidden cursor-pointer print:rounded-xl print:shadow-none print:border-2 print:p-6">
+            <div key={t.id} onClick={() => { if (!isGeneratingReport) router.push(isDemo ? `${activeDemoBasePath}/admin/torneo/${t.id}` : `/${slug}/admin/torneo/${t.id}`); }} className="print-break-inside-avoid group flex flex-col p-6 sm:p-8 lg:p-10 bg-white border border-slate-200 rounded-[2rem] lg:rounded-[3rem] hover:border-blue-400 hover:shadow-xl transition-all text-left shadow-sm relative overflow-hidden cursor-pointer print:rounded-xl print:shadow-none print:border-2 print:p-6">
               <div className={`absolute top-0 left-0 w-full h-2 ${t.is_active ? 'bg-emerald-500' : 'bg-slate-300'} print:h-1`}></div>
               <div className="no-print absolute top-6 right-6 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                 <button onClick={(e) => { e.stopPropagation(); router.push(`/${slug}/admin/crear-torneo?edit=${t.id}`); }} disabled={isGeneratingReport} className="p-3 bg-amber-50 text-amber-600 rounded-xl hover:bg-amber-600 hover:text-white transition-colors disabled:opacity-50" title="Editar Torneo"><Pencil size={18} /></button>
+                 <button onClick={(e) => { e.stopPropagation(); router.push(isDemo ? `${activeDemoBasePath}/admin/crear-torneo?edit=${t.id}` : `/${slug}/admin/crear-torneo?edit=${t.id}`); }} disabled={isGeneratingReport} className="p-3 bg-amber-50 text-amber-600 rounded-xl hover:bg-amber-600 hover:text-white transition-colors disabled:opacity-50" title="Editar Torneo"><Pencil size={18} /></button>
                  <button onClick={(e) => generateTournamentReport(e, t)} disabled={isGeneratingReport} className="p-3 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-600 hover:text-white transition-colors disabled:opacity-50" title="Descargar Reporte PDF"><FileText size={18} /></button>
                  <button onClick={(e) => initiateDelete(e, t.id, t.name)} disabled={isGeneratingReport} className="p-3 bg-red-50 text-red-600 rounded-xl hover:bg-red-600 hover:text-white transition-colors disabled:opacity-50" title="Eliminar Torneo"><Trash2 size={18} /></button>
               </div>

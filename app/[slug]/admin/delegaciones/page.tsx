@@ -9,6 +9,8 @@ import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
 import AppSelect from '@/app/components/AppSelect';
 import { exportDelegationsBackup, getAdminPlayerCardPhotoUrl, getAdminTeamCardPhotoUrls, importDelegationsBackup } from './actions';
+import { DEMO_SLUG } from '@/app/lib/demo/config';
+import { loadDemoDatabase, saveDemoDatabase } from '@/app/lib/demo/database';
 
 function ageOnDate(birthDate: string | null | undefined, referenceDate: string | null | undefined, birthYear?: number | null) {
   if (!birthDate) {
@@ -28,6 +30,7 @@ function ageOnDate(birthDate: string | null | undefined, referenceDate: string |
 
 export default function ControlDelegacionesPage() {
   const params = useParams();
+  const isDemo = params?.slug === DEMO_SLUG;
   const searchParams = useSearchParams();
   const slug = params?.slug as string;
   const [clientId, setClientId] = useState<string | null>(null);
@@ -139,9 +142,9 @@ export default function ControlDelegacionesPage() {
   async function downloadDelegationsBackup() {
     if (!selectedTournamentId) return toast.error('Selecciona el torneo que deseas respaldar.');
     setBackupLoading(true);
-    const result = await exportDelegationsBackup(slug, selectedTournamentId);
+    const result = isDemo ? { success: true, data: { format: 'SPORTSCORE_DEMO_BACKUP_V1', tournamentId: selectedTournamentId, database: loadDemoDatabase() }, error: undefined } : await exportDelegationsBackup(slug, selectedTournamentId);
     setBackupLoading(false);
-    if (!result.success) return toast.error(result.error);
+    if (!result.success) return toast.error(result.error || 'No se pudo generar el respaldo');
     const tournamentName = tournaments.find((tournament) => tournament.id === selectedTournamentId)?.name || 'torneo';
     const blob = new Blob([JSON.stringify(result.data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -157,6 +160,11 @@ export default function ControlDelegacionesPage() {
     if (!file.name.toLowerCase().endsWith('.json')) return toast.error('Selecciona un respaldo JSON de SportScore.');
     setBackupLoading(true);
     try {
+      if (isDemo) {
+        const parsed = JSON.parse(await file.text());
+        if (parsed?.format !== 'SPORTSCORE_DEMO_BACKUP_V1' || !parsed.database) return toast.error('El archivo no es un respaldo válido de la demo.');
+        saveDemoDatabase(parsed.database); await fetchOverviewData(); toast.success('Respaldo local restaurado correctamente.'); return;
+      }
       const result = await importDelegationsBackup(slug, selectedTournamentId, await file.text());
       if (!result.success) return toast.error(result.error);
       await fetchOverviewData();
