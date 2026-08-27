@@ -1521,9 +1521,9 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                     <p className="mt-4 border-t border-amber-200 pt-3 text-[9px] font-black uppercase leading-relaxed tracking-wider text-amber-800">Después de esta fecha no se podrán modificar jugadores</p>
                   </div>
                 </div>
-                <div className={`grid border-b border-slate-100 ${canEditRoster ? 'sm:grid-cols-2' : ''}`}>
-                  <button type="button" onClick={() => setShowRegistrationGuide(true)} className="flex min-h-14 w-full items-center justify-center gap-2 bg-amber-50 px-5 py-4 text-[10px] font-black uppercase tracking-widest text-amber-800 hover:bg-amber-100 sm:text-xs"><CircleHelp size={17} /> Ver tutorial de inscripción</button>
-                  {canEditRoster && <button type="button" onClick={openBulkUpload} className="flex min-h-14 w-full items-center justify-center gap-2 border-t border-slate-100 bg-blue-50 px-5 py-4 text-[10px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100 sm:border-l sm:border-t-0 sm:text-xs"><FileSpreadsheet size={17} /> Abrir planilla de inscripción</button>}
+                <div className={`grid gap-3 border-b border-slate-100 bg-white p-4 sm:p-5 ${canEditRoster ? 'sm:grid-cols-2' : ''}`}>
+                  <button type="button" onClick={() => setShowRegistrationGuide(true)} className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-[10px] font-black uppercase tracking-widest text-amber-800 shadow-sm transition hover:-translate-y-0.5 hover:bg-amber-100 hover:shadow-md sm:text-xs"><CircleHelp size={17} /> Ver tutorial de inscripción</button>
+                  {canEditRoster && <button type="button" onClick={openBulkUpload} className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-5 py-4 text-[10px] font-black uppercase tracking-widest text-blue-700 shadow-sm transition hover:-translate-y-0.5 hover:bg-blue-100 hover:shadow-md sm:text-xs"><FileSpreadsheet size={17} /> Abrir planilla de inscripción</button>}
                 </div>
                 {canEditRoster && players.length > 0 && (
                   <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-white px-4 py-3 sm:px-5">
