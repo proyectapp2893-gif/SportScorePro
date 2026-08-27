@@ -1053,7 +1053,13 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
         <div className="relative mx-auto flex max-w-6xl items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-4 sm:gap-6">
             {selectedTeam && (
-              <TeamLogo team={selectedTeam} className="h-20 w-20 rounded-2xl sm:h-28 sm:w-28 sm:rounded-[1.75rem]" />
+              <div className="relative shrink-0">
+                <TeamLogo team={selectedTeam} className="h-20 w-20 rounded-2xl sm:h-28 sm:w-28 sm:rounded-[1.75rem]" />
+                <label className="absolute -bottom-1 -right-1 flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border-2 border-slate-950 bg-blue-600 text-white shadow-lg transition hover:bg-blue-500 sm:h-9 sm:w-9" aria-label="Cambiar logo del equipo" title="Cambiar logo del equipo">
+                  <Pencil size={14} />
+                  <input type="file" accept="image/*" onChange={handleLogoUpload} disabled={loading} className="hidden" />
+                </label>
+              </div>
             )}
             <div className="min-w-0">
               <p className="text-blue-400 text-[9px] font-black uppercase tracking-[0.25em] sm:text-[10px]">Portal Delegado</p>
@@ -1065,6 +1071,10 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   <span>{selectedTeam.categories?.sports?.name} / {selectedTeam.categories?.name}</span>
                 </div>
               )}
+              {selectedTeam && <div className="mt-3 flex items-center gap-2">
+                <a href={`/${slug}/equipo/${toTeamSlug(selectedTeam.name)}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-[8px] font-black uppercase tracking-wider text-white transition hover:bg-white/15 sm:text-[9px]"><ExternalLink size={13} /> Ver resultados del equipo</a>
+                <button type="button" onClick={copyPublicTeamLink} className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/10 text-blue-300 transition hover:bg-white/15" aria-label="Copiar enlace de resultados" title="Copiar enlace de resultados"><ClipboardCopy size={13} /></button>
+              </div>}
             </div>
           </div>
           <button onClick={handleLogout} aria-label="Salir" className="flex w-fit shrink-0 items-center gap-2 rounded-xl bg-white/10 p-3 text-xs font-black uppercase tracking-widest hover:bg-white/15 sm:px-4">
@@ -1622,26 +1632,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 </>}
               </div>
 
-              <div className="grid gap-6 lg:grid-cols-2">
-                <div className="delegate-module delegate-module-rose space-y-3 rounded-[2rem] border border-slate-200 bg-white p-5">
-                  <div className="flex items-center gap-3">
-                    <TeamLogo team={selectedTeam} className="w-14 h-14" />
-                    <div>
-                      <h2 className="font-black uppercase text-lg leading-none">Logo</h2>
-                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-1">{selectedTeam?.name}</p>
-                    </div>
-                  </div>
-                  <label className="block w-full bg-slate-900 text-white rounded-xl py-3 text-xs font-black uppercase tracking-widest text-center cursor-pointer">
-                    Subir imagen
-                    <input type="file" accept="image/*" onChange={handleLogoUpload} disabled={loading} className="hidden" />
-                  </label>
-                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
-                    <button type="button" onClick={copyPublicTeamLink} className="flex w-full items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-[9px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100"><ClipboardCopy size={14} /> Copiar enlace para compartir</button>
-                    <a href={`/${slug}/equipo/${toTeamSlug(selectedTeam.name)}`} target="_blank" rel="noopener noreferrer" className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-3 text-[9px] font-black uppercase tracking-widest text-slate-700 hover:bg-slate-50"><ExternalLink size={14} /> Abrir resultados del equipo</a>
-                  </div>
-                  <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Máximo 800 KB. Formatos de imagen.</p>
-                </div>
-
+              <div className="grid gap-6">
                 {fixtureVisibleToDelegates ? <div id="upcoming-matches" className="delegate-module delegate-module-cyan scroll-mt-6 rounded-[2rem] border border-slate-200 bg-white p-5 xl:min-w-[420px]">
                   <h2 className="font-black uppercase text-lg mb-1">Próximo partido</h2>
                   <p className="mb-4 text-[9px] font-black uppercase tracking-widest text-slate-400">Tu equipo vs. próximo rival</p>
