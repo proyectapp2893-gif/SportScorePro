@@ -57,11 +57,54 @@ label[for] {
 @media (max-width: 767px) {
   button,
   [role="button"] {
-    -webkit-tap-highlight-color: transparent;
+    -webkit-tap-highlight-color: rgba(37, 99, 235, 0.18);
   }
 
   .fixed.inset-0 {
     overscroll-behavior: contain;
+  }
+}
+
+/* Respuesta táctil global: confirma visualmente cada toque en móviles y tablets. */
+@media (hover: none) and (pointer: coarse) {
+  :where(
+    button,
+    [role="button"],
+    input[type="button"],
+    input[type="submit"],
+    input[type="reset"],
+    a[href][class],
+    label:has(input[type="file"]),
+    summary
+  ) {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(37, 99, 235, 0.2);
+    transition-property: scale, filter, opacity, box-shadow;
+    transition-duration: 90ms;
+    transition-timing-function: ease-out;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  :where(
+    button,
+    [role="button"],
+    input[type="button"],
+    input[type="submit"],
+    input[type="reset"],
+    a[href][class],
+    label:has(input[type="file"]),
+    summary
+  ):active:not(:disabled):not([aria-disabled="true"]) {
+    scale: 0.965;
+    filter: brightness(0.9) saturate(1.08);
+    opacity: 0.9;
+  }
+
+  :where(button, input[type="button"], input[type="submit"], input[type="reset"]):disabled,
+  :where([role="button"], a[href][class])[aria-disabled="true"] {
+    scale: 1;
+    filter: none;
   }
 }
 
