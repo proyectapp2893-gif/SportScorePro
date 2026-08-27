@@ -1,0 +1,52 @@
+export type OperationsKpis = {
+  teams: number;
+  players: number;
+  matches: number;
+  today: number;
+  live: number;
+  pending: number;
+  pendingDocuments: number;
+  activeSanctions: number;
+};
+
+export type OperationsMatch = {
+  id: string;
+  status: string;
+  scheduledTime: string | null;
+  venue: string | null;
+  roundNumber: number | null;
+  categoryId: string;
+  categoryName: string;
+  homeTeam: string;
+  awayTeam: string;
+  homeScore: number | null;
+  awayScore: number | null;
+  href: string;
+};
+
+export type ReadinessCheck = {
+  id: string;
+  label: string;
+  detail: string;
+  status: 'complete' | 'warning' | 'incomplete';
+  weight: number;
+  href: string;
+};
+
+export type OperationsAlert = {
+  id: string;
+  title: string;
+  description: string;
+  count?: number;
+  priority: 'info' | 'warning' | 'critical' | 'success';
+  href: string;
+  actionLabel: string;
+};
+
+export type TournamentOperationsData = {
+  kpis: OperationsKpis;
+  checks: ReadinessCheck[];
+  readiness: number;
+  alerts: OperationsAlert[];
+  todayMatches: OperationsMatch[];
+};

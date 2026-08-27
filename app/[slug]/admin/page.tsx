@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { supabase } from '../../supabase'; 
-import { Trophy, LogOut, ArrowRight, LayoutDashboard, Users, CalendarDays, Plus, School, MonitorPlay, BarChart3, GitMerge, Settings, Trash2, FileText, X, Download, Activity, Copy, ExternalLink, Scale, Pencil, UserCog } from 'lucide-react';
+import { Trophy, LogOut, ArrowRight, LayoutDashboard, Users, CalendarDays, Plus, School, MonitorPlay, BarChart3, GitMerge, Settings, Trash2, FileText, X, Download, Activity, Copy, ExternalLink, Scale, Pencil, UserCog, ClipboardList } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AppSelect from '@/app/components/AppSelect';
 import { logoutClientAccess } from './actions';
@@ -11,6 +11,10 @@ import { deleteTournament } from './crear-torneo/actions';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '../../lib/sports/rules';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
 import { loadDemoDatabase, saveDemoDatabase } from '@/app/lib/demo/database';
+import OperationsDashboard from './operations/OperationsDashboard';
+import { getTournamentOperations } from './operations/actions';
+import { getDemoTournamentOperations } from './operations/demo';
+import type { TournamentOperationsData } from './operations/types';
 
 type AdminHubProps = { demoMode?: boolean; demoBasePath?: string };
 
@@ -26,6 +30,9 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
   const [categories, setCategories] = useState<any[]>([]);
   const [selectedTournamentId, setSelectedTournamentId] = useState(searchParams.get('tournament') || '');
   const [clientInfo, setClientInfo] = useState<{ id: string; name: string; logo_url: string } | null>(null);
+  const [operations, setOperations] = useState<TournamentOperationsData | null>(null);
+  const [operationsLoading, setOperationsLoading] = useState(false);
+  const [operationsError, setOperationsError] = useState('');
   
   // Reportes y Eliminación
   const [reportData, setReportData] = useState<any>(null);
@@ -56,6 +63,35 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
     }
   }, [clientInfo, demoMode]);
 
+  useEffect(() => {
+    if (!selectedTournamentId || !slug) {
+      setOperations(null);
+      return;
+    }
+    let cancelled = false;
+    const localDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    setOperationsLoading(true);
+    setOperationsError('');
+    const load = async () => {
+      try {
+        const result = isDemo
+          ? { success: true as const, data: getDemoTournamentOperations(selectedTournamentId, localDate, slug) }
+          : await getTournamentOperations(slug, selectedTournamentId, localDate);
+        if (cancelled) return;
+        if (!result.success) {
+          setOperationsError(result.error);
+          setOperations(null);
+        } else setOperations(result.data);
+      } catch {
+        if (!cancelled) setOperationsError('Ocurrió un error al consultar el estado operativo.');
+      } finally {
+        if (!cancelled) setOperationsLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [isDemo, selectedTournamentId, slug]);
+
   async function fetchClientData() {
     const { data } = await supabase.from('clients').select('id, name, logo_url').eq('slug', slug).single();
     if (data) setClientInfo(data);
@@ -71,9 +107,12 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
     if (tournamentData) {
       setTournaments(tournamentData);
       const urlTournament = searchParams.get('tournament');
+      const storedTournament = window.localStorage.getItem(`sportscore:admin-tournament:${slug}`);
       const nextTournamentId = urlTournament && tournamentData.some((tournament: any) => tournament.id === urlTournament)
         ? urlTournament
-        : tournamentData[0]?.id || '';
+        : storedTournament && tournamentData.some((tournament: any) => tournament.id === storedTournament)
+          ? storedTournament
+          : tournamentData.find((tournament: any) => tournament.is_active)?.id || tournamentData[0]?.id || '';
       setSelectedTournamentId((current) => current || nextTournamentId);
     }
     if (categoryData) setCategories(categoryData);
@@ -105,6 +144,14 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
       return;
     }
     callback();
+  };
+
+  const handleTournamentChange = (tournamentId: string) => {
+    setSelectedTournamentId(tournamentId);
+    if (tournamentId) window.localStorage.setItem(`sportscore:admin-tournament:${slug}`, tournamentId);
+    else window.localStorage.removeItem(`sportscore:admin-tournament:${slug}`);
+    const base = isDemo ? `${activeDemoBasePath}/admin` : `/${slug}/admin`;
+    router.replace(tournamentId ? `${base}?tournament=${tournamentId}` : base, { scroll: false });
   };
 
   const goToTournamentModule = (path: string) => {
@@ -290,6 +337,32 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
       toast.error('Error al generar el reporte.', { id: toastId });
     }
     setIsGeneratingReport(false);
+  };
+
+  const moduleGroups = [
+    { title: 'Preparación', subtitle: 'Base operativa del torneo', modules: [
+      { name: 'Delegaciones', description: 'Equipos, nóminas y respaldos.', icon: School, tone: 'teal', action: () => goToTournamentModule('delegaciones') },
+      { name: 'Central de Inscripción', description: 'Atletas y documentación.', icon: Users, tone: 'blue', action: () => goToCategoryModule('inscripcion') },
+      { name: 'Portal de Delegados', description: 'Accesos y cierres de inscripción.', icon: UserCog, tone: 'cyan', action: () => goToTournamentModule('delegados') },
+      { name: 'Fixture y Resultados', description: 'Calendarios, fases y jornadas.', icon: CalendarDays, tone: 'emerald', action: () => goToCategoryModule('grupos') },
+    ] },
+    { title: 'Competencia', subtitle: 'Operación de los partidos', modules: [
+      { name: 'Mesa de Control', description: 'Operación táctil del encuentro.', icon: MonitorPlay, tone: 'violet', action: () => goToCategoryModule('mesa') },
+      { name: 'Jueces y Planilleros', description: 'Accesos y asignaciones.', icon: UserCog, tone: 'slate', action: () => goToTournamentModule('planilleros') },
+      { name: 'Planillas de Partido', description: 'Impresión por fase y jornada.', icon: ClipboardList, tone: 'amber', action: () => goToCategoryModule('planillas') },
+      { name: 'TV / Pantalla', description: 'Transmisión de partidos en vivo.', icon: MonitorPlay, tone: 'sky', action: () => window.open('/tv', '_blank') },
+    ] },
+    { title: 'Resultados', subtitle: 'Lectura deportiva y cierres', modules: [
+      { name: 'Estadísticas', description: 'Posiciones y líderes.', icon: BarChart3, tone: 'fuchsia', action: () => goToCategoryModule('estadisticas') },
+      { name: 'Fase Final', description: 'Llaves y eliminatorias.', icon: GitMerge, tone: 'indigo', action: () => goToCategoryModule('fase-final') },
+    ] },
+    { title: 'Administración', subtitle: 'Disciplina y control financiero', modules: [
+      { name: 'Tribunal Disciplinario', description: 'Sanciones y multas vigentes.', icon: Scale, tone: 'rose', action: () => goToTournamentModule('tribunal') },
+    ] },
+  ];
+
+  const moduleTone: Record<string, string> = {
+    teal: 'bg-teal-50 text-teal-600 border-teal-100', blue: 'bg-blue-50 text-blue-600 border-blue-100', cyan: 'bg-cyan-50 text-cyan-600 border-cyan-100', emerald: 'bg-emerald-50 text-emerald-600 border-emerald-100', violet: 'bg-violet-50 text-violet-600 border-violet-100', slate: 'bg-slate-100 text-slate-700 border-slate-200', amber: 'bg-amber-50 text-amber-600 border-amber-100', sky: 'bg-sky-50 text-sky-600 border-sky-100', fuchsia: 'bg-fuchsia-50 text-fuchsia-600 border-fuchsia-100', indigo: 'bg-indigo-50 text-indigo-600 border-indigo-100', rose: 'bg-rose-50 text-rose-600 border-rose-100',
   };
 
   return (
@@ -509,7 +582,7 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
             </div>
             <AppSelect
               value={selectedTournamentId}
-              onChange={setSelectedTournamentId}
+              onChange={handleTournamentChange}
               placeholder="Elegir torneo"
               className="w-full lg:w-[360px]"
               options={[
@@ -519,19 +592,19 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
             />
           </div>
           {selectedTournament && (
-            <div className="mt-5 flex flex-col md:flex-row md:items-center justify-between gap-4 rounded-2xl bg-blue-50 border border-blue-100 px-5 py-4">
+            <div className="mt-5 flex flex-col md:flex-row md:items-center justify-between gap-4 rounded-2xl bg-slate-950 px-5 py-4 text-white shadow-lg">
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-12 h-12 rounded-xl bg-white border border-blue-100 p-2 flex items-center justify-center shrink-0">
+                <div className="w-12 h-12 rounded-xl bg-white border border-white/20 p-2 flex items-center justify-center shrink-0">
                   {selectedTournament.logo_url ? <img src={selectedTournament.logo_url} className="w-full h-full object-contain" /> : <Trophy size={22} className="text-blue-600" />}
                 </div>
                 <div className="min-w-0">
-                  <p className="font-black uppercase text-slate-900 truncate">{selectedTournament.name}</p>
-                  <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">{selectedTournamentCategories.length} categorías disponibles</p>
+                  <div className="flex flex-wrap items-center gap-2"><p className="font-black uppercase text-white truncate">{selectedTournament.name}</p><span className={`rounded-full px-2.5 py-1 text-[8px] font-black uppercase tracking-widest ${selectedTournament.is_active ? 'bg-emerald-400/15 text-emerald-300' : 'bg-slate-700 text-slate-300'}`}>{selectedTournament.is_active ? 'En curso' : 'Finalizado'}</span></div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-blue-300">{clientInfo?.name} · {selectedTournamentCategories.length} categorías</p>
                 </div>
               </div>
               <button
                 onClick={() => router.push(isDemo ? `${activeDemoBasePath}/admin/torneo/${selectedTournament.id}` : `/${slug}/admin/torneo/${selectedTournament.id}`)}
-                className="bg-white text-blue-600 border border-blue-100 rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-widest hover:bg-blue-600 hover:text-white transition-colors"
+                className="bg-white/10 text-white border border-white/15 rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-widest hover:bg-white hover:text-slate-950 transition-colors"
               >
                 Configurar torneo
               </button>
@@ -549,7 +622,16 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
               <p className="text-[10px] font-black uppercase tracking-widest text-red-500">Selecciona un torneo para habilitar los módulos</p>
             )}
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 lg:gap-8">
+          {selectedTournamentId && <OperationsDashboard data={operations} loading={operationsLoading} error={operationsError} navigate={(href) => router.push(href.startsWith('./mesa') ? `${isDemo ? activeDemoBasePath : `/${slug}`}/admin/mesa${href.includes('?') ? href.slice(href.indexOf('?')) : ''}&tournament=${selectedTournamentId}` : href)} />}
+          <div className="mt-8 grid gap-4 lg:grid-cols-2">
+            {moduleGroups.map((group) => (
+              <section key={group.title} className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                <div className="mb-4 flex items-end justify-between gap-3"><div><p className="text-[9px] font-black uppercase tracking-[.2em] text-blue-600">{group.subtitle}</p><h3 className="text-lg font-black uppercase tracking-tight text-slate-950">{group.title}</h3></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[8px] font-black text-slate-500">{group.modules.length}</span></div>
+                <div className="grid gap-2 sm:grid-cols-2">{group.modules.map(({ name, description, icon: Icon, tone, action }) => <button key={name} type="button" onClick={action} disabled={!selectedTournamentId} className="group flex min-h-24 items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-3 text-left transition hover:border-blue-200 hover:bg-white hover:shadow-md focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200 disabled:pointer-events-none disabled:opacity-45"><span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border ${moduleTone[tone]}`}><Icon size={20} /></span><span className="min-w-0 flex-1"><span className="block text-[11px] font-black uppercase leading-tight text-slate-900">{name}</span><span className="mt-1 block text-[10px] font-semibold leading-snug text-slate-500">{description}</span></span><ArrowRight size={15} className="shrink-0 text-slate-300 transition-transform group-hover:translate-x-1 group-hover:text-blue-600" /></button>)}</div>
+              </section>
+            ))}
+          </div>
+          <div className="hidden" aria-hidden="true">
             <button onClick={() => goToTournamentModule('tribunal')} className="group flex flex-col items-start p-6 sm:p-8 lg:p-10 bg-white border border-red-200 rounded-[2rem] lg:rounded-[3rem] hover:border-red-400 hover:shadow-2xl transition-all text-left shadow-sm relative overflow-hidden h-full">
               <div className="absolute top-0 right-0 w-32 h-32 bg-red-50 rounded-bl-[100%] z-0 pointer-events-none"></div>
               <div className="p-4 bg-red-50 rounded-2xl text-red-600 mb-6 group-hover:scale-110 transition-transform border border-red-100 relative z-10"><Scale size={32} /></div>
