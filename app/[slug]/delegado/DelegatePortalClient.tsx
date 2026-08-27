@@ -1124,10 +1124,6 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   </label>
                 </div>
 
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-[10px] font-bold uppercase leading-relaxed tracking-wider text-slate-500">
-                  Escribe directamente o pega seis columnas desde Excel: Nombre completo, Número de identidad, Dorsal, Fecha de nacimiento, Vínculo y Promoción/Estudiante. Para activar la sincronización, cada jugador debe tener también su foto y documento de identidad cargados.
-                </div>
-
                 {bulkRows.length > 0 && (
                   <div onPaste={handleBulkPaste} onFocusCapture={keepBulkFieldVisible} className="hidden scroll-smooth overflow-x-auto rounded-2xl border border-slate-200 lg:block">
                     <table className="min-w-full text-left text-xs">
@@ -1197,9 +1193,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   </div>
                 )}
                 <button type="button" onClick={() => setBulkRows(validateBulkRows([...bulkRows, emptyBulkRow()]))} className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500 hover:border-blue-400 hover:text-blue-600"><Plus size={14} /> Agregar fila</button>
-              </div>
 
-              <footer className="flex flex-col gap-3 border-t border-slate-100 bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between sm:p-6">
+              <footer className="mt-2 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between sm:p-5">
                 <button type="button" disabled={autoSyncingRow !== null} onClick={discardBulkDraft} className="rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-widest text-red-500 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40">Eliminar borrador</button>
                 <div className="flex flex-1 flex-col gap-3 sm:items-end">
                   {bulkInvalidRows.length > 0 && (
@@ -1224,6 +1219,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   </div>
                 </div>
               </footer>
+              </div>
             </section>
           </div>
         )}
