@@ -11,6 +11,7 @@ import { DEFAULT_ROSTER_LOCKED_MESSAGE } from '@/app/lib/registration';
 import { addDelegatePlayers, changeDelegatePassword, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, saveDelegateTeamStaff, updateDelegatePlayer, uploadDelegateSchoolLogo, uploadPlayerIdentityDocument } from './actions';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
 import { addDemoDocument, addDemoPlayers, deleteDemoPlayer, saveDemoStaff, updateDemoPlayer } from '@/app/lib/demo/actions';
+import { confirmDialog } from '@/app/components/AppDialog';
 
 type DelegatePortalClientProps = {
   slug: string;
@@ -810,10 +811,16 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     setBulkRows([]);
   };
 
-  const handleDeletePlayer = async (playerId: string) => {
+  const handleDeletePlayer = async (player: any) => {
     if (!selectedTeam) return;
+    if (!await confirmDialog({
+      title: 'Eliminar jugador',
+      description: `¿Deseas eliminar definitivamente a ${String(player.name || 'este jugador').toUpperCase()} de la nómina? También se retirarán sus documentos cargados.`,
+      confirmLabel: 'Eliminar jugador',
+      tone: 'danger',
+    })) return;
     setLoading(true);
-    const result = isDemo ? deleteDemoPlayer(playerId) : await deleteDelegatePlayer(slug, selectedTeam.id, playerId);
+    const result = isDemo ? deleteDemoPlayer(player.id) : await deleteDelegatePlayer(slug, selectedTeam.id, player.id);
     if (!result.success) toast.error(result.error || 'No se pudo eliminar el jugador');
     else {
       toast.success('Jugador removido');
@@ -1561,7 +1568,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                             <div className="min-w-0 flex-1">
                               <div className="flex items-start justify-between gap-2">
                                 <div className="min-w-0"><div className="flex items-center gap-2"><p className="truncate text-sm font-black uppercase text-slate-950">{index + 1}. {player.name}</p>{rosterEditMode && <button type="button" onClick={() => openPlayerEditor(player)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-100 text-blue-700" aria-label={`Editar a ${player.name}`}><Pencil size={15} /></button>}</div><p className="mt-1 text-[11px] font-bold text-slate-500">ID {player.identity_number || 'SIN REGISTRAR'} · {player.birth_date || player.birth_year || 'SIN FECHA'}</p></div>
-                                {rosterEditMode && <button type="button" onClick={() => handleDeletePlayer(player.id)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-red-500 hover:bg-red-100" aria-label={`Eliminar a ${player.name}`}><Trash2 size={17} /></button>}
+                                {rosterEditMode && <button type="button" onClick={() => handleDeletePlayer(player)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-red-200 bg-red-50 text-red-600 shadow-sm transition hover:bg-red-600 hover:text-white" aria-label={`Eliminar a ${player.name}`} title="Eliminar jugador"><Trash2 size={17} /></button>}
                               </div>
                               <p className="mt-2 text-[10px] font-black uppercase leading-relaxed tracking-wider text-slate-500">{ageOnDate(player.birth_date, selectedCategory?.tournaments?.schedule_dates?.[0]) ?? '-'} años · {player.vinculo || 'Sin vínculo'}{player.relationship_detail ? ` · ${player.relationship_detail}` : ''}</p>
                               <p className={`mt-2 text-[10px] font-black uppercase ${dossier.className}`}>{dossier.label}</p>
@@ -1607,7 +1614,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                               <td className="p-3">{documentCell('FACE_PHOTO', faceDocument, 'fotografía del rostro')}</td>
                               <td className="p-3">{documentCell('IDENTITY_FRONT', identityDocument, 'documento de identidad')}</td>
                               <td className={`p-3 text-[9px] font-black uppercase ${dossier.className}`}>{dossier.label}</td>
-                              <td className="p-3 text-center">{rosterEditMode && <button type="button" onClick={() => handleDeletePlayer(player.id)} className="rounded-lg p-2 text-red-500 hover:bg-red-100" aria-label={`Eliminar a ${player.name}`}><Trash2 size={15} /></button>}</td>
+                              <td className="p-3 text-center">{rosterEditMode && <button type="button" onClick={() => handleDeletePlayer(player)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-600 shadow-sm transition hover:bg-red-600 hover:text-white" aria-label={`Eliminar a ${player.name}`} title="Eliminar jugador"><Trash2 size={15} /></button>}</td>
                             </tr>
                           );
                         })}
