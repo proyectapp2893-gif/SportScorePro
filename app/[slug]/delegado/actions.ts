@@ -142,6 +142,7 @@ export async function addDelegatePlayers(slug: string, teamId: string, players: 
   const normalizeBirthDate = (value: string | null | undefined) => {
     const raw = String(value || '').trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    if (/^\d{8}$/.test(raw)) return `${raw.slice(4)}-${raw.slice(2, 4)}-${raw.slice(0, 2)}`;
     const match = raw.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})$/);
     if (!match) return raw;
     return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;

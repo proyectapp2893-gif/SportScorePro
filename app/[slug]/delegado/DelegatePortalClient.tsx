@@ -12,6 +12,7 @@ import { addDelegatePlayers, changeDelegatePassword, copyTeamRosterFromTournamen
 import { DEMO_SLUG } from '@/app/lib/demo/config';
 import { addDemoDocument, addDemoPlayers, deleteDemoPlayer, saveDemoStaff, updateDemoPlayer } from '@/app/lib/demo/actions';
 import { confirmDialog } from '@/app/components/AppDialog';
+import { normalizePlayerBirthDate } from '@/app/lib/players/date';
 
 type DelegatePortalClientProps = {
   slug: string;
@@ -185,6 +186,8 @@ function playerDossierStatus(documents: any[] | null | undefined) {
 }
 
 function normalizePastedDate(rawValue: string) {
+  return normalizePlayerBirthDate(rawValue) || null;
+  /*
   const raw = rawValue.trim();
   const digits = raw.replace(/\D/g, '');
   const currentYear = new Date().getFullYear();
@@ -214,6 +217,7 @@ function normalizePastedDate(rawValue: string) {
   if (!interpreted) return null;
   const [year, month, day] = interpreted;
   return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  */
 }
 
 function BirthDateCards({ value, onChange, compact = false }: { value: string; onChange: (value: string) => void; compact?: boolean }) {
@@ -701,7 +705,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
         'NOMBRE COMPLETO': 'MANUEL RAMIREZ',
         'NUMERO DE IDENTIDAD': '1234567890',
         DORSAL: 10,
-        'FECHA DE NACIMIENTO': '1985-05-20',
+        'FECHA DE NACIMIENTO': '20051985',
         'VINCULO CON EL COLEGIO': 'EX-ALUMNO',
         'PROMOCION O NOMBRE DEL ESTUDIANTE': '2003',
       },

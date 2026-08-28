@@ -10,6 +10,7 @@ import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 're
 import { useSearchParams, useRouter, useParams } from 'next/navigation';
 import { addRosterPlayers, copyRosterBetweenTeams, deleteRosterPlayer, deleteRosterTeam, getOrCreateRosterTeam, loadRosterPlayerDocuments, openRosterPlayerDocument, reviewRosterPlayerDocument, updateRosterTeamName } from './actions';
 import { promptDialog } from '@/app/components/AppDialog';
+import { normalizePlayerBirthDate } from '@/app/lib/players/date';
 
 export default function InscripcionPage() {
   const searchParams = useSearchParams();
@@ -248,7 +249,7 @@ export default function InscripcionPage() {
 
   const downloadTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([
-      { "NOMBRE COMPLETO": "PEREZ JUAN", "NUMERO DE IDENTIDAD": "1234567890", DORSAL: 10, "FECHA DE NACIMIENTO": "1985-05-20", "VINCULO CON EL COLEGIO": "EX-ALUMNO", "PROMOCION O NOMBRE DEL ESTUDIANTE": "2003" }
+      { "NOMBRE COMPLETO": "PEREZ JUAN", "NUMERO DE IDENTIDAD": "1234567890", DORSAL: 10, "FECHA DE NACIMIENTO": "20051985", "VINCULO CON EL COLEGIO": "EX-ALUMNO", "PROMOCION O NOMBRE DEL ESTUDIANTE": "2003" }
     ]);
     ws['!cols'] = [{ wch: 32 }, { wch: 24 }, { wch: 12 }, { wch: 22 }, { wch: 28 }, { wch: 38 }];
     const wb = XLSX.utils.book_new();
@@ -257,13 +258,16 @@ export default function InscripcionPage() {
     toast.success('Plantilla generada y lista');
   };
 
-  const normalizeRosterDate = (value: string) => {
+  const normalizeRosterDate = (value: unknown) => normalizePlayerBirthDate(value);
+  /* legacy implementation retained below only as removed parser */
+  /*
     const raw = value.trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
     const match = raw.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
     if (!match) return raw;
     return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
   };
+  */
 
   const normalizeRosterHeader = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
 
