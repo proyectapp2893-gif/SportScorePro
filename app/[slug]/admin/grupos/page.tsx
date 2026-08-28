@@ -7,14 +7,15 @@ import Link from 'next/link';
 import { useSearchParams, useRouter, useParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 'react-icons/fa';
-import { createCategoryFixture, deleteCategoryFixture, randomizeCategoryGroups, reorganizeCategoryFixtureTimes, updateFixtureMatch, updateTeamGroup, updateTournamentFixtureVisibility } from './actions';
+import { createCategoryFixture, deleteCategoryFixture, randomizeCategoryGroups, reorganizeCategoryFixtureTimes, updateFixtureMatch, updateTeamGroup, updateTournamentFixtureVisibility, updateTournamentPublicFixtureVisibility } from './actions';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '../../../lib/sports/rules';
 import AppSelect from '@/app/components/AppSelect';
 import { advanceThreeStageTournament, getThreeStageStatus, startThreeStageTournament } from './stage-actions';
 import { findTeamsMissingFromEveryRegularRound, generateBalancedRoundRobin, inferMissingTeamByes } from '@/app/lib/tournaments/byes';
 import AppPortal from '@/app/components/AppPortal';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
-import { createDemoFixture, deleteDemoFixture, randomizeDemoGroups, scheduleDemoFixture, setDemoFixtureVisibility, updateDemoMatch, updateDemoTeamGroup } from '@/app/lib/demo/actions';
+import { createDemoFixture, deleteDemoFixture, randomizeDemoGroups, scheduleDemoFixture, setDemoFixtureVisibility, setDemoPublicFixtureVisibility, updateDemoMatch, updateDemoTeamGroup } from '@/app/lib/demo/actions';
+import { analyzeFixture } from '@/app/lib/fixture/intelligence';
 
 type ParsedFixtureMatch = {
   round_number: number;
@@ -85,7 +86,7 @@ function FixtureContent() {
         setClientId(client.id);
         const { data: catData } = await supabase
           .from('categories')
-          .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates), sports(name)')
+          .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates, fixture_visible_to_public), sports(name)')
           .eq('tournaments.client_id', client.id)
           .order('name');
         if (catData) setCategories(catData);
@@ -531,6 +532,18 @@ function FixtureContent() {
     toast.success(nextVisible ? 'Fixture publicado para los delegados' : 'Fixture ocultado para los delegados');
   };
 
+  const handlePublicFixtureVisibility = async () => {
+    if (!selectedCategory) return;
+    const category = categories.find((item) => item.id === selectedCategory);
+    const nextVisible = !Boolean(category?.tournaments?.fixture_visible_to_public);
+    setLoading(true);
+    const result = isDemo ? setDemoPublicFixtureVisibility(selectedCategory, nextVisible) : await updateTournamentPublicFixtureVisibility(slug, selectedCategory, nextVisible);
+    setLoading(false);
+    if (!result.success) return toast.error(result.error || 'No se pudo cambiar la publicación pública');
+    setCategories((current) => current.map((item) => item.id === selectedCategory ? { ...item, tournaments: { ...item.tournaments, fixture_visible_to_public: nextVisible } } : item));
+    toast.success(nextVisible ? 'Fixture publicado públicamente' : 'Publicación pública desactivada');
+  };
+
   const handleExportFixturePdf = async () => {
     if (!selectedCategory || matches.length === 0) return toast.error('No hay partidos para exportar.');
     setLoading(true);
@@ -769,6 +782,7 @@ function FixtureContent() {
   
   const normalMatches = matchesToShow.filter(m => m.status !== 'BYE');
   const byeMatches = matchesToShow.filter(m => m.status === 'BYE');
+  const fixtureAnalysis = analyzeFixture(matches, teams.map((team) => ({ id: team.id, name: team.name })), { requiresVenue: true, minimumRestMinutes: undefined });
 
   const uniqueSports = Array.from(new Set(categories.map(c => c.sports?.name).filter(Boolean)));
   const hasFaseFinal = availableRounds.includes(100);
@@ -1144,10 +1158,16 @@ function FixtureContent() {
                      Grupos <Users size={12}/>
                    </button>
                   </div>
-                  {viewMode === 'FIXTURE' && <button type="button" role="switch" aria-checked={Boolean(categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates)} aria-label="Visibilidad del fixture para delegados" onClick={handleFixtureVisibility} disabled={loading || matches.length === 0} className="flex min-h-12 w-full items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-left shadow-sm transition-all hover:border-blue-300 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto sm:min-w-[300px]">
+                  {viewMode === 'FIXTURE' && <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[300px]">
+                  <button type="button" role="switch" aria-checked={Boolean(categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates)} aria-label="Visibilidad del fixture para delegados" onClick={handleFixtureVisibility} disabled={loading || matches.length === 0} className="flex min-h-12 w-full items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-left shadow-sm transition-all hover:border-blue-300 disabled:cursor-not-allowed disabled:opacity-40">
                     <span className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-700">{categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates ? <Eye size={16} className="shrink-0 text-emerald-600" /> : <EyeOff size={16} className="shrink-0 text-slate-400" />} Fixture para delegados</span>
                     <span className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates ? 'bg-emerald-500' : 'bg-slate-300'}`} aria-hidden="true"><span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates ? 'translate-x-6' : 'translate-x-1'}`} /></span>
-                  </button>}
+                  </button>
+                  <button type="button" role="switch" aria-checked={Boolean(categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_public)} aria-label="Publicar fixture y resultados" onClick={handlePublicFixtureVisibility} disabled={loading || matches.length === 0} className="flex min-h-12 w-full items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-left shadow-sm transition-all hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
+                    <span className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-700">{categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_public ? <Eye size={16} className="shrink-0 text-emerald-600" /> : <EyeOff size={16} className="shrink-0 text-slate-400" />} Publicar programación y resultados</span>
+                    <span className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_public ? 'bg-emerald-500' : 'bg-slate-300'}`} aria-hidden="true"><span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_public ? 'translate-x-6' : 'translate-x-1'}`} /></span>
+                  </button>
+                  </div>}
                 </div>
 
                 {viewMode === 'FIXTURE' && <div className="grid w-full grid-cols-2 gap-2.5 xl:grid-cols-4">
@@ -1253,6 +1273,14 @@ function FixtureContent() {
 
             {viewMode === 'FIXTURE' && matches.length > 0 && (
               <div className="bg-white border border-slate-200 rounded-[2rem] sm:rounded-[2.5rem] overflow-hidden shadow-sm flex flex-col min-h-[520px] md:min-h-[600px] animate-in fade-in slide-in-from-bottom-4">
+                <section aria-labelledby="fixture-analysis-title" className="m-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-4 sm:m-6 sm:p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div><p className="text-[9px] font-black uppercase tracking-[0.25em] text-blue-600">Fixture Intelligence</p><h2 id="fixture-analysis-title" className="mt-1 text-lg font-black uppercase tracking-tight text-slate-950">Análisis del fixture</h2><p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">{fixtureAnalysis.metrics.matches} partidos · {fixtureAnalysis.metrics.teams} equipos · {fixtureAnalysis.metrics.matchdays} jornadas</p></div>
+                    <span className={`rounded-full px-3 py-1.5 text-[9px] font-black uppercase tracking-widest ${fixtureAnalysis.status === 'ERROR' ? 'bg-red-100 text-red-700' : fixtureAnalysis.status === 'WARNING' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>{fixtureAnalysis.status === 'ERROR' ? 'Conflictos' : fixtureAnalysis.status === 'WARNING' ? 'Requiere revisión' : 'Listo'}</span>
+                  </div>
+                  <div className="mt-4 grid gap-2 text-[9px] font-black uppercase tracking-wider sm:grid-cols-3"><span className="rounded-xl bg-white px-3 py-2 text-slate-600">{fixtureAnalysis.metrics.errors} errores</span><span className="rounded-xl bg-white px-3 py-2 text-slate-600">{fixtureAnalysis.metrics.warnings} advertencias</span><span className="rounded-xl bg-white px-3 py-2 text-slate-600">{fixtureAnalysis.metrics.byes} descansos</span></div>
+                  {fixtureAnalysis.issues.length > 0 ? <ul className="mt-3 space-y-1.5" aria-label="Incidencias del fixture">{fixtureAnalysis.issues.slice(0, 4).map((issue, index) => <li key={`${issue.code}-${index}`} className={`text-[10px] font-bold ${issue.severity === 'ERROR' ? 'text-red-700' : 'text-amber-700'}`}>{issue.severity === 'ERROR' ? '⛔' : '⚠️'} {issue.message}</li>)}</ul> : <p className="mt-3 text-[10px] font-bold uppercase tracking-wider text-emerald-700">El fixture no presenta conflictos operativos detectados.</p>}
+                </section>
                 {teamsOutsideFixture.length > 0 && <div className="m-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-800 sm:m-6"><div className="flex items-start gap-3"><AlertTriangle className="mt-0.5 shrink-0 text-red-600" size={20} /><div><p className="text-xs font-black uppercase tracking-widest">Fixture desactualizado</p><p className="mt-1 text-[10px] font-bold uppercase leading-relaxed tracking-wider">{teamsOutsideFixture.map((team) => team.name).join(', ')} no participa en ninguna jornada. Este equipo fue agregado después de generar el calendario. Limpia y regenera el fixture para obtener 9 jornadas con descansos rotativos.</p></div></div></div>}
                 
                 <div className="flex overflow-x-auto bg-slate-50 px-4 pt-4 border-b border-slate-100 gap-2 scrollbar-hide">

@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { FaBasketballBall } from 'react-icons/fa';
 import { useCountdownMatchTimer } from '../hooks/useCountdownMatchTimer';
 import { finishCourtMatch, recordGenericMatchEvent, startLiveMatch } from '../actions';
+import { evaluatePlayerEligibility } from '@/app/lib/competition/player-eligibility';
 
 interface MesaBaloncestoProps {
   match: any;
@@ -34,6 +35,7 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
 
   const [scoringAction, setScoringAction] = useState<{ team: 'HOME' | 'AWAY', type: 'SCORE' | 'FOUL' | 'SUB', points: number } | null>(null);
   const [subOutPlayer, setSubOutPlayer] = useState<string | null>(null);
+  const playerEligibility = (player: any) => evaluatePlayerEligibility({ playerId: player.id, registered: true, teamId: player.team_id, documents: player.player_documents || [], suspended: liveEvents.some((event) => event.player_id === player.id && event.event_type === 'RED'), unpaidFine: liveEvents.some((event) => event.player_id === player.id && event.fine_status === 'UNPAID') });
 
   const {
     timerSeconds,
@@ -389,14 +391,14 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 overflow-y-auto pr-2 pb-4 scrollbar-hide">
               {(scoringAction.team === 'HOME' ? homeRoster : awayRoster).map(player => {
                 const playerFouls = liveEvents.filter(e => e.player_id === player.id && e.event_type === 'FOUL').length;
-                const isFouledOut = playerFouls >= 5; 
+                const isFouledOut = playerFouls >= 5; const eligibility = playerEligibility(player); const isIneligible = eligibility.status === 'INELIGIBLE';
                 const isOut = subOutPlayer === player.id;
                 
                 return (
                   <button 
                     key={player.id} 
                     onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points, player.id)}
-                    disabled={isFouledOut && scoringAction.type !== 'SUB'} 
+                    disabled={isIneligible || (isFouledOut && scoringAction.type !== 'SUB')}
                     className={`p-6 rounded-[1.5rem] border transition-all flex flex-col items-center group relative shadow-sm
                       ${isFouledOut ? 'bg-red-50 border-red-200 opacity-50' : 'bg-white border-slate-200 hover:border-blue-400 hover:bg-blue-50'}
                       ${isOut ? 'ring-4 ring-red-400 scale-95' : ''}
@@ -409,6 +411,7 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
                     )}
                     <span className={`text-4xl font-black transition-colors ${isFouledOut ? 'text-red-400' : 'text-slate-700 group-hover:text-blue-600'}`}>{player.shirt_number || '-'}</span>
                     <span className="text-[10px] font-bold text-slate-500 uppercase mt-3 text-center line-clamp-2 leading-tight">{player.name}</span>
+                    {eligibility.status !== 'ELIGIBLE' && <span className={`mt-2 text-[8px] font-black uppercase text-center ${isIneligible ? 'text-red-500' : 'text-amber-600'}`}>{eligibility.reasons[0]?.message}</span>}
                   </button>
                 );
               })}

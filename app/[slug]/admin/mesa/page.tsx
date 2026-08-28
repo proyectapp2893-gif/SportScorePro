@@ -21,6 +21,8 @@ function MesaControlContent() {
   
   const slug = params?.slug as string;
   const urlCategory = searchParams.get('cat'); 
+  const tournamentQuery = searchParams.get('tournament');
+  const fromGameDay = searchParams.get('from') === 'game-day';
 
   const [categories, setCategories] = useState<any[]>([]);
   const [clientId, setClientId] = useState<string | null>(null);
@@ -42,16 +44,17 @@ function MesaControlContent() {
       
       if (client) {
         setClientId(client.id);
-        const { data } = await supabase
+        let categoriesQuery = supabase
           .from('categories')
           .select('*, sports(name, scoring_system), tournaments!inner(client_id, name, logo_url, fair_play_enabled, fp_starting_points, fp_yellow_deduction, fp_red_deduction, fp_no_show_deduction, fine_yellow_amount, fine_red_amount)')
-          .eq('tournaments.client_id', client.id)
-          .order('name');
+          .eq('tournaments.client_id', client.id);
+        if (tournamentQuery) categoriesQuery = categoriesQuery.eq('tournament_id', tournamentQuery);
+        const { data } = await categoriesQuery.order('name');
         if (data) setCategories(data);
       }
     }
     loadTenantCategories();
-  }, [slug]);
+  }, [slug, tournamentQuery]);
 
   useEffect(() => {
     if (urlCategory && categories.length > 0) {
@@ -152,11 +155,11 @@ function MesaControlContent() {
           </div>
           <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
             {selectedCategory && <Link href={`/${slug}/admin/planillas?cat=${selectedCategory}`} className="w-full sm:w-auto p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-700 hover:bg-amber-600 hover:text-white transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm"><FileText size={16} /> Planillas</Link>}
-            <button onClick={() => window.open('/tv', '_blank')} className="w-full sm:w-auto p-4 bg-slate-900 border border-slate-900 rounded-2xl text-white hover:bg-blue-600 hover:border-blue-600 transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest group shadow-sm">
+            <button aria-label="Abrir TV" onClick={() => window.open('/tv', '_blank')} className="w-full sm:w-auto p-4 bg-slate-900 border border-slate-900 rounded-2xl text-white hover:bg-blue-600 hover:border-blue-600 transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest group shadow-sm">
               <MonitorPlay size={16} /> Abrir TV <ExternalLink size={14} />
             </button>
             {selectedCategory ? (
-              <button onClick={() => { setSelectedCategory(''); router.replace(`/${slug}/admin/mesa`, { scroll: false }); }} className="w-full sm:w-auto p-4 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-blue-600 transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest group shadow-sm">
+              <button aria-label="Volver a categorías" onClick={() => { setSelectedCategory(''); router.replace(`/${slug}/admin/mesa${tournamentQuery ? `?tournament=${encodeURIComponent(tournamentQuery)}` : ''}`, { scroll: false }); }} className="w-full sm:w-auto p-4 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-blue-600 transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest group shadow-sm">
                 <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" /> Categorías
               </button>
             ) : selectedSport ? (
@@ -168,6 +171,7 @@ function MesaControlContent() {
                 <House size={16} /> Panel principal
               </Link>
             )}
+            {fromGameDay && <Link href={`/${slug}/admin/game-day${tournamentQuery ? `?tournament=${encodeURIComponent(tournamentQuery)}` : ''}`} className="w-full sm:w-auto p-4 bg-blue-50 border border-blue-200 rounded-2xl text-blue-700 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest"><ArrowLeft size={16} /> Game Day</Link>}
             {(selectedCategory || selectedSport) && <Link href={`/${slug}/admin`} className="w-full sm:w-auto p-4 bg-slate-900 border border-slate-900 rounded-2xl text-white hover:bg-blue-600 hover:border-blue-600 transition-all flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest shadow-sm"><House size={16} /> Panel principal</Link>}
           </div>
         </div>

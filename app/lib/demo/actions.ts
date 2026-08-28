@@ -137,12 +137,14 @@ export function addDemoDocument(playerId: string, documentType: string, filename
 export function updateDemoTeamGroup(teamId: string, groupName: string) { const db = loadDemoDatabase(); const team = db.teams.find((item) => item.id === teamId); if (team) team.group_name = groupName; saveDemoDatabase(db); return { success: true, error: undefined }; }
 export function randomizeDemoGroups(categoryId: string, count: number) { const db = loadDemoDatabase(); const assignments = db.teams.filter((team) => team.category_id === categoryId).map((team, index) => ({ teamId: team.id, groupName: String.fromCharCode(65 + (index % count)) })); assignments.forEach(({ teamId, groupName }) => { const team = db.teams.find((item) => item.id === teamId); if (team) team.group_name = groupName; }); saveDemoDatabase(db); return { success: true, assignments, error: undefined }; }
 export function setDemoFixtureVisibility(categoryId: string, visible: boolean) { const db = loadDemoDatabase(); const category = db.categories.find((item) => item.id === categoryId); const tournament = db.tournaments.find((item) => item.id === category?.tournament_id); if (tournament) tournament.fixture_visible_to_delegates = visible; db.categories.filter((item) => item.tournament_id === tournament?.id).forEach((item) => { item.tournaments = tournament; }); saveDemoDatabase(db); return { success: true, error: undefined }; }
+export function setDemoPublicFixtureVisibility(categoryId: string, visible: boolean) { const db = loadDemoDatabase(); const category = db.categories.find((item) => item.id === categoryId); const tournament = db.tournaments.find((item) => item.id === category?.tournament_id); if (tournament) tournament.fixture_visible_to_public = visible; db.categories.filter((item) => item.tournament_id === tournament?.id).forEach((item) => { item.tournaments = tournament; }); saveDemoDatabase(db); return { success: true, error: undefined }; }
 
 export function getDemoFootballRoster(matchId: string) {
   const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === matchId);
   if (!match) throw new Error('Partido demo no encontrado.');
-  const home = db.players.filter((player) => player.team_id === match.home_team_id);
-  const away = db.players.filter((player) => player.team_id === match.away_team_id);
+  const withDemoDocuments = (player: any, index: number) => ({ ...player, player_documents: player.player_documents?.length ? player.player_documents : index < 2 ? [{ document_type: 'FACE_PHOTO', status: 'APPROVED' }, { document_type: 'IDENTITY_FRONT', status: 'APPROVED' }] : [] });
+  const home = db.players.filter((player) => player.team_id === match.home_team_id).map(withDemoDocuments);
+  const away = db.players.filter((player) => player.team_id === match.away_team_id).map(withDemoDocuments);
   const suspendedPlayers: Record<string, string> = {};
   db.match_events.filter((event) => event.event_type === 'RED').forEach((event) => { suspendedPlayers[event.player_id] = event.fine_status === 'PAID' ? 'TARJETA ROJA' : 'ROJA · MULTA PENDIENTE'; });
   return { home, away, suspendedPlayers };

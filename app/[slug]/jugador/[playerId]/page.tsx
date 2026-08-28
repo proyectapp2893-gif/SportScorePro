@@ -12,7 +12,7 @@ export default async function PublicPlayerPage({ params }: { params: Promise<{ s
   const supabase = createServerSupabaseAdminClient();
   const { data: player } = await supabase
     .from('players')
-    .select('id, name, shirt_number, team_id, teams!inner(id, name, schools(name, logo_url), categories!inner(id, name, sports(name), tournaments!inner(name, clients!inner(slug, is_active))))')
+    .select('id, name, shirt_number, team_id, teams!inner(id, name, schools(name, logo_url), categories!inner(id, name, sports(name), tournaments!inner(name, fixture_visible_to_public, clients!inner(slug, is_active))))')
     .eq('id', playerId)
     .eq('teams.categories.tournaments.clients.slug', slug)
     .eq('teams.categories.tournaments.clients.is_active', true)
@@ -21,6 +21,7 @@ export default async function PublicPlayerPage({ params }: { params: Promise<{ s
   if (!player) notFound();
   const team: any = player.teams;
   const category: any = team.categories;
+  if (category?.tournaments?.fixture_visible_to_public !== true) notFound();
   const { data: events } = await supabase
     .from('match_events')
     .select('event_type, matches!inner(status, matchdays!inner(category_id))')

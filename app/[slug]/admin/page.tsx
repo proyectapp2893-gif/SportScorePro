@@ -15,6 +15,8 @@ import OperationsDashboard from './operations/OperationsDashboard';
 import { getTournamentOperations } from './operations/actions';
 import { getDemoTournamentOperations } from './operations/demo';
 import type { TournamentOperationsData } from './operations/types';
+import { adminCategoryModulePath, adminDashboardPath, adminTournamentModulePath } from './operations/routes';
+import { resolveTournamentSelection, tournamentStorageKey } from './operations/tournament-selection';
 
 type AdminHubProps = { demoMode?: boolean; demoBasePath?: string };
 
@@ -41,27 +43,35 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<{ isOpen: boolean; id: string | null; name: string }>({ isOpen: false, id: null, name: '' });
 
   useEffect(() => {
-    if (demoMode) {
-      const saved = window.localStorage.getItem('sportscore:private-demo:v3');
+    if (isDemo) {
+      const saved = demoMode ? window.localStorage.getItem('sportscore:private-demo:v3') : null;
       const demo = saved ? JSON.parse(saved) : null;
-      const tournament = demo?.tournament || { name: 'Torneo Demostrativo', sport: 'Fútbol', category: 'Categoría Única' };
+      const localDatabase = !demoMode ? loadDemoDatabase() : null;
+      const tournament = demo?.tournament || localDatabase?.tournaments[0] || { name: 'Torneo Demostrativo', sport: 'Fútbol', category: 'Categoría Única' };
+      const demoTournaments = [{ id: 'demo-tournament', name: tournament.name, is_active: true, created_at: new Date().toISOString(), tournament_format: tournament.format }];
       setClientInfo({ id: 'demo-client', name: 'INSTITUCIÓN DEMOSTRATIVA', logo_url: '' });
-      setTournaments([{ id: 'demo-tournament', name: tournament.name, is_active: true, created_at: new Date().toISOString(), tournament_format: tournament.format }]);
-      setCategories([{ id: 'demo-category', name: tournament.category, tournament_id: 'demo-tournament', sports: { name: tournament.sport } }]);
-      setSelectedTournamentId('demo-tournament');
+      setTournaments(demoTournaments);
+      setCategories(localDatabase?.categories || [{ id: 'demo-category', name: tournament.category, tournament_id: 'demo-tournament', sports: { name: tournament.sport } }]);
+      const demoTournamentId = resolveTournamentSelection(
+        demoTournaments.map((item) => ({ id: item.id, isActive: item.is_active })),
+        searchParams.get('tournament'),
+        window.localStorage.getItem(tournamentStorageKey(slug)),
+      );
+      setSelectedTournamentId(demoTournamentId);
+      if (demoTournamentId) window.localStorage.setItem(tournamentStorageKey(slug), demoTournamentId);
       return;
     }
     if (slug) {
       fetchClientData();
     }
-  }, [demoMode, slug]);
+  }, [demoMode, isDemo, searchParams, slug]);
 
   useEffect(() => {
-    if (demoMode) return;
+    if (isDemo) return;
     if (clientInfo?.id) {
       fetchTournaments();
     }
-  }, [clientInfo, demoMode]);
+  }, [clientInfo, isDemo]);
 
   useEffect(() => {
     if (!selectedTournamentId || !slug) {
@@ -106,14 +116,13 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
 
     if (tournamentData) {
       setTournaments(tournamentData);
-      const urlTournament = searchParams.get('tournament');
-      const storedTournament = window.localStorage.getItem(`sportscore:admin-tournament:${slug}`);
-      const nextTournamentId = urlTournament && tournamentData.some((tournament: any) => tournament.id === urlTournament)
-        ? urlTournament
-        : storedTournament && tournamentData.some((tournament: any) => tournament.id === storedTournament)
-          ? storedTournament
-          : tournamentData.find((tournament: any) => tournament.is_active)?.id || tournamentData[0]?.id || '';
-      setSelectedTournamentId((current) => current || nextTournamentId);
+      const nextTournamentId = resolveTournamentSelection(
+        tournamentData.map((tournament: any) => ({ id: tournament.id, isActive: tournament.is_active })),
+        searchParams.get('tournament'),
+        window.localStorage.getItem(tournamentStorageKey(slug)),
+      );
+      setSelectedTournamentId(nextTournamentId);
+      if (nextTournamentId) window.localStorage.setItem(tournamentStorageKey(slug), nextTournamentId);
     }
     if (categoryData) setCategories(categoryData);
   }
@@ -133,10 +142,6 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
   const selectedTournament = tournaments.find((tournament) => tournament.id === selectedTournamentId);
   const selectedTournamentCategories = categories.filter((category) => category.tournament_id === selectedTournamentId);
   const primaryCategoryId = selectedTournamentCategories[0]?.id || '';
-  const tournamentQuery = selectedTournamentId ? `tournament=${selectedTournamentId}` : '';
-  const categoryQuery = selectedTournamentId
-    ? `${primaryCategoryId ? `cat=${primaryCategoryId}&` : ''}tournament=${selectedTournamentId}`
-    : '';
 
   const requireTournament = (callback: () => void) => {
     if (!selectedTournamentId) {
@@ -147,15 +152,15 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
   };
 
   const handleTournamentChange = (tournamentId: string) => {
+    if (tournamentId && !tournaments.some((tournament) => tournament.id === tournamentId)) return;
     setSelectedTournamentId(tournamentId);
-    if (tournamentId) window.localStorage.setItem(`sportscore:admin-tournament:${slug}`, tournamentId);
-    else window.localStorage.removeItem(`sportscore:admin-tournament:${slug}`);
-    const base = isDemo ? `${activeDemoBasePath}/admin` : `/${slug}/admin`;
-    router.replace(tournamentId ? `${base}?tournament=${tournamentId}` : base, { scroll: false });
+    if (tournamentId) window.localStorage.setItem(tournamentStorageKey(slug), tournamentId);
+    else window.localStorage.removeItem(tournamentStorageKey(slug));
+    router.replace(adminDashboardPath(isDemo ? activeDemoBasePath.slice(1) : slug, tournamentId), { scroll: false });
   };
 
   const goToTournamentModule = (path: string) => {
-    requireTournament(() => router.push(isDemo ? `${activeDemoBasePath}/admin/${path}${tournamentQuery ? `?${tournamentQuery}` : ''}` : `/${slug}/admin/${path}${tournamentQuery ? `?${tournamentQuery}` : ''}`));
+    requireTournament(() => router.push(adminTournamentModulePath(isDemo ? activeDemoBasePath.slice(1) : slug, path, selectedTournamentId)));
   };
 
   const goToCategoryModule = (path: string) => {
@@ -164,7 +169,7 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
         toast.error('El torneo seleccionado no tiene categorías configuradas.');
         return;
       }
-      router.push(isDemo ? `${activeDemoBasePath}/admin/${path}?${categoryQuery}` : `/${slug}/admin/${path}?${categoryQuery}`);
+      router.push(adminCategoryModulePath(isDemo ? activeDemoBasePath.slice(1) : slug, path, selectedTournamentId, primaryCategoryId));
     });
   };
 
@@ -347,6 +352,7 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
       { name: 'Fixture y Resultados', description: 'Calendarios, fases y jornadas.', icon: CalendarDays, tone: 'emerald', action: () => goToCategoryModule('grupos') },
     ] },
     { title: 'Competencia', subtitle: 'Operación de los partidos', modules: [
+      { name: 'Game Day', description: 'Jornada operativa en una sola pantalla.', icon: Activity, tone: 'blue', action: () => goToTournamentModule('game-day') },
       { name: 'Mesa de Control', description: 'Operación táctil del encuentro.', icon: MonitorPlay, tone: 'violet', action: () => goToCategoryModule('mesa') },
       { name: 'Jueces y Planilleros', description: 'Accesos y asignaciones.', icon: UserCog, tone: 'slate', action: () => goToTournamentModule('planilleros') },
       { name: 'Planillas de Partido', description: 'Impresión por fase y jornada.', icon: ClipboardList, tone: 'amber', action: () => goToCategoryModule('planillas') },
@@ -366,7 +372,7 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
   };
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900 font-sans print:bg-white print:p-0 relative">
+    <main className="min-h-screen overflow-x-hidden bg-slate-50 text-slate-900 font-sans print:bg-white print:p-0 relative">
       
       {/* MODAL DE ELIMINACIÓN */}
       {showDeleteConfirm.isOpen && (
@@ -622,7 +628,7 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
               <p className="text-[10px] font-black uppercase tracking-widest text-red-500">Selecciona un torneo para habilitar los módulos</p>
             )}
           </div>
-          {selectedTournamentId && <OperationsDashboard data={operations} loading={operationsLoading} error={operationsError} navigate={(href) => router.push(href.startsWith('./mesa') ? `${isDemo ? activeDemoBasePath : `/${slug}`}/admin/mesa${href.includes('?') ? href.slice(href.indexOf('?')) : ''}&tournament=${selectedTournamentId}` : href)} />}
+          {selectedTournamentId ? <OperationsDashboard data={operations} loading={operationsLoading} error={operationsError} navigate={(href) => router.push(href)} /> : <div data-testid="no-tournament-state" className="rounded-3xl border border-dashed border-slate-300 bg-white px-5 py-10 text-center"><Trophy className="mx-auto text-slate-300" size={30} aria-hidden="true" /><p className="mt-3 text-sm font-black uppercase text-slate-700">Sin torneo seleccionado</p><p className="mt-1 text-xs font-semibold text-slate-500">Crea o selecciona un torneo para consultar su estado operativo.</p></div>}
           <div className="mt-8 grid gap-4 lg:grid-cols-2">
             {moduleGroups.map((group) => (
               <section key={group.title} className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
@@ -631,87 +637,7 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
               </section>
             ))}
           </div>
-          <div className="hidden" aria-hidden="true">
-            <button onClick={() => goToTournamentModule('tribunal')} className="group flex flex-col items-start p-6 sm:p-8 lg:p-10 bg-white border border-red-200 rounded-[2rem] lg:rounded-[3rem] hover:border-red-400 hover:shadow-2xl transition-all text-left shadow-sm relative overflow-hidden h-full">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-red-50 rounded-bl-[100%] z-0 pointer-events-none"></div>
-              <div className="p-4 bg-red-50 rounded-2xl text-red-600 mb-6 group-hover:scale-110 transition-transform border border-red-100 relative z-10"><Scale size={32} /></div>
-              <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tighter mb-3 relative z-10">Tribunal Disciplinario</h3>
-              <p className="text-slate-500 text-sm font-medium leading-relaxed mb-8 relative z-10">Control financiero y sanciones. Gestiona multas por tarjetas amarillas o rojas y bloquea jugadores morosos.</p>
-              <div className="mt-auto flex items-center text-[10px] font-black text-red-600 uppercase tracking-widest w-full justify-between pt-4 border-t border-slate-50 relative z-10">Gestionar Multas <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" /></div>
-            </button>
-
-            <button onClick={() => goToCategoryModule('inscripcion')} className="group flex flex-col items-start p-6 sm:p-8 lg:p-10 bg-white border border-slate-200 rounded-[2rem] lg:rounded-[3rem] hover:border-blue-400 hover:shadow-2xl transition-all text-left shadow-sm relative overflow-hidden h-full">
-              <div className="p-4 bg-blue-50 rounded-2xl text-blue-600 mb-6 group-hover:scale-110 transition-transform border border-blue-100"><Users size={32} /></div>
-              <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tighter mb-3">Central de Inscripción</h3>
-              <p className="text-slate-500 text-sm font-medium leading-relaxed mb-8">Administra la base de datos de atletas.</p>
-              <div className="mt-auto flex items-center text-[10px] font-black text-blue-600 uppercase tracking-widest w-full justify-between pt-4 border-t border-slate-50">Gestionar Nóminas <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" /></div>
-            </button>
-
-            <button onClick={() => goToTournamentModule('delegados')} className="group flex flex-col items-start p-6 sm:p-8 lg:p-10 bg-white border border-slate-200 rounded-[2rem] lg:rounded-[3rem] hover:border-blue-400 hover:shadow-2xl transition-all text-left shadow-sm relative overflow-hidden h-full">
-              <div className="p-4 bg-cyan-50 rounded-2xl text-cyan-600 mb-6 group-hover:scale-110 transition-transform border border-cyan-100"><UserCog size={32} /></div>
-              <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tighter mb-3">Portal de Delegados</h3>
-              <p className="text-slate-500 text-sm font-medium leading-relaxed mb-8">Crea usuarios por equipo, asigna accesos y controla el cierre de inscripciones.</p>
-              <div className="mt-auto flex items-center text-[10px] font-black text-cyan-600 uppercase tracking-widest w-full justify-between pt-4 border-t border-slate-50">Gestionar Accesos <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" /></div>
-            </button>
-
-            <button onClick={() => goToTournamentModule('planilleros')} className="group flex flex-col items-start p-6 sm:p-8 lg:p-10 bg-white border border-slate-200 rounded-[2rem] lg:rounded-[3rem] hover:border-blue-400 hover:shadow-2xl transition-all text-left shadow-sm relative overflow-hidden h-full">
-              <div className="p-4 bg-slate-100 rounded-2xl text-slate-800 mb-6 group-hover:scale-110 transition-transform border border-slate-200"><UserCog size={32} /></div>
-              <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tighter mb-3">Jueces y Planilleros</h3>
-              <p className="text-slate-500 text-sm font-medium leading-relaxed mb-8">Crea accesos limitados por partido para operar mesa y pantalla TV sin entrar al admin.</p>
-              <div className="mt-auto flex items-center text-[10px] font-black text-slate-700 uppercase tracking-widest w-full justify-between pt-4 border-t border-slate-50">Gestionar Mesa <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" /></div>
-            </button>
-
-            <button onClick={() => goToTournamentModule('delegaciones')} className="group flex flex-col items-start p-6 sm:p-8 lg:p-10 bg-white border border-slate-200 rounded-[2rem] lg:rounded-[3rem] hover:border-blue-400 hover:shadow-2xl transition-all text-left shadow-sm relative overflow-hidden h-full">
-              <div className="p-4 bg-teal-50 rounded-2xl text-teal-600 mb-6 group-hover:scale-110 transition-transform border border-teal-100"><School size={32} /></div>
-              <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tighter mb-3">Delegaciones</h3>
-              <p className="text-slate-500 text-sm font-medium leading-relaxed mb-8">Consulta las delegaciones inscritas por torneo, equipos y nóminas oficiales.</p>
-              <div className="mt-auto flex items-center text-[10px] font-black text-teal-600 uppercase tracking-widest w-full justify-between pt-4 border-t border-slate-50">Ver Delegaciones <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" /></div>
-            </button>
-
-            <button onClick={() => goToCategoryModule('grupos')} className="group flex flex-col items-start p-6 sm:p-8 lg:p-10 bg-white border border-slate-200 rounded-[2rem] lg:rounded-[3rem] hover:border-blue-400 hover:shadow-2xl transition-all text-left shadow-sm relative overflow-hidden h-full">
-              <div className="p-4 bg-emerald-50 rounded-2xl text-emerald-600 mb-6 group-hover:scale-110 transition-transform border border-emerald-100"><CalendarDays size={32} /></div>
-              <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tighter mb-3">Fixture y Resultados</h3>
-              <p className="text-slate-500 text-sm font-medium leading-relaxed mb-8">Generador automático de calendarios.</p>
-              <div className="mt-auto flex items-center text-[10px] font-black text-emerald-600 uppercase tracking-widest w-full justify-between pt-4 border-t border-slate-50">Ver Calendarios <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" /></div>
-            </button>
-
-            <button onClick={() => goToCategoryModule('mesa')} className="group flex flex-col items-start p-6 sm:p-8 lg:p-10 bg-white border border-slate-200 rounded-[2rem] lg:rounded-[3rem] hover:border-blue-400 hover:shadow-2xl transition-all text-left shadow-sm relative overflow-hidden h-full">
-              <div className="p-4 bg-purple-50 rounded-2xl text-purple-600 mb-6 group-hover:scale-110 transition-transform border border-purple-100"><MonitorPlay size={32} /></div>
-              <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tighter mb-3">Mesa de Control</h3>
-              <p className="text-slate-500 text-sm font-medium leading-relaxed mb-8">Interfaz táctil para árbitros.</p>
-              <div className="mt-auto flex items-center text-[10px] font-black text-purple-600 uppercase tracking-widest w-full justify-between pt-4 border-t border-slate-50">Abrir Marcador En Vivo <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" /></div>
-            </button>
-
-            <button onClick={() => goToCategoryModule('planillas')} className="group flex flex-col items-start p-6 sm:p-8 lg:p-10 bg-white border border-slate-200 rounded-[2rem] lg:rounded-[3rem] hover:border-amber-400 hover:shadow-2xl transition-all text-left shadow-sm relative overflow-hidden h-full">
-              <div className="p-4 bg-amber-50 rounded-2xl text-amber-600 mb-6 group-hover:scale-110 transition-transform border border-amber-100"><FileText size={32} /></div>
-              <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tighter mb-3">Planillas de Partido</h3>
-              <p className="text-slate-500 text-sm font-medium leading-relaxed mb-8">Genera planillas individuales o descarga todas las planillas organizadas por fase y jornada.</p>
-              <div className="mt-auto flex items-center text-[10px] font-black text-amber-600 uppercase tracking-widest w-full justify-between pt-4 border-t border-slate-50">Preparar Impresión <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" /></div>
-            </button>
-
-            <button onClick={() => window.open('/tv', '_blank')} className="group flex flex-col items-start p-6 sm:p-8 lg:p-10 bg-white border border-slate-200 rounded-[2rem] lg:rounded-[3rem] hover:border-sky-400 hover:shadow-2xl transition-all text-left shadow-sm relative overflow-hidden h-full">
-              <div className="p-4 bg-sky-50 rounded-2xl text-sky-600 mb-6 group-hover:scale-110 transition-transform border border-sky-100"><MonitorPlay size={32} /></div>
-              <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tighter mb-3">TV / Pantalla</h3>
-              <p className="text-slate-500 text-sm font-medium leading-relaxed mb-8">Proyecta los partidos que estén en vivo para público o pantallas externas.</p>
-              <div className="mt-auto flex items-center text-[10px] font-black text-sky-600 uppercase tracking-widest w-full justify-between pt-4 border-t border-slate-50">Abrir Transmisión <ExternalLink size={16} className="group-hover:translate-x-2 transition-transform" /></div>
-            </button>
-
-            <button onClick={() => goToCategoryModule('estadisticas')} className="group flex flex-col items-start p-6 sm:p-8 lg:p-10 bg-white border border-slate-200 rounded-[2rem] lg:rounded-[3rem] hover:border-blue-400 hover:shadow-2xl transition-all text-left shadow-sm relative overflow-hidden h-full">
-              <div className="p-4 bg-fuchsia-50 rounded-2xl text-fuchsia-600 mb-6 group-hover:scale-110 transition-transform border border-fuchsia-100"><BarChart3 size={32} /></div>
-              <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tighter mb-3">Estadísticas</h3>
-              <p className="text-slate-500 text-sm font-medium leading-relaxed mb-8">Tablas de posiciones automatizadas y ranking público.</p>
-              <div className="mt-auto flex items-center text-[10px] font-black text-fuchsia-600 uppercase tracking-widest w-full justify-between pt-4 border-t border-slate-50">Ver Estadísticas <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" /></div>
-            </button>
-
-            <button onClick={() => goToCategoryModule('fase-final')} className="group flex flex-col items-start p-6 sm:p-8 lg:p-10 bg-white border border-slate-200 rounded-[2rem] lg:rounded-[3rem] hover:border-blue-400 hover:shadow-2xl transition-all text-left shadow-sm relative overflow-hidden h-full">
-              <div className="p-4 bg-indigo-50 rounded-2xl text-indigo-600 mb-6 group-hover:scale-110 transition-transform border border-indigo-100"><GitMerge size={32} /></div>
-              <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tighter mb-3">Fase Final (Llaves)</h3>
-              <p className="text-slate-500 text-sm font-medium leading-relaxed mb-8">Visualización dinámica de la ramificación del torneo.</p>
-              <div className="mt-auto flex items-center text-[10px] font-black text-indigo-600 uppercase tracking-widest w-full justify-between pt-4 border-t border-slate-50">Cuadro de Eliminatorias <ArrowRight size={16} className="group-hover:translate-x-2 transition-transform" /></div>
-            </button>
-          </div>
         </div>
-
         <div className="flex items-center justify-between mb-8 print:mb-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-1 bg-blue-600 rounded-full print:hidden"></div>

@@ -34,12 +34,12 @@ function MatchCard({ match, selectedTeamId }: { match: any; selectedTeamId: stri
 export default async function PublicTeamPage({ params }: { params: Promise<{ slug: string; teamSlug: string }> }) {
   const { slug, teamSlug } = await params;
   const supabase = createServerSupabaseAdminClient();
-  const { data: teams } = await supabase.from('teams').select('id, name, category_id, schools(name, logo_url), categories!inner(id, name, sports(name), tournaments!inner(id, name, client_id, fixture_visible_to_delegates, clients!inner(slug, is_active)))').eq('categories.tournaments.clients.slug', slug).eq('categories.tournaments.clients.is_active', true);
+  const { data: teams } = await supabase.from('teams').select('id, name, category_id, schools(name, logo_url), categories!inner(id, name, sports(name), tournaments!inner(id, name, client_id, fixture_visible_to_delegates, fixture_visible_to_public, clients!inner(slug, is_active)))').eq('categories.tournaments.clients.slug', slug).eq('categories.tournaments.clients.is_active', true);
   const team: any = (teams || []).find((item: any) => toTeamSlug(item.name) === teamSlug);
   if (!team) notFound();
 
   const category = team.categories as any;
-  const fixtureVisible = Boolean(category?.tournaments?.fixture_visible_to_delegates);
+  const fixtureVisible = Boolean(category?.tournaments?.fixture_visible_to_public);
   const sportRules = getSportRules(category?.sports?.name);
   const [{ data: categoryTeams }, { data: matches }, { data: events }] = await Promise.all([
     supabase.from('teams').select('id, name, schools(name, logo_url)').eq('category_id', team.category_id),

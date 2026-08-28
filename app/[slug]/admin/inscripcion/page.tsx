@@ -8,7 +8,7 @@ import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 'react-icons/fa';
 import { useSearchParams, useRouter, useParams } from 'next/navigation';
-import { addRosterPlayers, deleteRosterPlayer, deleteRosterTeam, getOrCreateRosterTeam, loadRosterPlayerDocuments, openRosterPlayerDocument, reviewRosterPlayerDocument, updateRosterTeamName } from './actions';
+import { addRosterPlayers, copyRosterBetweenTeams, deleteRosterPlayer, deleteRosterTeam, getOrCreateRosterTeam, loadRosterPlayerDocuments, openRosterPlayerDocument, reviewRosterPlayerDocument, updateRosterTeamName } from './actions';
 import { promptDialog } from '@/app/components/AppDialog';
 
 export default function InscripcionPage() {
@@ -49,6 +49,9 @@ export default function InscripcionPage() {
 
   // Estados para Carga Masiva Pro
   const [showPasteModal, setShowPasteModal] = useState(false);
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [transferTeams, setTransferTeams] = useState<any[]>([]);
+  const [transferSourceTeamId, setTransferSourceTeamId] = useState('');
   const [pasteRows, setPasteRows] = useState(
     Array.from({ length: 10 }, () => ({ name: '', identity_number: '', shirt_number: '', birth_date: '', vinculo: '', relationship_detail: '' }))
   );
@@ -173,6 +176,27 @@ export default function InscripcionPage() {
     setCurrentTeam(team);
     return team;
   }
+
+  const openTransferModal = async () => {
+    if (!currentTeam) return;
+    setTransferSourceTeamId('');
+    const { data } = await supabase.from('teams').select('id, name, school_id, category_id, categories!inner(name, tournament_id, tournaments!inner(name, client_id))').eq('school_id', currentTeam.school_id).neq('id', currentTeam.id);
+    setTransferTeams(data || []);
+    setShowTransferModal(true);
+  };
+
+  const handleTransferRoster = async () => {
+    if (!currentTeam || !transferSourceTeamId) return;
+    const source = transferTeams.find((team) => team.id === transferSourceTeamId);
+    if (!window.confirm(`Copiar jugadores y archivos desde ${source?.categories?.tournaments?.name || 'el torneo seleccionado'} a ${currentTeam.name}? Los datos existentes no se sobrescribirán.`)) return;
+    setLoading(true);
+    const result = await copyRosterBetweenTeams(slug, transferSourceTeamId, currentTeam.id);
+    setLoading(false);
+    if (!result.success) return toast.error(result.error);
+    toast.success(`Transferidos ${result.data.players} jugadores y ${result.data.documents} archivos. ${result.data.skipped} existentes omitidos.`);
+    setShowTransferModal(false);
+    fetchPlayers();
+  };
 
   const handleUpdateTeamName = async () => {
     if (!editTeamName.trim() || !currentTeam) return;
@@ -449,6 +473,17 @@ export default function InscripcionPage() {
               <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400">Presiona Esc o toca fuera para cerrar</p>
               <button type="button" onClick={() => setDocumentPreview(null)} className="rounded-xl bg-slate-900 px-5 py-2.5 text-[9px] font-black uppercase tracking-widest text-white hover:bg-blue-600">Cerrar</button>
             </footer>
+          </section>
+        </div>
+      )}
+
+      {showTransferModal && (
+        <div className="fixed inset-0 z-[210] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+          <section role="dialog" aria-modal="true" aria-labelledby="transfer-roster-title" className="w-full max-w-lg rounded-[2rem] bg-white p-6 shadow-2xl sm:p-8">
+            <div className="flex items-start justify-between gap-4"><div><p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-600">Respaldo de delegación</p><h3 id="transfer-roster-title" className="mt-1 text-2xl font-black uppercase tracking-tight text-slate-900">Copiar desde otro torneo</h3></div><button type="button" onClick={() => setShowTransferModal(false)} className="rounded-xl bg-slate-100 p-2 text-slate-500" aria-label="Cerrar"><X size={18} /></button></div>
+            <p className="mt-4 text-sm font-semibold text-slate-500">Se copiarán jugadores y archivos al equipo <strong>{currentTeam?.name}</strong>. Los registros existentes no se sobrescriben.</p>
+            <label className="mt-5 block text-[10px] font-black uppercase tracking-widest text-slate-500">Equipo / torneo de origen<select value={transferSourceTeamId} onChange={(event) => setTransferSourceTeamId(event.target.value)} className="mt-2 h-12 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm font-bold text-slate-900 outline-none focus:border-blue-500"><option value="">Seleccionar origen</option>{transferTeams.map((team: any) => <option key={team.id} value={team.id}>{team.categories?.tournaments?.name || 'Torneo'} · {team.name}</option>)}</select></label>
+            <div className="mt-6 flex gap-3"><button type="button" onClick={() => setShowTransferModal(false)} className="flex-1 rounded-xl bg-slate-100 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-600">Cancelar</button><button type="button" disabled={!transferSourceTeamId || loading} onClick={handleTransferRoster} className="flex-1 rounded-xl bg-blue-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white disabled:opacity-40">{loading ? 'Copiando…' : 'Copiar expediente'}</button></div>
           </section>
         </div>
       )}
@@ -777,6 +812,9 @@ export default function InscripcionPage() {
                     {/* BOTON CARGA MASIVA PRO QUE ABRE EL NUEVO MODAL */}
                     <button onClick={() => setShowPasteModal(true)} disabled={loading} className="w-full flex items-center justify-center gap-2 bg-emerald-500 text-white p-3.5 rounded-xl hover:bg-emerald-400 transition-all shadow-lg shadow-emerald-200 text-[10px] font-black uppercase tracking-widest">
                       <Grid size={14}/> Carga Masiva Pro
+                    </button>
+                    <button onClick={openTransferModal} disabled={loading || !currentTeam} className="w-full flex items-center justify-center gap-2 bg-blue-50 border border-blue-200 text-blue-700 p-3.5 rounded-xl hover:bg-blue-100 transition-all text-[10px] font-black uppercase tracking-widest disabled:opacity-40">
+                      <Database size={14}/> Copiar desde otro torneo
                     </button>
                   </div>
                 </div>

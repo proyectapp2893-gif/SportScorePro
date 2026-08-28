@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../../supabase'; 
 import { useParams, useSearchParams } from 'next/navigation';
-import { Trophy, CalendarDays, Activity, Medal, ShieldCheck, School, ArrowLeft, BarChart3, Star, Shield, X, Flame, Square, RefreshCcw, Hash } from 'lucide-react';
+import { Trophy, CalendarDays, Activity, Medal, ShieldCheck, School, ArrowLeft, BarChart3, Star, Shield, X, Flame, Square, RefreshCcw, Hash, Clock3 } from 'lucide-react';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall, FaTableTennis, FaGolfBall } from 'react-icons/fa';
 import { GiTennisRacket } from 'react-icons/gi';
 
@@ -152,6 +152,9 @@ export default function ResultadosPublicos() {
     isRefreshingResults.current = true;
 
     try {
+    if (activeTournament && activeTournament.fixture_visible_to_public !== true) {
+      setMatches([]); setLiveMatches([]); setTeams([]); setScorers([]); setMatchEvents([]); return;
+    }
     const activeCat = categories.find(c => c.id === categoryId);
     const sportName = activeCat?.sports?.name || '';
     const sportRules = getSportRules(sportName);
@@ -780,7 +783,9 @@ export default function ResultadosPublicos() {
                 
                 {activeTab === 'FIXTURE' && selectedCategory && (
                   <div className="max-w-6xl mx-auto w-full">
-                    {filteredMatches.length === 0 ? (
+                    {activeTournament?.fixture_visible_to_public !== true ? (
+                      <div className="text-center py-16 md:py-20 bg-indigo-50 rounded-[2rem] border border-indigo-100 shadow-sm"><Clock3 size={48} className="mx-auto text-indigo-400 mb-4" /><p className="text-indigo-800 font-black uppercase tracking-widest text-xs md:text-sm px-4">Competencia aún no publicada</p><p className="mt-2 text-indigo-500 font-semibold text-xs px-4">La programación y los resultados estarán disponibles próximamente.</p></div>
+                    ) : filteredMatches.length === 0 ? (
                       <div className="text-center py-16 md:py-20 bg-white rounded-[2rem] border border-slate-200 shadow-sm">
                         <Trophy size={48} className="mx-auto text-slate-300 mb-4" />
                         <p className="text-slate-500 font-bold uppercase tracking-widest text-xs md:text-sm px-4">

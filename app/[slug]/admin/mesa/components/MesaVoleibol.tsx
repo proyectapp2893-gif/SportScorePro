@@ -6,6 +6,7 @@ import { ArrowLeft, CheckCircle2, Minus, Plus, School, X, Trophy, ArrowRight, Ac
 import toast from 'react-hot-toast';
 import { FaVolleyballBall } from 'react-icons/fa';
 import { closeVolleyballSet, finishCourtMatch, recordGenericMatchEvent, revertLastScoringEvent, startLiveMatch } from '../actions';
+import { evaluatePlayerEligibility } from '@/app/lib/competition/player-eligibility';
 
 interface MesaVoleibolProps {
   match: any;
@@ -47,6 +48,7 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
   const [showRosterModal, setShowRosterModal] = useState<'HOME' | 'AWAY' | null>(null); 
   const [scoringAction, setScoringAction] = useState<{ team: 'HOME' | 'AWAY', type: 'SCORE' | 'YELLOW' | 'RED' | 'SUB' | 'SCORE_MINUS', points: number } | null>(null);
   const [subOutPlayer, setSubOutPlayer] = useState<string | null>(null);
+  const playerEligibility = (player: any) => evaluatePlayerEligibility({ playerId: player.id, registered: true, teamId: player.team_id, documents: player.player_documents || [], suspended: liveEvents.some((event) => event.player_id === player.id && event.event_type === 'RED'), unpaidFine: liveEvents.some((event) => event.player_id === player.id && event.fine_status === 'UNPAID') });
 
   useEffect(() => {
     async function loadMatchData() {
@@ -113,6 +115,11 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
   };
 
   const toggleStartingPlayer = (team: 'HOME' | 'AWAY', playerId: string) => {
+    const roster = team === 'HOME' ? homeRoster : awayRoster;
+    const player = roster.find((candidate) => candidate.id === playerId);
+    if (player && playerEligibility(player).status === 'INELIGIBLE') {
+      return toast.error('Jugador no habilitado para este partido.');
+    }
     if (team === 'HOME') {
       if (homeStartingLineup.includes(playerId)) setHomeStartingLineup(prev => prev.filter(id => id !== playerId));
       else {
@@ -426,7 +433,7 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
 
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 md:gap-4 overflow-y-auto pr-2 pb-2 md:pb-4 scrollbar-hide flex-1">
               {(scoringAction.team === 'HOME' ? homeRoster : awayRoster).map(player => {
-                const hasRed = liveEvents.some(e => e.player_id === player.id && e.event_type === 'RED');
+                const hasRed = liveEvents.some(e => e.player_id === player.id && e.event_type === 'RED'); const eligibility = playerEligibility(player); const isIneligible = eligibility.status === 'INELIGIBLE';
                 const isOut = subOutPlayer === player.id;
                 
                 const currentLineup = scoringAction.team === 'HOME' ? homeStartingLineup : awayStartingLineup;
@@ -441,7 +448,7 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
                   <button 
                     key={player.id} 
                     onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points, player.id)}
-                    disabled={shouldDisable} 
+                    disabled={isIneligible || shouldDisable}
                     className={`p-4 md:p-6 rounded-[1rem] md:rounded-[1.5rem] border transition-all flex flex-col items-center group relative shadow-sm
                       ${shouldDisable ? 'bg-slate-100 border-slate-200 opacity-50 cursor-not-allowed' : 'bg-white border-slate-200 hover:border-yellow-400 hover:bg-yellow-50'}
                       ${isOut ? 'ring-2 md:ring-4 ring-red-400 scale-95' : ''}
@@ -450,6 +457,7 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
                     {hasRed && <Square className="absolute top-2 left-2 md:top-4 md:left-4 text-red-500 fill-red-500 w-2.5 h-2.5 md:w-3 md:h-3" />}
                     <span className={`text-2xl md:text-4xl font-black transition-colors ${hasRed ? 'text-red-400' : shouldDisable ? 'text-slate-400' : 'text-slate-700 group-hover:text-yellow-600'}`}>{player.shirt_number || '-'}</span>
                     <span className={`text-[9px] md:text-[10px] font-bold uppercase mt-1.5 md:mt-3 text-center line-clamp-2 leading-tight ${shouldDisable ? 'text-slate-400' : 'text-slate-500'}`}>{player.name}</span>
+                    {eligibility.status !== 'ELIGIBLE' && <span className={`mt-2 text-[8px] font-black uppercase text-center ${isIneligible ? 'text-red-500' : 'text-amber-600'}`}>{eligibility.reasons[0]?.message}</span>}
                     {scoringAction.type === 'SUB' && (
                        <span className={`mt-2 px-2 py-0.5 rounded text-[8px] font-black uppercase ${isCurrentlyOnPitch ? 'bg-blue-100 text-blue-600' : 'bg-slate-200 text-slate-500'}`}>
                          {isCurrentlyOnPitch ? 'En Cancha' : 'Banca'}

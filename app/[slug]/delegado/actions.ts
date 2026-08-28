@@ -139,6 +139,14 @@ export async function addDelegatePlayers(slug: string, teamId: string, players: 
     return { success: false, error: category?.roster_locked_message || 'La inscripción está cerrada para esta categoría.' };
   }
 
+  const normalizeBirthDate = (value: string | null | undefined) => {
+    const raw = String(value || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const match = raw.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})$/);
+    if (!match) return raw;
+    return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+  };
+
   const formattedPlayers = players
     .map((player) => ({
       team_id: teamId,
@@ -146,11 +154,17 @@ export async function addDelegatePlayers(slug: string, teamId: string, players: 
       identity_number: player.identityNumber?.trim().replace(/\D/g, '') || null,
       shirt_number: player.shirtNumber ?? null,
       birth_year: player.birthYear ?? null,
-      birth_date: player.birthDate || null,
+      birth_date: normalizeBirthDate(player.birthDate) || null,
       vinculo: player.vinculo?.trim().toUpperCase() || null,
       relationship_detail: player.relationshipDetail?.trim().toUpperCase() || null,
     }))
-    .filter((player) => player.name);
+    .filter((player) => player.name)
+    .map((player) => ({
+      ...player,
+      // La fecha completa es la fuente de verdad. Esto evita rechazar una fila
+      // cuando el año auxiliar quedó obsoleto (por ejemplo, tras editar DD/MM/AAAA).
+      birth_year: player.birth_date ? Number(player.birth_date.slice(0, 4)) : player.birth_year,
+    }));
 
   if (formattedPlayers.some((player) => !player.identity_number || player.identity_number.length < 5 || player.identity_number.length > 30)) {
     return { success: false, error: 'Todos los jugadores deben tener un número de identidad válido.' };
@@ -388,6 +402,98 @@ export async function getPlayerIdentityDocumentUrl(slug: string, teamId: string,
   if (error || !data) return { success: false, error: 'No se pudo abrir el documento.' };
   await logAuditEvent({ action: 'delegate.player_document.view', actorType: 'delegate', actorId: access.delegate.id, clientId: access.delegate.client_id, targetType: 'player', targetId: playerId, metadata: { slug, teamId, documentType } });
   return { success: true, data: { url: data.signedUrl } };
+}
+
+/** Copia el expediente de un equipo del mismo delegado a otro torneo. */
+export async function copyTeamRosterFromTournament(
+  slug: string,
+  sourceTeamId: string,
+  destinationTeamId: string,
+): Promise<DelegateActionResult<{ players: number; documents: number; skipped: number }>> {
+  if (sourceTeamId === destinationTeamId) return { success: false, error: 'Selecciona un torneo de origen diferente.' };
+  const sourceAccess = await assertDelegateTeam(slug, sourceTeamId);
+  if (!sourceAccess.success) return { success: false, error: sourceAccess.error };
+  const destinationAccess = await assertDelegateTeam(slug, destinationTeamId);
+  if (!destinationAccess.success) return { success: false, error: destinationAccess.error };
+  if (sourceAccess.delegate.id !== destinationAccess.delegate.id || sourceAccess.team.school_id !== destinationAccess.team.school_id) {
+    return { success: false, error: 'Solo puedes copiar datos dentro de la misma delegación.' };
+  }
+  if (!isRegistrationOpen((destinationAccess.team as any).categories)) {
+    return { success: false, error: 'La inscripción del torneo destino está cerrada.' };
+  }
+
+  const supabase = createServerSupabaseAdminClient();
+  const { data: sourcePlayers, error: sourceError } = await supabase
+    .from('players')
+    .select('id, name, identity_number, shirt_number, birth_year, birth_date, vinculo, relationship_detail, player_documents(id, document_type, storage_path, original_filename, mime_type, file_size, status, rejection_reason, reviewed_at)')
+    .eq('team_id', sourceTeamId)
+    .order('name');
+  if (sourceError) return { success: false, error: 'No se pudo leer la nómina del torneo de origen.' };
+
+  const identities = (sourcePlayers || []).map((player: any) => player.identity_number).filter(Boolean);
+  const { data: existingPlayers } = identities.length
+    ? await supabase.from('players').select('id, identity_number').eq('team_id', destinationTeamId).in('identity_number', identities)
+    : { data: [] as any[] };
+  const existingByIdentity = new Map((existingPlayers || []).map((player: any) => [player.identity_number, player.id]));
+  let copiedPlayers = 0;
+  let copiedDocuments = 0;
+  let skipped = 0;
+
+  const { data: sourceStaff } = await supabase.from('team_staff').select('role, full_name').eq('team_id', sourceTeamId);
+  if (sourceStaff?.length) {
+    await supabase.from('team_staff').upsert(sourceStaff.map((member: any) => ({ team_id: destinationTeamId, role: member.role, full_name: member.full_name, updated_at: new Date().toISOString() })), { onConflict: 'team_id,role' });
+  }
+
+  for (const sourcePlayer of sourcePlayers || []) {
+    let destinationPlayerId = existingByIdentity.get(sourcePlayer.identity_number);
+    if (!destinationPlayerId) {
+      const { data: inserted, error } = await supabase.from('players').insert({
+        team_id: destinationTeamId,
+        name: sourcePlayer.name,
+        identity_number: sourcePlayer.identity_number,
+        shirt_number: sourcePlayer.shirt_number,
+        birth_year: sourcePlayer.birth_year,
+        birth_date: sourcePlayer.birth_date,
+        vinculo: sourcePlayer.vinculo,
+        relationship_detail: sourcePlayer.relationship_detail,
+      }).select('id').single();
+      if (error || !inserted) { skipped += 1; continue; }
+      destinationPlayerId = inserted.id;
+      copiedPlayers += 1;
+    } else {
+      skipped += 1;
+    }
+
+    const { data: destinationDocuments } = await supabase.from('player_documents').select('document_type').eq('player_id', destinationPlayerId);
+    const existingDocumentTypes = new Set((destinationDocuments || []).map((document: any) => document.document_type));
+    for (const sourceDocument of sourcePlayer.player_documents || []) {
+      if (!sourceDocument.storage_path || existingDocumentTypes.has(sourceDocument.document_type)) continue;
+      const { data: file, error: downloadError } = await supabase.storage.from('player-documents').download(sourceDocument.storage_path);
+      if (downloadError || !file) continue;
+      const extension = sourceDocument.mime_type === 'application/pdf' ? 'pdf' : (sourceDocument.mime_type || 'image/jpeg').split('/')[1].replace('jpeg', 'jpg');
+      const storagePath = `${destinationAccess.delegate.client_id}/${destinationTeamId}/${destinationPlayerId}/${sourceDocument.document_type.toLowerCase()}-${randomUUID()}.${extension}`;
+      const { error: uploadError } = await supabase.storage.from('player-documents').upload(storagePath, file, { contentType: sourceDocument.mime_type || file.type, upsert: false });
+      if (uploadError) continue;
+      const { error: documentError } = await supabase.from('player_documents').insert({
+        player_id: destinationPlayerId,
+        document_type: sourceDocument.document_type,
+        storage_path: storagePath,
+        original_filename: sourceDocument.original_filename,
+        mime_type: sourceDocument.mime_type || file.type,
+        file_size: sourceDocument.file_size || file.size,
+        status: sourceDocument.status || 'PENDING',
+        rejection_reason: sourceDocument.rejection_reason || null,
+        uploaded_by_delegate_id: destinationAccess.delegate.id,
+        reviewed_at: sourceDocument.reviewed_at || null,
+        updated_at: new Date().toISOString(),
+      });
+      if (documentError) { await supabase.storage.from('player-documents').remove([storagePath]); continue; }
+      copiedDocuments += 1;
+    }
+  }
+
+  await logAuditEvent({ action: 'delegate.roster.copy_between_tournaments', actorType: 'delegate', actorId: destinationAccess.delegate.id, clientId: destinationAccess.delegate.client_id, targetType: 'team', targetId: destinationTeamId, metadata: { slug, sourceTeamId, destinationTeamId, copiedPlayers, copiedDocuments, skipped } });
+  return { success: true, data: { players: copiedPlayers, documents: copiedDocuments, skipped } };
 }
 
 export async function updateDelegateSchoolLogo(slug: string, teamId: string, logoUrl: string): Promise<DelegateActionResult> {

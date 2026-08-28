@@ -36,7 +36,7 @@ export async function saveTournamentWizard(slug: string, input: SaveTournamentIn
   const allowedVenues = new Set(['Cancha 1', 'Cancha 2']);
   const availableVenues = Array.from(new Set((Array.isArray(input.tournament.available_venues) ? input.tournament.available_venues : []).map(String).filter((venue) => allowedVenues.has(venue))));
   if (availableVenues.length === 0) return { success: false, error: 'Selecciona al menos una cancha disponible.' };
-  const safeTournament: Record<string, unknown> = { ...input.tournament, schedule_time_slots: scheduleTimeSlots, schedule_dates: [scheduleDates[0]], available_venues: availableVenues, fixture_visible_to_delegates: Boolean(input.tournament.fixture_visible_to_delegates) };
+  const safeTournament: Record<string, unknown> = { ...input.tournament, schedule_time_slots: scheduleTimeSlots, schedule_dates: [scheduleDates[0]], available_venues: availableVenues, fixture_visible_to_delegates: Boolean(input.tournament.fixture_visible_to_delegates), fixture_visible_to_public: Boolean(input.tournament.fixture_visible_to_public) };
 
   const supabase = createServerSupabaseAdminClient();
   if (safeTournament.tournament_format === 'THREE_STAGE_35') {

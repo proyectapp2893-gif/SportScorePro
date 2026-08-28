@@ -24,7 +24,7 @@ function PublicPortalContent() {
   // 1. CARGA INICIAL DE DATOS BASE
   useEffect(() => {
     async function loadBaseData() {
-      const { data: catData } = await supabase.from('categories').select('*, sports(name), tournaments(name, logo_url)').order('name');
+      const { data: catData } = await supabase.from('categories').select('*, sports(name), tournaments(name, logo_url, fixture_visible_to_public)').order('name');
       if (catData) setCategories(catData);
       
       const { data: schoolData } = await supabase.from('schools').select('*').order('name');
@@ -61,6 +61,11 @@ function PublicPortalContent() {
 
   async function loadCategoryData(isSilentRefresh = false) {
     if (!isSilentRefresh) setLoading(true);
+
+    const selected = categories.find((category) => category.id === selectedCategory);
+    if (selected?.tournaments?.fixture_visible_to_public !== true) {
+      setMatches([]); setTeams([]); setTopScorers([]); if (!isSilentRefresh) setLoading(false); return;
+    }
 
     // Cargar Partidos
     const { data: matchesData } = await supabase.from('matches')

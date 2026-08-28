@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "vitest run",
+    "test": "vitest run tests",
+    "test:e2e": "playwright test",
     "audit:ops": "node scripts/audit-operational-smoke.mjs",
     "audit:delegates": "node scripts/audit-delegate-portal.mjs",
     "sync:standings": "node scripts/sync-category-standings.mjs",
@@ -25,6 +26,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/qrcode": "^1.5.6",

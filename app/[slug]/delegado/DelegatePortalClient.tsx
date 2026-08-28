@@ -8,7 +8,7 @@ import * as XLSX from 'xlsx';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '@/app/lib/sports/rules';
 import { toTeamSlug } from '@/app/lib/team-slug';
 import { DEFAULT_ROSTER_LOCKED_MESSAGE } from '@/app/lib/registration';
-import { addDelegatePlayers, changeDelegatePassword, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, saveDelegateTeamStaff, updateDelegatePlayer, uploadDelegateSchoolLogo, uploadPlayerIdentityDocument } from './actions';
+import { addDelegatePlayers, changeDelegatePassword, copyTeamRosterFromTournament, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, saveDelegateTeamStaff, updateDelegatePlayer, uploadDelegateSchoolLogo, uploadPlayerIdentityDocument } from './actions';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
 import { addDemoDocument, addDemoPlayers, deleteDemoPlayer, saveDemoStaff, updateDemoPlayer } from '@/app/lib/demo/actions';
 import { confirmDialog } from '@/app/components/AppDialog';
@@ -298,6 +298,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const [editingPlayer, setEditingPlayer] = useState<any | null>(null);
   const [rosterEditMode, setRosterEditMode] = useState(false);
   const [showRegistrationGuide, setShowRegistrationGuide] = useState(false);
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [transferSourceTeamId, setTransferSourceTeamId] = useState('');
   const [editPlayerForm, setEditPlayerForm] = useState({ name: '', identityNumber: '', shirtNumber: '', birthDate: '', vinculo: '', relationshipDetail: '' });
   const failedAutoSyncRows = useRef(new Set<string>());
 
@@ -305,6 +307,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const selectedCategory = selectedTeam?.categories;
   const fixtureVisibleToDelegates = Boolean(selectedCategory?.tournaments?.fixture_visible_to_delegates);
   const canEditRoster = selectedTeam && isRegistrationOpen(selectedCategory);
+  const transferableTeams = (data?.teams || []).filter((team: any) => team.id !== selectedTeam?.id && team.school_id === selectedTeam?.school_id);
   const players = data?.playersByTeam?.[selectedTeam?.id] || [];
   const teamStaff = data?.staffByTeam?.[selectedTeam?.id] || [];
   const bulkFilledRows = bulkRows.filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthDate || row.vinculo || row.relationshipDetail);
@@ -512,6 +515,20 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     window.location.reload();
   };
 
+  const handleTransferRoster = async () => {
+    if (!selectedTeam || !transferSourceTeamId) return;
+    const source = transferableTeams.find((team: any) => team.id === transferSourceTeamId);
+    const confirmed = await confirmDialog({ title: 'Copiar expediente', description: `Se copiarán jugadores y archivos desde ${source?.name || 'el torneo seleccionado'} a ${selectedTeam.name}. Los registros existentes no se sobrescribirán. ¿Deseas continuar?`, confirmLabel: 'Copiar expediente' });
+    if (!confirmed) return;
+    setLoading(true);
+    const result = isDemo ? { success: false as const, error: 'La transferencia entre torneos está disponible para delegaciones reales.' } : await copyTeamRosterFromTournament(slug, transferSourceTeamId, selectedTeam.id);
+    setLoading(false);
+    if (!result.success) return toast.error(result.error);
+    toast.success(`Transferencia completada: ${result.data.players} jugadores y ${result.data.documents} archivos. ${result.data.skipped} existentes omitidos.`);
+    setShowTransferModal(false);
+    router.refresh();
+  };
+
   const normalizeExcelHeader = (value: string) => value
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -624,6 +641,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     const rows = bulkRows.map((row, rowIndex) => rowIndex === index ? {
       ...row,
       [field]: field === 'shirtNumber' || field === 'birthYear' ? (normalizedValue ? Number(normalizedValue) : null) : normalizedValue,
+      ...(field === 'birthDate' ? { birthYear: normalizedValue.match(/^\d{4}-\d{2}-\d{2}$/) ? Number(normalizedValue.slice(0, 4)) : null } : {}),
       ...(field === 'vinculo' ? { relationshipDetail: '' } : {}),
     } : row);
     setBulkRows(validateBulkRows(rows));
@@ -661,12 +679,13 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     if (!text.includes('\t') && !text.includes('\n')) return;
     event.preventDefault();
     const rows = text.split(/\r?\n/).filter((line) => line.trim()).map((line): BulkPlayerRow => {
-      const [name = '', identityNumber = '', shirtNumber = '', birthDate = '', vinculo = '', relationshipDetail = ''] = line.split('\t');
+      const [name = '', identityNumber = '', shirtNumber = '', rawBirthDate = '', vinculo = '', relationshipDetail = ''] = line.split('\t');
+      const birthDate = normalizePastedDate(rawBirthDate) || rawBirthDate.trim();
       return {
         name,
         identityNumber,
         shirtNumber: shirtNumber ? Number(shirtNumber) : null,
-        birthYear: birthDate ? Number(birthDate.slice(0, 4)) : null,
+        birthYear: birthDate.match(/^\d{4}-\d{2}-\d{2}$/) ? Number(birthDate.slice(0, 4)) : null,
         birthDate,
         vinculo,
         relationshipDetail,
@@ -709,11 +728,12 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
         const name = String(row['NOMBRE COMPLETO'] || '').trim().toUpperCase();
         const identityNumber = String(row['NUMERO DE IDENTIDAD'] || '').trim().replace(/\D/g, '');
         const shirtNumber = Number(String(row.DORSAL || '').trim());
-        const birthDate = String(row['FECHA DE NACIMIENTO'] || '').trim();
-        const birthYear = Number(birthDate.slice(0, 4));
+        const rawBirthDate = String(row['FECHA DE NACIMIENTO'] || '').trim();
+        const birthDate = normalizePastedDate(rawBirthDate) || rawBirthDate;
+        const birthYear = birthDate.match(/^\d{4}-\d{2}-\d{2}$/) ? Number(birthDate.slice(0, 4)) : null;
         const vinculo = String(row['VINCULO CON EL COLEGIO'] || '').trim().toUpperCase();
         const relationshipDetail = String(row['PROMOCION O NOMBRE DEL ESTUDIANTE'] || '').trim().toUpperCase();
-        return { name, identityNumber, shirtNumber: shirtNumber || null, birthYear: birthYear || null, birthDate, vinculo, relationshipDetail };
+        return { name, identityNumber, shirtNumber: shirtNumber || null, birthYear, birthDate, vinculo, relationshipDetail };
       }).filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthDate || row.vinculo || row.relationshipDetail);
 
       if (parsedRows.length === 0) return toast.error('El archivo no contiene jugadores.');
@@ -1084,6 +1104,21 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       </header>
 
       <div className="delegate-portal-content relative z-10 mx-auto max-w-6xl space-y-6 px-4 py-8">
+        {showTransferModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+            <section role="dialog" aria-modal="true" aria-labelledby="transfer-title" className="w-full max-w-lg rounded-[2rem] bg-white p-6 text-slate-900 shadow-2xl sm:p-8">
+              <div className="flex items-start justify-between gap-4">
+                <div><p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-600">Respaldo de delegación</p><h2 id="transfer-title" className="mt-1 text-2xl font-black uppercase tracking-tight">Copiar desde otro torneo</h2></div>
+                <button type="button" onClick={() => setShowTransferModal(false)} className="rounded-xl bg-slate-100 p-2 text-slate-500" aria-label="Cerrar"><X size={18} /></button>
+              </div>
+              <p className="mt-4 text-sm font-semibold leading-relaxed text-slate-500">Copia los datos de jugadores y sus archivos privados a <strong>{selectedTeam?.name}</strong>. Solo aparecen equipos de tu misma delegación.</p>
+              {transferableTeams.length === 0 ? <p className="mt-5 rounded-xl bg-amber-50 p-4 text-xs font-black uppercase text-amber-700">No hay otro torneo disponible para copiar.</p> : <>
+                <label className="mt-5 block text-[10px] font-black uppercase tracking-widest text-slate-500">Equipo de origen<select value={transferSourceTeamId} onChange={(event) => setTransferSourceTeamId(event.target.value)} className="mt-2 h-12 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm font-bold outline-none focus:border-blue-500"><option value="">Seleccionar torneo de origen</option>{transferableTeams.map((team: any) => <option key={team.id} value={team.id}>{team.categories?.tournaments?.name || 'Torneo'} · {team.name}</option>)}</select></label>
+                <div className="mt-5 flex gap-3"><button type="button" onClick={() => setShowTransferModal(false)} className="flex-1 rounded-xl bg-slate-100 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-600">Cancelar</button><button type="button" disabled={!transferSourceTeamId || loading} onClick={handleTransferRoster} className="flex-1 rounded-xl bg-blue-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white disabled:opacity-40">{loading ? 'Copiando…' : 'Copiar expediente'}</button></div>
+              </>}
+            </section>
+          </div>
+        )}
         {showBulkUpload && (
           <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-sm sm:items-center sm:p-4">
             <section role="dialog" aria-modal="true" aria-labelledby="bulk-upload-title" className="flex h-[100dvh] w-full max-w-5xl flex-col overflow-hidden bg-white shadow-2xl sm:h-auto sm:max-h-[94dvh] sm:rounded-[2rem] sm:border sm:border-slate-200">
@@ -1494,6 +1529,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               </form>
             </section>
 
+            <div className="flex justify-end"><button type="button" onClick={() => { setTransferSourceTeamId(''); setShowTransferModal(true); }} disabled={transferableTeams.length === 0 || !canEditRoster} className="rounded-xl border border-blue-200 bg-white px-4 py-3 text-[9px] font-black uppercase tracking-widest text-blue-700 shadow-sm disabled:cursor-not-allowed disabled:opacity-40">Copiar expediente desde otro torneo</button></div>
             <section className="grid grid-cols-1 gap-6">
               <div className="delegate-module delegate-module-sky self-start overflow-hidden rounded-[2rem] border border-slate-200 bg-white">
                 <button type="button" onClick={() => setShowRegistrationModule((open) => !open)} className="flex w-full flex-col gap-3 border-b border-slate-100 p-5 text-left transition-colors hover:bg-slate-50 sm:flex-row sm:items-center sm:justify-between" aria-expanded={showRegistrationModule}>

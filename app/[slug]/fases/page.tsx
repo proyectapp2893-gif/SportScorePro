@@ -14,7 +14,7 @@ export default async function PublicStagesPage({ params }: { params: Promise<{ s
   const supabase = createServerSupabaseAdminClient();
   const { data: stages } = await supabase
     .from('competition_stages')
-    .select('id, stage_number, name, stage_type, status, categories!inner(id, name, tournaments!inner(id, name, is_active, clients!inner(slug, is_active)))')
+    .select('id, stage_number, name, stage_type, status, categories!inner(id, name, tournaments!inner(id, name, is_active, fixture_visible_to_public, clients!inner(slug, is_active)))')
     .eq('categories.tournaments.clients.slug', slug)
     .eq('categories.tournaments.clients.is_active', true)
     .order('stage_number');
@@ -29,6 +29,7 @@ export default async function PublicStagesPage({ params }: { params: Promise<{ s
     .order('matchdays(round_number)') : { data: [] };
 
   const tournament: any = (visibleStages[0] as any)?.categories?.tournaments;
+  if (tournament?.fixture_visible_to_public !== true) return <main className="min-h-screen bg-slate-50 p-8 text-center"><div className="mx-auto max-w-xl rounded-[2rem] border border-indigo-100 bg-indigo-50 p-10"><Trophy className="mx-auto text-indigo-400" size={34} /><h1 className="mt-4 text-xl font-black uppercase text-indigo-800">Competencia aún no publicada</h1><p className="mt-2 text-sm font-semibold text-indigo-500">Las fases y finales estarán disponibles próximamente.</p></div></main>;
   return <main className="min-h-screen bg-slate-50 text-slate-950">
     <header className="bg-slate-950 px-4 py-8 text-white"><div className="mx-auto max-w-6xl"><Link href={`/${slug}/resultados`} className="mb-5 inline-flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-blue-400"><ArrowLeft size={14} /> Resultados generales</Link><p className="text-[9px] font-black uppercase tracking-[0.25em] text-blue-400">Formato oficial</p><h1 className="text-3xl font-black uppercase sm:text-5xl">Fases y finales</h1><p className="mt-2 text-xs font-bold uppercase tracking-widest text-slate-400">{tournament?.name}</p></div></header>
     <div className="mx-auto max-w-6xl space-y-8 px-4 py-8">

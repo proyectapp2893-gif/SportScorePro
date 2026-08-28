@@ -1,12 +1,14 @@
+export type OperationsMetric = { value: number; error: null } | { value: null; error: string };
+
 export type OperationsKpis = {
-  teams: number;
-  players: number;
-  matches: number;
-  today: number;
-  live: number;
-  pending: number;
-  pendingDocuments: number;
-  activeSanctions: number;
+  teams: OperationsMetric;
+  players: OperationsMetric;
+  matches: OperationsMetric;
+  today: OperationsMetric;
+  live: OperationsMetric;
+  pending: OperationsMetric;
+  pendingDocuments: OperationsMetric;
+  activeSanctions: OperationsMetric;
 };
 
 export type OperationsMatch = {
@@ -49,4 +51,6 @@ export type TournamentOperationsData = {
   readiness: number;
   alerts: OperationsAlert[];
   todayMatches: OperationsMatch[];
+  agendaError: string | null;
+  publication: { delegates: boolean; public: boolean; state: 'PRIVATE' | 'DELEGATES_ONLY' | 'PUBLIC' };
 };

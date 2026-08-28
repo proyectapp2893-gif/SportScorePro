@@ -50,6 +50,7 @@ export default function CrearTorneoPage() {
   const [scheduleDates, setScheduleDates] = useState<string[]>(['']);
   const [availableVenues, setAvailableVenues] = useState<string[]>(['Cancha 1', 'Cancha 2']);
   const [fixtureVisibleToDelegates, setFixtureVisibleToDelegates] = useState(false);
+  const [fixtureVisibleToPublic, setFixtureVisibleToPublic] = useState(false);
 
   const [customFpRules, setCustomFpRules] = useState<{ id: string; name: string; points: number | '' }[]>([]);
   
@@ -128,6 +129,7 @@ export default function CrearTorneoPage() {
       setScheduleDates(Array.isArray(tournament.schedule_dates) && tournament.schedule_dates.length > 0 ? tournament.schedule_dates : ['']);
       setAvailableVenues(Array.isArray(tournament.available_venues) && tournament.available_venues.length > 0 ? tournament.available_venues : ['Cancha 1', 'Cancha 2']);
       setFixtureVisibleToDelegates(Boolean(tournament.fixture_visible_to_delegates));
+      setFixtureVisibleToPublic(Boolean(tournament.fixture_visible_to_public));
       
       // CORRECCIÓN: Ajustado a fp_custom_rule en singular
       setCustomFpRules(tournament.fp_custom_rule || []); 
@@ -372,6 +374,7 @@ export default function CrearTorneoPage() {
         schedule_dates: scheduleDates.filter(Boolean).sort(),
         available_venues: availableVenues,
         fixture_visible_to_delegates: fixtureVisibleToDelegates,
+        fixture_visible_to_public: fixtureVisibleToPublic,
       };
 
       const wizardInput = {
@@ -598,7 +601,7 @@ export default function CrearTorneoPage() {
                     </div>
                     {!scheduleDates[0] && <p className="mt-4 rounded-xl border border-dashed border-blue-200 bg-white p-4 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Selecciona el primer sábado de competencia</p>}
                   </div>
-                  <div className="mt-6 grid gap-4 border-t border-blue-100 pt-6 md:grid-cols-2">
+                  <div className="mt-6 grid gap-4 border-t border-blue-100 pt-6 md:grid-cols-3">
                     <div className="rounded-2xl border border-blue-100 bg-white p-4">
                       <p className="text-xs font-black uppercase tracking-widest text-blue-800">Canchas disponibles</p>
                       <p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Solo se asignarán las canchas seleccionadas.</p>
@@ -608,6 +611,11 @@ export default function CrearTorneoPage() {
                       <p className="text-xs font-black uppercase tracking-widest text-indigo-800">Fixture para delegados</p>
                       <p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Puedes crearlo primero y publicarlo cuando esté confirmado.</p>
                       <label className="mt-4 flex cursor-pointer items-center justify-between rounded-xl bg-indigo-50 px-4 py-3"><span className="text-[10px] font-black uppercase tracking-widest text-indigo-700">{fixtureVisibleToDelegates ? 'Visible' : 'Oculto'}</span><input type="checkbox" checked={fixtureVisibleToDelegates} onChange={(event) => setFixtureVisibleToDelegates(event.target.checked)} className="h-5 w-5" /></label>
+                    </div>
+                    <div className="rounded-2xl border border-emerald-100 bg-white p-4">
+                      <p className="text-xs font-black uppercase tracking-widest text-emerald-800">Publicación pública</p>
+                      <p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Permite consultar programación, resultados y estadísticas públicamente.</p>
+                      <label className="mt-4 flex cursor-pointer items-center justify-between rounded-xl bg-emerald-50 px-4 py-3"><span className="text-[10px] font-black uppercase tracking-widest text-emerald-700">{fixtureVisibleToPublic ? 'Publicado' : 'Privado'}</span><input type="checkbox" checked={fixtureVisibleToPublic} onChange={(event) => setFixtureVisibleToPublic(event.target.checked)} className="h-5 w-5" /></label>
                     </div>
                   </div>
                 </div>

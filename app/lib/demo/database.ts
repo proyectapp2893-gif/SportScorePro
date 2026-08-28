@@ -6,7 +6,7 @@ type Row = Record<string, any>;
 type Database = Record<string, Row[]>;
 
 const sport = { id: 'demo-sport', name: 'FÚTBOL', scoring_system: 'GOALS' };
-const tournament = { id: 'demo-tournament', client_id: 'demo-client', name: 'TORNEO DEMOSTRATIVO', tournament_format: 'ROUND_ROBIN', is_active: true, created_at: '2026-08-26T12:00:00Z', schedule_dates: ['2026-09-05'], schedule_time_slots: ['14:00', '16:00'], available_venues: ['Cancha 1', 'Cancha 2'], fixture_visible_to_delegates: true, fair_play_enabled: true, fp_starting_points: 100, fp_yellow_deduction: 1, fp_red_deduction: 3, fine_yellow_amount: 30000, fine_red_amount: 80000 };
+const tournament = { id: 'demo-tournament', client_id: 'demo-client', name: 'TORNEO DEMOSTRATIVO', tournament_format: 'ROUND_ROBIN', is_active: true, created_at: '2026-08-26T12:00:00Z', schedule_dates: ['2026-09-05'], schedule_time_slots: ['14:00', '16:00'], available_venues: ['Cancha 1', 'Cancha 2'], fixture_visible_to_delegates: true, fixture_visible_to_public: false, fair_play_enabled: true, fp_starting_points: 100, fp_yellow_deduction: 1, fp_red_deduction: 3, fine_yellow_amount: 30000, fine_red_amount: 80000 };
 const category = { id: 'demo-category', tournament_id: tournament.id, name: 'CATEGORÍA DEMO', gender: 'MASCULINO', sport_id: sport.id, sports: sport, tournaments: tournament, registration_open: true, min_roster_size: 5, max_roster_size: 25, schedule_dates: tournament.schedule_dates };
 const teamNames = ['EQUIPO AURORA', 'EQUIPO HORIZONTE', 'EQUIPO CENTRAL', 'EQUIPO CAPITAL', 'EQUIPO NORTE', 'EQUIPO SUR', 'EQUIPO ÉLITE', 'EQUIPO UNIÓN', 'EQUIPO VANGUARDIA'];
 const schools = teamNames.map((name, index) => ({ id: `demo-school-${index + 1}`, client_id: 'demo-client', name, logo_url: null }));

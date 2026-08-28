@@ -16,6 +16,7 @@ import PenaltyShootout from './PenaltyShootout';
 import { applyFootballWalkover, changeMatchPeriod, finishFootballMatch, getFootballMatchRoster, recordFootballMatchEvent, resetFootballTimer, startLiveMatch } from '../actions';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
 import { applyDemoWalkover, changeDemoMatchPeriod, finishDemoFootballMatch, getDemoFootballRoster, recordDemoFootballEvent, startDemoFootballMatch } from '@/app/lib/demo/actions';
+import { evaluatePlayerEligibility, type PlayerEligibility } from '@/app/lib/competition/player-eligibility';
 
 interface MesaFutbolProps {
   match: any;
@@ -36,6 +37,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   const [awayRoster, setAwayRoster] = useState<any[]>([]);
   const [liveEvents, setLiveEvents] = useState<any[]>([]);
   const [suspendedPlayers, setSuspendedPlayers] = useState<Record<string, boolean | string>>({});
+  const [playerEligibility, setPlayerEligibility] = useState<Record<string, PlayerEligibility>>({});
 
   const [showStartingLineupModal, setShowStartingLineupModal] = useState(false);
   const [homeStartingLineup, setHomeStartingLineup] = useState<string[]>([]);
@@ -75,6 +77,10 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
         setHomeRoster(roster.home || []);
         setAwayRoster(roster.away || []);
         setSuspendedPlayers(categoryData?.tournaments?.fair_play_enabled ? roster.suspendedPlayers : {});
+        const allPlayers = [...(roster.home || []), ...(roster.away || [])];
+        const eligibility: Record<string, PlayerEligibility> = {};
+        allPlayers.forEach((player: any) => { eligibility[player.id] = evaluatePlayerEligibility({ playerId: player.id, registered: true, teamId: player.team_id, documents: player.player_documents || [], suspended: Boolean(roster.suspendedPlayers?.[player.id]), suspensionMessage: roster.suspendedPlayers?.[player.id] ? String(roster.suspendedPlayers[player.id]) : null }); });
+        setPlayerEligibility(eligibility);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : 'No se pudo cargar la nómina del partido.');
       }
@@ -152,7 +158,8 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   };
 
   const toggleStartingPlayer = (team: 'HOME' | 'AWAY', playerId: string) => {
-    if (suspendedPlayers[playerId]) return toast.error('Bloqueado.');
+    const eligibility = playerEligibility[playerId];
+    if (eligibility?.status === 'INELIGIBLE' || suspendedPlayers[playerId]) return toast.error(eligibility?.blockingReasons[0]?.message || 'Jugador no habilitado.');
     const player = [...homeRoster, ...awayRoster].find((item) => item.id === playerId);
     if (!player) return toast.error('Jugador no encontrado en la nómina.');
     if (team === 'HOME') {
@@ -482,7 +489,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
               </button>
               
               <div className="flex flex-wrap justify-center gap-2 mb-4 sm:mb-6 bg-slate-900/80 backdrop-blur-md p-1.5 sm:p-2.5 rounded-2xl border border-slate-700 shadow-xl z-10">
-                <button onClick={() => handleRefereeAction('HOME', 'YELLOW')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center hover:bg-slate-800"><Square className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-yellow-500 fill-yellow-500 drop-shadow-[0_0_5px_rgba(234,179,8,0.5)]" /></button>
+                <button aria-label={`Amarilla para ${match.home_team?.name || 'local'}`} onClick={() => handleRefereeAction('HOME', 'YELLOW')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center hover:bg-slate-800"><Square className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-yellow-500 fill-yellow-500 drop-shadow-[0_0_5px_rgba(234,179,8,0.5)]" /></button>
                 <button onClick={() => handleRefereeAction('HOME', 'RED')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center hover:bg-slate-800"><Square className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-red-500 fill-red-500 drop-shadow-[0_0_5px_rgba(239,68,68,0.5)]" /></button>
                 <button onClick={() => handleRefereeAction('HOME', 'SUB')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-blue-400 hover:bg-slate-800"><RefreshCcw className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6" /></button>
                 <button title="Asistencia" onClick={() => handleRefereeAction('HOME', 'ASSIST')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-cyan-400 hover:bg-slate-800"><Handshake className="w-5 h-5" /></button>
@@ -503,7 +510,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
               </button>
               
               <div className="flex flex-wrap justify-center gap-2 mb-4 sm:mb-6 bg-slate-900/80 backdrop-blur-md p-1.5 sm:p-2.5 rounded-2xl border border-slate-700 shadow-xl z-10">
-                <button onClick={() => handleRefereeAction('AWAY', 'YELLOW')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center hover:bg-slate-800"><Square className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-yellow-500 fill-yellow-500 drop-shadow-[0_0_5px_rgba(234,179,8,0.5)]" /></button>
+                <button aria-label={`Amarilla para ${match.away_team?.name || 'visitante'}`} onClick={() => handleRefereeAction('AWAY', 'YELLOW')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center hover:bg-slate-800"><Square className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-yellow-500 fill-yellow-500 drop-shadow-[0_0_5px_rgba(234,179,8,0.5)]" /></button>
                 <button onClick={() => handleRefereeAction('AWAY', 'RED')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center hover:bg-slate-800"><Square className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-red-500 fill-red-500 drop-shadow-[0_0_5px_rgba(239,68,68,0.5)]" /></button>
                 <button onClick={() => handleRefereeAction('AWAY', 'SUB')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-blue-400 hover:bg-slate-800"><RefreshCcw className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6" /></button>
                 <button title="Asistencia" onClick={() => handleRefereeAction('AWAY', 'ASSIST')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-cyan-400 hover:bg-slate-800"><Handshake className="w-5 h-5" /></button>
@@ -517,6 +524,13 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
             </div>
           </div>
         )}
+
+        <section aria-label="Línea de tiempo del partido" className="relative z-20 mx-4 mb-3 max-h-28 overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/85 p-3 backdrop-blur-md sm:mx-auto sm:w-full sm:max-w-3xl">
+          <div className="mb-2 flex items-center justify-between text-[9px] font-black uppercase tracking-widest text-slate-400">
+            <span>Últimos eventos</span><span>{liveEvents.length} registrados</span>
+          </div>
+          {liveEvents.length === 0 ? <p className="text-[10px] font-semibold text-slate-500">Aún no hay eventos registrados.</p> : <div className="space-y-1">{liveEvents.slice(-6).reverse().map((event: any) => <div key={event.id} className="flex items-center gap-2 text-[10px] font-bold text-white"><span className="w-10 shrink-0 text-slate-400">{event.minute_record || '--'}</span><span className="w-5 shrink-0" aria-hidden="true">{event.event_type === 'GOAL' ? '⚽' : event.event_type === 'YELLOW' ? '🟨' : event.event_type === 'RED' ? '🟥' : event.event_type === 'SUB' ? '🔄' : '•'}</span><span className="truncate">{event.players?.name || 'Evento de equipo'} · {event.event_type}</span></div>)}</div>}
+        </section>
       </div>
 
       {/* ======================================================== */}
@@ -595,12 +609,14 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
                   const playerYellows = liveEvents.filter(e => e.player_id === player.id && e.event_type === 'YELLOW').length;
                   const hasRed = liveEvents.some(e => e.player_id === player.id && e.event_type === 'RED');
                   const isOut = subOutPlayer === player.id;
-                  const isSuspended = suspendedPlayers[player.id];
+                    const isSuspended = suspendedPlayers[player.id];
+                    const eligibility = playerEligibility[player.id] || evaluatePlayerEligibility({ playerId: player.id, registered: true, teamId: player.team_id, suspended: Boolean(isSuspended), documents: player.player_documents || [] });
                   const isCurrentlyOnPitch = (scoringAction.team === 'HOME' ? homeStartingLineup : awayStartingLineup).includes(player.id);
                   let shouldDisable = false;
                   if (scoringAction.type === 'SUB' && !subOutPlayer && !isCurrentlyOnPitch) shouldDisable = true;
                   if (scoringAction.type === 'SUB' && subOutPlayer && (isCurrentlyOnPitch || isSuspended)) shouldDisable = true;
                   if (hasRed && scoringAction.type !== 'SUB') shouldDisable = true;
+                  if (eligibility.status === 'INELIGIBLE' && scoringAction.type !== 'SUB') shouldDisable = true;
 
                   return (
                     <button key={player.id} onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points, player.id)} disabled={shouldDisable} className={`p-3 sm:p-4 rounded-xl border flex flex-col items-center relative ${hasRed ? 'bg-red-50 border-red-200 opacity-50' : shouldDisable ? 'bg-slate-100 opacity-50' : 'hover:bg-emerald-50'} ${isOut ? 'ring-2 ring-red-400' : ''}`}>
@@ -610,6 +626,8 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
                       <span className="text-[8px] sm:text-[9px] font-bold uppercase mt-1 text-center truncate w-full">{player.name}</span>
                       <span className="mt-1 text-[8px] font-black uppercase text-blue-500">{playerAgeAtTournament(player) ?? '-'} años</span>
                       {!hasRequiredFiles(player) && <span className="mt-1 text-[7px] font-black uppercase text-amber-600">Documentos pendientes</span>}
+                      {eligibility.status === 'WARNING' && <span className="mt-1 text-[7px] font-black uppercase text-amber-600">Revisión requerida</span>}
+                      {eligibility.status === 'INELIGIBLE' && <span className="mt-1 text-[7px] font-black uppercase text-red-600">{eligibility.blockingReasons[0]?.message || 'No habilitado'}</span>}
                     </button>
                   );
                 })}
