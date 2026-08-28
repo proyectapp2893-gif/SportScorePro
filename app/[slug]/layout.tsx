@@ -7,7 +7,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   return {
     title: slug === DEMO_SLUG ? 'Demo privada | SportScore Pro' : 'CSJB Championship | by SportScore Pro',
     description: slug === DEMO_SLUG ? 'Experiencia funcional privada de SportScore Pro.' : 'Plataforma Oficial Multideporte del Colegio San José',
-    manifest: '/manifest.json',
+    manifest: '/manifest.webmanifest',
     robots: slug === DEMO_SLUG ? { index: false, follow: false, nocache: true } : undefined,
   };
 }

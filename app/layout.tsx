@@ -9,6 +9,13 @@ const inter = Inter({ subsets: ['latin'] });
 export const metadata: Metadata = {
   title: 'SportScore Pro',
   description: 'Gestor Integral de Competiciones',
+  manifest: '/manifest.webmanifest',
+  applicationName: 'SportScore Pro',
+  appleWebApp: {
+    capable: true,
+    title: 'SportScore Pro',
+    statusBarStyle: 'default',
+  },
 }
 
 export default function RootLayout({

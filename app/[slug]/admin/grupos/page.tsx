@@ -1093,7 +1093,7 @@ function FixtureContent() {
         {selectedCategory && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-8 duration-500">
 
-            <section aria-labelledby="fixture-workflow-title" className="rounded-[2rem] border border-slate-200 bg-slate-950 p-5 text-white shadow-xl sm:p-7">
+            <section data-testid="fixture-workflow-panel" aria-labelledby="fixture-workflow-title" className="rounded-[2rem] border border-slate-200 bg-slate-950 p-5 text-white shadow-xl sm:p-7">
               <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                 <div><p className="text-[9px] font-black uppercase tracking-[0.28em] text-blue-400">Fixture Workflow 2.0</p><h2 id="fixture-workflow-title" className="mt-1 text-2xl font-black uppercase tracking-tight">{fixtureWorkflow.publicationLabel}</h2><p className="mt-2 max-w-xl text-xs font-semibold text-slate-300">Estado derivado del fixture, su análisis y la visibilidad configurada. No representa una aprobación persistida.</p></div>
                 <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left"><p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Siguiente paso</p><p className="mt-1 text-sm font-black uppercase text-blue-300">{fixtureWorkflow.nextActionLabel}</p></div>
