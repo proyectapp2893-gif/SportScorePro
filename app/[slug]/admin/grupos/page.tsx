@@ -16,6 +16,7 @@ import AppPortal from '@/app/components/AppPortal';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
 import { createDemoFixture, deleteDemoFixture, randomizeDemoGroups, scheduleDemoFixture, setDemoFixtureVisibility, setDemoPublicFixtureVisibility, updateDemoMatch, updateDemoTeamGroup } from '@/app/lib/demo/actions';
 import { analyzeFixture } from '@/app/lib/fixture/intelligence';
+import { getFixtureWorkflowState } from '@/app/lib/fixture/workflow';
 
 type ParsedFixtureMatch = {
   round_number: number;
@@ -783,6 +784,8 @@ function FixtureContent() {
   const normalMatches = matchesToShow.filter(m => m.status !== 'BYE');
   const byeMatches = matchesToShow.filter(m => m.status === 'BYE');
   const fixtureAnalysis = analyzeFixture(matches, teams.map((team) => ({ id: team.id, name: team.name })), { requiresVenue: true, minimumRestMinutes: undefined });
+  const selectedTournament = categories.find((category) => category.id === selectedCategory)?.tournaments;
+  const fixtureWorkflow = getFixtureWorkflowState({ hasFixture: matches.length > 0, delegatesVisible: Boolean(selectedTournament?.fixture_visible_to_delegates), publicVisible: Boolean(selectedTournament?.fixture_visible_to_public), publicFlagAvailable: isDemo || selectedTournament?.fixture_visible_to_public !== undefined, analysis: matches.length > 0 ? fixtureAnalysis : null });
 
   const uniqueSports = Array.from(new Set(categories.map(c => c.sports?.name).filter(Boolean)));
   const hasFaseFinal = availableRounds.includes(100);
@@ -1089,6 +1092,15 @@ function FixtureContent() {
 
         {selectedCategory && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-8 duration-500">
+
+            <section aria-labelledby="fixture-workflow-title" className="rounded-[2rem] border border-slate-200 bg-slate-950 p-5 text-white shadow-xl sm:p-7">
+              <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                <div><p className="text-[9px] font-black uppercase tracking-[0.28em] text-blue-400">Fixture Workflow 2.0</p><h2 id="fixture-workflow-title" className="mt-1 text-2xl font-black uppercase tracking-tight">{fixtureWorkflow.publicationLabel}</h2><p className="mt-2 max-w-xl text-xs font-semibold text-slate-300">Estado derivado del fixture, su análisis y la visibilidad configurada. No representa una aprobación persistida.</p></div>
+                <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left"><p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Siguiente paso</p><p className="mt-1 text-sm font-black uppercase text-blue-300">{fixtureWorkflow.nextActionLabel}</p></div>
+              </div>
+              <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{fixtureWorkflow.checklist.map((item) => <div key={item.id} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2"><p className={`text-[9px] font-black uppercase ${item.status === 'error' ? 'text-red-300' : item.status === 'warning' ? 'text-amber-300' : 'text-emerald-300'}`}>{item.status === 'error' ? '⛔' : item.status === 'warning' ? '⚠️' : '✓'} {item.label}</p></div>)}</div>
+              <div className="mt-4 flex flex-wrap gap-2 text-[9px] font-black uppercase tracking-widest"><span className="rounded-full bg-white/10 px-3 py-1.5">Delegados: {selectedTournament?.fixture_visible_to_delegates ? 'Visible' : 'Oculto'}</span><span className="rounded-full bg-white/10 px-3 py-1.5">Público: {selectedTournament?.fixture_visible_to_public ? 'Visible' : 'Oculto'}</span></div>
+            </section>
 
             {stageStatus?.enabled && (
               <section className="rounded-[2rem] border border-blue-200 bg-gradient-to-br from-blue-600 to-blue-800 p-5 text-white shadow-xl sm:p-7">
