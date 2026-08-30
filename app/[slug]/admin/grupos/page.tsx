@@ -85,12 +85,31 @@ function FixtureContent() {
       const { data: client } = await supabase.from('clients').select('id').eq('slug', slug).single();
       if (client) {
         setClientId(client.id);
-        const { data: catData } = await supabase
+        const categoriesQuery = () => supabase
           .from('categories')
           .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates, fixture_visible_to_public), sports(name)')
           .eq('tournaments.client_id', client.id)
           .order('name');
-        if (catData) setCategories(catData);
+        let { data: catData, error: categoriesError } = await categoriesQuery();
+        // Production may still be on the legacy schema until the public
+        // visibility migration is approved. Keep the fixture usable there;
+        // leave the value undefined so consumers can distinguish the legacy
+        // schema from an explicit public=false setting.
+        if (categoriesError && /fixture_visible_to_public|column .* does not exist/i.test(categoriesError.message || '')) {
+          const legacy = await supabase
+            .from('categories')
+            .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates), sports(name)')
+            .eq('tournaments.client_id', client.id)
+            .order('name');
+          catData = (legacy.data || []).map((category: any) => ({
+            ...category,
+            tournaments: Array.isArray(category.tournaments)
+              ? category.tournaments.map((tournament: any) => ({ ...tournament, fixture_visible_to_public: undefined }))
+              : { ...category.tournaments, fixture_visible_to_public: undefined },
+          }));
+          categoriesError = legacy.error;
+        }
+        if (!categoriesError && catData) setCategories(catData);
       }
     }
     initializeHub();
@@ -136,17 +155,17 @@ function FixtureContent() {
 
   async function loadCategoryData() {
     setLoading(true);
-    const { data: teamsData } = await supabase.from('teams').select('*').eq('category_id', selectedCategory).order('name');
-
-    const { data: matchesData } = await supabase.from('matches')
-      .select(`
-        id, status, home_score, away_score, home_sets, away_sets, scheduled_time, venue, home_team_id, away_team_id,
-        home_team:teams!home_team_id(id, name, schools(logo_url)), 
-        away_team:teams!away_team_id(id, name, schools(logo_url)),
-        matchdays!inner(id, category_id, round_number, scheduled_date)
-      `)
-      .eq('matchdays.category_id', selectedCategory)
-      .order('scheduled_time', { ascending: true });
+    // Teams and matches are independent reads. Loading them together keeps
+    // the fixture screen from waiting on two sequential network round trips.
+    const [{ data: teamsData }, { data: matchesData }] = await Promise.all([
+      supabase.from('teams').select('*').eq('category_id', selectedCategory).order('name'),
+      supabase.from('matches').select(`
+          id, status, home_score, away_score, home_sets, away_sets, scheduled_time, venue, home_team_id, away_team_id,
+          home_team:teams!home_team_id(id, name, schools(logo_url)),
+          away_team:teams!away_team_id(id, name, schools(logo_url)),
+          matchdays!inner(id, category_id, round_number, scheduled_date)
+        `).eq('matchdays.category_id', selectedCategory).order('scheduled_time', { ascending: true }),
+    ]);
     
     if (matchesData) {
       setMatches(matchesData);
@@ -785,6 +804,7 @@ function FixtureContent() {
   const byeMatches = matchesToShow.filter(m => m.status === 'BYE');
   const fixtureAnalysis = analyzeFixture(matches, teams.map((team) => ({ id: team.id, name: team.name })), { requiresVenue: true, minimumRestMinutes: undefined });
   const selectedTournament = categories.find((category) => category.id === selectedCategory)?.tournaments;
+  const publicFlagAvailable = isDemo || selectedTournament?.fixture_visible_to_public !== undefined;
   const fixtureWorkflow = getFixtureWorkflowState({ hasFixture: matches.length > 0, delegatesVisible: Boolean(selectedTournament?.fixture_visible_to_delegates), publicVisible: Boolean(selectedTournament?.fixture_visible_to_public), publicFlagAvailable: isDemo || selectedTournament?.fixture_visible_to_public !== undefined, analysis: matches.length > 0 ? fixtureAnalysis : null });
 
   const uniqueSports = Array.from(new Set(categories.map(c => c.sports?.name).filter(Boolean)));
@@ -1175,9 +1195,9 @@ function FixtureContent() {
                     <span className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-700">{categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates ? <Eye size={16} className="shrink-0 text-emerald-600" /> : <EyeOff size={16} className="shrink-0 text-slate-400" />} Fixture para delegados</span>
                     <span className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates ? 'bg-emerald-500' : 'bg-slate-300'}`} aria-hidden="true"><span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_delegates ? 'translate-x-6' : 'translate-x-1'}`} /></span>
                   </button>
-                  <button type="button" role="switch" aria-checked={Boolean(categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_public)} aria-label="Publicar fixture y resultados" onClick={handlePublicFixtureVisibility} disabled={loading || matches.length === 0} className="flex min-h-12 w-full items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-left shadow-sm transition-all hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
-                    <span className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-700">{categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_public ? <Eye size={16} className="shrink-0 text-emerald-600" /> : <EyeOff size={16} className="shrink-0 text-slate-400" />} Publicar programación y resultados</span>
-                    <span className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_public ? 'bg-emerald-500' : 'bg-slate-300'}`} aria-hidden="true"><span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_public ? 'translate-x-6' : 'translate-x-1'}`} /></span>
+                  <button type="button" role="switch" aria-checked={Boolean(categories.find(c => c.id === selectedCategory)?.tournaments?.fixture_visible_to_public)} aria-label="Publicar fixture y resultados" onClick={handlePublicFixtureVisibility} disabled={loading || matches.length === 0 || !publicFlagAvailable} className="flex min-h-12 w-full items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-left shadow-sm transition-all hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
+                    <span className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-700">{selectedTournament?.fixture_visible_to_public ? <Eye size={16} className="shrink-0 text-emerald-600" /> : <EyeOff size={16} className="shrink-0 text-slate-400" />} {publicFlagAvailable ? 'Publicar programación y resultados' : 'Publicación pública no disponible (actualiza la base)'}</span>
+                    <span className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${selectedTournament?.fixture_visible_to_public ? 'bg-emerald-500' : 'bg-slate-300'}`} aria-hidden="true"><span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${selectedTournament?.fixture_visible_to_public ? 'translate-x-6' : 'translate-x-1'}`} /></span>
                   </button>
                   </div>}
                 </div>

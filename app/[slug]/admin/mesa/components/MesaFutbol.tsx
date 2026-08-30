@@ -111,7 +111,23 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
 
   const fetchLiveEvents = async () => {
     const { data: eventsP } = await supabase.from('match_events').select('*, players(name, shirt_number)').eq('match_id', match.id).order('created_at', { ascending: true });
-    setLiveEvents(eventsP || []);
+    const events = eventsP || [];
+    setLiveEvents(events);
+
+    // Older production RPCs could persist the GOAL event without returning the
+    // updated match score. Keep the visible scoreboard truthful for an open
+    // match by deriving only a missing score from the already persisted events.
+    // This is read-only and never overwrites tournament data.
+    if (match.status === 'LIVE') {
+      const eventScore = events.reduce((score, event: any) => {
+        if (event.event_type !== 'GOAL') return score;
+        if (event.team_id === match.home_team_id || event.team_id === match.home_team?.id) score.home += 1;
+        if (event.team_id === match.away_team_id || event.team_id === match.away_team?.id) score.away += 1;
+        return score;
+      }, { home: 0, away: 0 });
+      setHomeScore((current: number) => Math.max(current, eventScore.home));
+      setAwayScore((current: number) => Math.max(current, eventScore.away));
+    }
   };
 
   const handlePreMatchSetup = () => setShowStartingLineupModal(true);
@@ -132,7 +148,6 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   };
 
   const handleTurnMatchLive = async () => {
-    if (homeStartingLineup.length < minPlayers || awayStartingLineup.length < minPlayers) return toast.error(`Mínimo ${minPlayers} titulares.`);
     setLoading(true);
     const toastId = toast.loading('Registrando acta...');
     try {

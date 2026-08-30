@@ -108,6 +108,39 @@ label[for] {
   }
 }
 
+/* Feedback de pulsación también en escritorio: mantiene la respuesta visual
+   consistente al usar mouse, trackpad o pantalla táctil. */
+@media (hover: hover) and (pointer: fine) {
+  :where(
+    button,
+    [role="button"],
+    input[type="button"],
+    input[type="submit"],
+    input[type="reset"],
+    a[href][class],
+    label:has(input[type="file"]),
+    summary
+  ) {
+    transition-property: transform, filter, opacity, box-shadow;
+    transition-duration: 100ms;
+    transition-timing-function: ease-out;
+  }
+
+  :where(
+    button,
+    [role="button"],
+    input[type="button"],
+    input[type="submit"],
+    input[type="reset"],
+    a[href][class],
+    label:has(input[type="file"]),
+    summary
+  ):active:not(:disabled):not([aria-disabled="true"]) {
+    transform: scale(0.975);
+    filter: brightness(0.94) saturate(1.06);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -195,4 +228,51 @@ label[for] {
 
 @media (prefers-reduced-motion: reduce) {
   .delegate-standing-highlight { animation: none; background: rgb(219 234 254 / 0.8); }
+}
+
+/* La tarjeta completa es el selector: se conserva el botón accesible como
+   superficie de interacción, pero sin ocupar espacio con texto repetido. */
+[aria-label="Campo de alineación"] button[aria-expanded][aria-label] {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  height: auto;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  font-size: 0;
+}
+
+[aria-label="Campo de alineación"] button[aria-expanded][aria-label]:hover {
+  background: rgb(37 99 235 / 0.08);
+}
+
+[aria-label="Campo de alineación"] button[aria-expanded][aria-label]:focus-visible {
+  border-radius: 10px;
+  outline: 3px solid rgb(147 197 253);
+  outline-offset: 2px;
+}
+
+[aria-label="Campo de alineación"] .relative.flex.h-11 {
+  height: 4.5rem;
+}
+
+/* El selector visual de formación vive en la cancha; el select se conserva
+   para mantener el flujo React y accesibilidad del formulario. */
+[role="dialog"] label:has(> select) {
+  display: none;
+}
+
+[role="dialog"] label > select {
+  display: none;
+}
+
+/* En tablet/escritorio la cancha no debe quedar atrapada en la segunda
+   columna del panel de configuración. El layout móvil no se modifica. */
+@media (min-width: 768px) {
+  [aria-label="Campo de alineación"] {
+    grid-column: 1 / -1;
+    width: min(100%, 680px);
+    margin-inline: auto;
+  }
 }

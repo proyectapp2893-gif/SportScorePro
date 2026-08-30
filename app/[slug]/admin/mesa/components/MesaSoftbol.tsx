@@ -136,10 +136,6 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
   };
 
   const handleTurnMatchLive = async () => {
-    if (homeStartingLineup.length < minPlayers || awayStartingLineup.length < minPlayers) {
-      return toast.error(`Se requieren mínimo ${minPlayers} jugadores en el Lineup.`);
-    }
-
     setLoading(true);
     const toastId = toast.loading('Registrando acta...');
     try {
@@ -405,7 +401,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
                 <Zap size={16} className="text-amber-500" /> Rápido
               </button>
               <div className="hidden sm:block"></div>
-              <button onClick={handleTurnMatchLive} disabled={loading || homeStartingLineup.length < minPlayers || awayStartingLineup.length < minPlayers} className="w-full sm:w-auto px-6 md:px-12 py-3 md:py-4 bg-red-600 hover:bg-red-500 text-white rounded-xl md:rounded-2xl font-black text-[10px] md:text-xs uppercase tracking-[0.2em] flex items-center justify-center gap-2 md:gap-3 shadow-[0_0_30px_rgba(220,38,38,0.4)] transition-all disabled:opacity-50">
+              <button onClick={handleTurnMatchLive} disabled={loading} className="w-full sm:w-auto px-6 md:px-12 py-3 md:py-4 bg-red-600 hover:bg-red-500 text-white rounded-xl md:rounded-2xl font-black text-[10px] md:text-xs uppercase tracking-[0.2em] flex items-center justify-center gap-2 md:gap-3 shadow-[0_0_30px_rgba(220,38,38,0.4)] transition-all disabled:opacity-50">
                 <FaBaseballBall className="w-4 h-4 md:w-5 md:h-5 animate-spin-slow" /> <span className="truncate">Confirmar y Play Ball</span>
               </button>
             </div>

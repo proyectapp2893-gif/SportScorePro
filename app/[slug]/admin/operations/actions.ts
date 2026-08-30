@@ -21,15 +21,23 @@ export async function getTournamentOperations(slug: string, tournamentId: string
   // the dashboard readable against older schemas (including production before
   // that migration is approved) without weakening the tenant filter.
   const tournamentQuery = () => supabase.from('tournaments').select('id, name, is_active, fixture_visible_to_delegates, fixture_visible_to_public, schedule_dates, schedule_time_slots, available_venues').eq('id', tournamentId).eq('client_id', clientId).maybeSingle();
-  let { data: tournament, error: tournamentError } = await tournamentQuery();
+  // Categories do not depend on the tournament row response, so start both
+  // requests together and avoid an avoidable round trip on the dashboard's
+  // critical path. The category query remains tenant-scoped by tournamentId.
+  const [{ data: initialTournament, error: initialTournamentError }, categoriesResult] = await Promise.all([
+    tournamentQuery(),
+    supabase.from('categories').select('id, name').eq('tournament_id', tournamentId),
+  ]);
+  let tournament = initialTournament;
+  let tournamentError = initialTournamentError;
   if (tournamentError && (tournamentError.code === 'PGRST204' || /fixture_visible_to_public|column .* does not exist/i.test(tournamentError.message || ''))) {
     const legacy = await supabase.from('tournaments').select('id, name, is_active, fixture_visible_to_delegates, schedule_dates, schedule_time_slots, available_venues').eq('id', tournamentId).eq('client_id', clientId).maybeSingle();
-    tournament = legacy.data ? { ...legacy.data, fixture_visible_to_public: false } : null;
+    tournament = legacy.data ? { ...legacy.data, fixture_visible_to_public: undefined } : null;
     tournamentError = legacy.error;
   }
   if (tournamentError) return { success: false, error: 'No fue posible cargar el torneo. Intenta nuevamente.' };
   if (!tournament) return { success: false, error: 'El torneo no pertenece a esta institución.' };
-  const { data: categories, error: categoriesError } = await supabase.from('categories').select('id, name').eq('tournament_id', tournamentId);
+  const { data: categories, error: categoriesError } = categoriesResult;
   if (categoriesError) return { success: false, error: 'No fue posible consultar las categorías.' };
   const categoryIds = (categories || []).map((category) => category.id);
   const tournamentModule = (module: string) => adminTournamentModulePath(slug, module, tournamentId);

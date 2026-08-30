@@ -3,9 +3,11 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../../supabase';
 import { useParams, useSearchParams } from 'next/navigation';
-import { Scale, AlertTriangle, ShieldCheck, DollarSign, Search, CheckCircle2, Flame, ArrowLeft, Wallet, Calendar, Clock, Flag } from 'lucide-react';
+import { Scale, AlertTriangle, ShieldCheck, DollarSign, Search, CheckCircle2, Flame, ArrowLeft, Wallet, Calendar, Clock, Flag, Eye } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
+import { formatCopAmount } from '@/app/lib/formatters';
+import { approveFinePaymentProof, getFinePaymentProofs, getFinePaymentProofUrl } from './actions';
 
 export default function TribunalPage() {
   const params = useParams();
@@ -15,6 +17,9 @@ export default function TribunalPage() {
 
   const [loading, setLoading] = useState(true);
   const [fines, setFines] = useState<any[]>([]);
+  const [paymentProofs, setPaymentProofs] = useState<any[]>([]);
+  const [selectedProof, setSelectedProof] = useState<any | null>(null);
+  const [selectedProofUrl, setSelectedProofUrl] = useState('');
   
   // Estados para los filtros y Pestañas
   const [searchTerm, setSearchTerm] = useState('');
@@ -66,10 +71,29 @@ export default function TribunalPage() {
         }
 
         if (eventsData) setFines(eventsData);
+
+        const proofsResult = await getFinePaymentProofs(slug, trns.id);
+        if (proofsResult.success) setPaymentProofs(proofsResult.data);
       }
     }
     setLoading(false);
   }
+
+  const handleApproveProof = async (proof: any) => {
+    const toastId = toast.loading('Validando comprobante...');
+    const result = await approveFinePaymentProof(slug, proof.id);
+    if (!result.success) return toast.error(result.error, { id: toastId });
+    toast.success('Pago validado. Jugador habilitado.', { id: toastId });
+    loadData();
+  };
+
+  const handleViewProof = async (path: string) => {
+    const result = await getFinePaymentProofUrl(slug, path);
+    if (!result.success) return toast.error(result.error);
+    setSelectedProofUrl(result.data.url);
+  };
+
+  const proofByEvent = paymentProofs.reduce((acc: Record<string, any>, proof: any) => { acc[proof.match_event_id] = proof; return acc; }, {});
 
   const handlePayFine = async (eventId: string, playerName: string) => {
     const toastId = toast.loading(`Procesando pago de ${playerName}...`);
@@ -177,7 +201,7 @@ export default function TribunalPage() {
               <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center shrink-0"><DollarSign size={24}/></div>
               <div>
                 <p className="text-[10px] md:text-xs font-black uppercase tracking-widest text-slate-400">Saldo en Mora</p>
-                <p className="text-2xl md:text-3xl font-black text-amber-600 leading-none">${totalMoneyPending.toLocaleString()}</p>
+                <p className="text-2xl md:text-3xl font-black text-amber-600 leading-none">{formatCopAmount(totalMoneyPending)}</p>
               </div>
             </div>
 
@@ -185,7 +209,7 @@ export default function TribunalPage() {
               <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center shrink-0"><Wallet size={24}/></div>
               <div>
                 <p className="text-[10px] md:text-xs font-black uppercase tracking-widest text-slate-400">Total Recaudado</p>
-                <p className="text-2xl md:text-3xl font-black text-emerald-600 leading-none">${totalMoneyCollected.toLocaleString()}</p>
+                <p className="text-2xl md:text-3xl font-black text-emerald-600 leading-none">{formatCopAmount(totalMoneyCollected)}</p>
               </div>
             </div>
           </div>
@@ -193,6 +217,11 @@ export default function TribunalPage() {
 
         {/* CONTENEDOR PRINCIPAL DE LA TABLA */}
         <div className="bg-white border border-slate-200 rounded-[2.5rem] overflow-hidden shadow-xl animate-in fade-in slide-in-from-bottom-4">
+
+          <section className="hidden">
+            <div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-600">Comprobantes recibidos</p><h2 className="text-xl font-black uppercase text-slate-900">Validar pagos de jugadores</h2></div><span className="rounded-full bg-blue-600 px-3 py-1 text-[10px] font-black uppercase text-white">{paymentProofs.length} pendientes</span></div>
+            {paymentProofs.length === 0 ? <p className="rounded-2xl border border-dashed border-blue-200 bg-white/70 p-4 text-xs font-bold uppercase tracking-wider text-slate-500">No hay comprobantes pendientes. Cuando un delegado cargue un baucher desde el perfil de su jugador, aparecerá aquí para revisarlo.</p> : <div className="grid gap-3 md:grid-cols-2">{paymentProofs.map((proof) => <div key={proof.id} className="flex items-center justify-between gap-3 rounded-2xl border border-blue-100 bg-white p-4"><div className="min-w-0"><p className="truncate text-sm font-black uppercase">#{proof.players?.shirt_number || '-'} {proof.players?.name}</p><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{proof.original_filename}</p></div><div className="flex shrink-0 gap-2"><button type="button" onClick={() => handleViewProof(proof.storage_path)} className="rounded-xl border border-blue-200 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-50">Ver</button><button type="button" onClick={() => handleApproveProof(proof)} className="rounded-xl bg-emerald-600 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white hover:bg-emerald-700">Aceptar</button></div></div>)}</div>}
+          </section>
           
           {/* BARRA DE BÚSQUEDA Y FILTROS DE FECHA */}
           <div className="p-4 md:p-6 border-b border-slate-200 flex flex-col lg:flex-row items-center justify-between gap-4 bg-slate-50">
@@ -331,25 +360,20 @@ export default function TribunalPage() {
                         </td>
 
                         {/* MONTO */}
-                        <td className="p-6 text-right">
+                        <td className="p-6 text-center">
                            <span className={`text-lg font-black tracking-tighter ${isPaid ? 'text-slate-300 line-through' : 'text-slate-800'}`}>
-                              ${amount?.toLocaleString() || 0}
+                              {formatCopAmount(amount)}
                            </span>
                         </td>
 
                         {/* BOTÓN DE ACCIÓN */}
-                        <td className="p-6 pr-8 text-right">
+                        <td className="p-6 pr-8 text-center">
                            {isPaid ? (
                               <span className="inline-flex items-center gap-1.5 text-[10px] font-black text-emerald-600 uppercase tracking-widest bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-100">
                                  <ShieldCheck size={14}/> Liberado
                               </span>
                            ) : (
-                              <button 
-                                onClick={() => handlePayFine(fine.id, fine.players?.name)}
-                                className="inline-flex items-center gap-2 bg-slate-900 hover:bg-emerald-600 text-white px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-md active:scale-95"
-                              >
-                                 <CheckCircle2 size={14}/> Registrar Pago
-                              </button>
+                              proofByEvent[fine.id] ? <button type="button" onClick={async () => { setSelectedProof(proofByEvent[fine.id]); setSelectedProofUrl(''); await handleViewProof(proofByEvent[fine.id].storage_path); }} className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-center text-[10px] font-black uppercase tracking-widest transition-all shadow-md active:scale-95"><Eye size={14}/> Ver comprobante</button> : <span className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-4 py-2.5 text-center text-[10px] font-black uppercase tracking-widest text-slate-400"><Clock size={14}/> Sin comprobante</span>
                            )}
                         </td>
                       </tr>
@@ -360,6 +384,15 @@ export default function TribunalPage() {
             </table>
           </div>
         </div>
+        {selectedProof && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4" onClick={() => setSelectedProof(null)}>
+            <section role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+              <div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Comprobante privado</p><h2 className="text-xl font-black uppercase">{selectedProof.players?.name}</h2></div><button type="button" onClick={() => setSelectedProof(null)} className="rounded-xl bg-slate-100 p-2" aria-label="Cerrar"><ArrowLeft size={18}/></button></div>
+              {selectedProofUrl ? <iframe src={selectedProofUrl} title="Comprobante de pago" className="h-[55vh] w-full rounded-2xl border border-slate-200" /> : <div className="flex h-40 items-center justify-center text-sm font-bold text-slate-400">Cargando comprobante…</div>}
+              <button type="button" onClick={() => handleApproveProof(selectedProof)} className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-emerald-700"><CheckCircle2 size={16} className="mr-2 inline"/> Confirmar pago y habilitar jugador</button>
+            </section>
+          </div>
+        )}
       </div>
     </main>
   );

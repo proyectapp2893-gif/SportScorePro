@@ -17,7 +17,7 @@ export default function DemoDelegatePortal({ slug }: { slug: string }) {
       const eventsByTeam: Record<string, any[]> = {};
       const eventsByMatch: Record<string, any[]> = {};
       teams.forEach((team) => {
-        playersByTeam[team.id] = db.players.filter((player) => player.team_id === team.id);
+        playersByTeam[team.id] = db.players.filter((player) => player.team_id === team.id).map((player) => ({ ...player, team_logo_url: (team as any).schools?.logo_url || (team as any).logo_url || null }));
         staffByTeam[team.id] = db.team_staff.filter((member) => member.team_id === team.id);
         eventsByTeam[team.id] = db.match_events.filter((event) => event.team_id === team.id);
         const matches = db.matches.filter((match) => match.home_team_id === team.id || match.away_team_id === team.id || (match.status === 'BYE' && match.home_team_id === team.id));

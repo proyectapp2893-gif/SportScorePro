@@ -2,17 +2,20 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Activity, CalendarDays, Camera, ChevronDown, CircleHelp, ClipboardCopy, Download, ExternalLink, Eye, FileCheck2, FileSpreadsheet, KeyRound, LoaderCircle, Lock, LogOut, Pencil, Plus, ShieldCheck, Square, Trash2, Trophy, Upload, UserRoundCog, Users, X } from 'lucide-react';
+import { Activity, CalendarDays, Camera, CheckCircle2, ChevronDown, CircleHelp, ClipboardCopy, Download, ExternalLink, Eye, FileCheck2, FileSpreadsheet, KeyRound, LoaderCircle, Lock, LogOut, Pencil, Plus, ShieldCheck, Square, Trash2, Trophy, Upload, Users, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '@/app/lib/sports/rules';
 import { toTeamSlug } from '@/app/lib/team-slug';
 import { DEFAULT_ROSTER_LOCKED_MESSAGE } from '@/app/lib/registration';
-import { addDelegatePlayers, changeDelegatePassword, copyTeamRosterFromTournament, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, saveDelegateTeamStaff, updateDelegatePlayer, uploadDelegateSchoolLogo, uploadPlayerIdentityDocument } from './actions';
+import { addDelegatePlayers, changeDelegatePassword, copyTeamRosterFromTournament, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, saveDelegateTeamStaff, saveDelegateMatchLineup, updateDelegatePlayer, uploadDelegateSchoolLogo, uploadPlayerIdentityDocument, uploadPlayerFinePaymentProof } from './actions';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
 import { addDemoDocument, addDemoPlayers, deleteDemoPlayer, saveDemoStaff, updateDemoPlayer } from '@/app/lib/demo/actions';
 import { confirmDialog } from '@/app/components/AppDialog';
 import { normalizePlayerBirthDate } from '@/app/lib/players/date';
+import { formatCopAmount } from '@/app/lib/formatters';
+import FormationBoard from '@/app/components/FormationBoard';
+import { getFootball9Formation } from '@/app/lib/sports/formations';
 
 type DelegatePortalClientProps = {
   slug: string;
@@ -289,8 +292,19 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const [logoUrl, setLogoUrl] = useState('');
   const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' });
   const [activeRound, setActiveRound] = useState('');
+  const [showAllUpcoming, setShowAllUpcoming] = useState(false);
+  const [showStaffEditor, setShowStaffEditor] = useState(false);
   const [selectedHistoryMatch, setSelectedHistoryMatch] = useState<any | null>(null);
   const [selectedStatDetail, setSelectedStatDetail] = useState<'GOALS' | 'YELLOW' | 'RED' | 'DEBT' | null>(null);
+  const [selectedFineEvent, setSelectedFineEvent] = useState<any | null>(null);
+  const [lineupMatch, setLineupMatch] = useState<any | null>(null);
+  const [lineupSelection, setLineupSelection] = useState<string[]>([]);
+  const [lineupFormation, setLineupFormation] = useState('3-3-2');
+  const [lineupAssignments, setLineupAssignments] = useState<Record<string, string | undefined>>({});
+  const [savedDefaultLineup, setSavedDefaultLineup] = useState<{ formation: string; players: string[] } | null>(null);
+  const [, setLineupPhotoUrls] = useState<Record<string, string>>({});
+  const lineupPhotoCache = useRef(new Map<string, string>());
+  const lineupPhotoRequests = useRef(new Map<string, Promise<void>>());
   const [showBulkUpload, setShowBulkUpload] = useState(false);
   const [showRegistrationModule, setShowRegistrationModule] = useState(false);
   const [bulkRows, setBulkRows] = useState<BulkPlayerRow[]>([]);
@@ -309,6 +323,9 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
 
   const selectedTeam = data?.teams?.find((team: any) => team.id === selectedTeamId) || data?.teams?.[0];
   const selectedCategory = selectedTeam?.categories;
+  const categoryDescriptor = `${selectedCategory?.name || ''} ${selectedCategory?.sports?.name || ''} ${selectedCategory?.format || ''} ${selectedCategory?.modality || ''} ${selectedCategory?.players_per_side || ''}`.toUpperCase();
+  const isFootball9Category = selectedCategory?.tournaments?.sport_modality === 'SOCCER_9' || /F(?:Ú|U)TBOL\s*9|FOOTBALL\s*9|\b9\s*(?:JUGADORES|PLAYERS)\b/.test(categoryDescriptor) || Number(selectedCategory?.players_per_side) === 9;
+  const teamTournamentCount = new Set((data?.teams || []).map((team: any) => team.categories?.tournaments?.id || team.categories?.tournaments?.name).filter(Boolean)).size;
   const fixtureVisibleToDelegates = Boolean(selectedCategory?.tournaments?.fixture_visible_to_delegates);
   const canEditRoster = selectedTeam && isRegistrationOpen(selectedCategory);
   const transferableTeams = (data?.teams || []).filter((team: any) => team.id !== selectedTeam?.id && team.school_id === selectedTeam?.school_id);
@@ -340,7 +357,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     ((matchesA as any[])[0]?.matchdays?.round_number || 0) - ((matchesB as any[])[0]?.matchdays?.round_number || 0),
   );
   const lastScheduledRound = roundEntries.at(-1)?.[0] || '';
-  const selectedRound = activeRound && scheduleRounds[activeRound] ? activeRound : roundEntries[0]?.[0] || '';
+  const selectedRound = activeRound && scheduleRounds[activeRound] ? activeRound : '';
 
   useEffect(() => {
     setData(initialData);
@@ -360,6 +377,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
 
   useEffect(() => {
     setActiveRound('');
+    setShowAllUpcoming(false);
+    setShowStaffEditor(false);
     setShowRegistrationModule(false);
     setRosterEditMode(false);
     setEditingPlayer(null);
@@ -919,6 +938,131 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     setLoading(false);
   };
 
+  const handleFineProofUpload = async (file?: File) => {
+    if (!selectedTeam || !selectedFineEvent || !file) return;
+    setLoading(true);
+    const result = isDemo
+      ? { success: true as const, data: undefined }
+      : await uploadPlayerFinePaymentProof(slug, selectedTeam.id, selectedFineEvent.player_id, selectedFineEvent.id, file);
+    if (!result.success) toast.error(result.error || 'No se pudo enviar el comprobante');
+    else { toast.success(isDemo ? 'Comprobante simulado enviado' : 'Comprobante enviado para validación'); setSelectedFineEvent(null); if (!isDemo) window.location.reload(); }
+    setLoading(false);
+  };
+
+  const openLineupEditor = async (match: any) => {
+    // Abrimos el editor de inmediato; las fotos se resuelven en segundo plano.
+    setLineupMatch(match);
+    const existing = (eventsByMatch[match.id] || []).filter((event: any) => event.event_type === 'STARTING_LINEUP' && event.team_id === selectedTeam?.id).map((event: any) => event.player_id);
+    let defaultFormation = lineupFormation;
+    let defaultPlayers = existing;
+    let saved: any = null;
+    if (selectedTeam) {
+      try {
+        saved = JSON.parse(localStorage.getItem(`sportscore:default-lineup:${slug}:${selectedTeam.id}`) || 'null');
+        setSavedDefaultLineup(saved?.formation && Array.isArray(saved?.players) ? { formation: saved.formation, players: saved.players } : null);
+        if (existing.length === 0) {
+          if (saved?.formation) defaultFormation = saved.formation;
+          if (Array.isArray(saved?.players)) defaultPlayers = saved.players.filter((id: string) => players.some((player: any) => player.id === id));
+        }
+      } catch { /* preferencias locales inválidas: se ignoran */ }
+    }
+    const formation = getFootball9Formation(defaultFormation);
+    setLineupFormation(defaultFormation);
+    setLineupAssignments(Object.fromEntries(formation.players.map((slot, index) => [slot.id, defaultPlayers[index]])));
+    setLineupSelection(defaultPlayers);
+  };
+
+  const startNewLineup = () => {
+    const formation = getFootball9Formation('3-3-2');
+    setLineupFormation(formation.code);
+    setLineupAssignments(Object.fromEntries(formation.players.map((slot) => [slot.id, undefined])));
+    setLineupSelection([]);
+  };
+
+  const useSavedDefaultLineup = () => {
+    if (!savedDefaultLineup) return;
+    const formation = getFootball9Formation(savedDefaultLineup.formation);
+    const validPlayers = savedDefaultLineup.players.filter((id) => players.some((player: any) => player.id === id));
+    setLineupFormation(formation.code);
+    setLineupAssignments(Object.fromEntries(formation.players.map((slot, index) => [slot.id, validPlayers[index]])));
+    setLineupSelection(validPlayers);
+  };
+
+  const saveCurrentAsDefaultLineup = () => {
+    if (!selectedTeam) return;
+    const value = { formation: lineupFormation, players: lineupSelection.slice(0, 9) };
+    try {
+      localStorage.setItem(`sportscore:default-lineup:${slug}:${selectedTeam.id}`, JSON.stringify(value));
+      setSavedDefaultLineup(value);
+      toast.success('Plantilla guardada como predeterminada');
+    } catch {
+      toast.error('No fue posible guardar la plantilla en este dispositivo');
+    }
+  };
+
+  const loadSelectedPlayerPhoto = async (playerId: string) => {
+    const player = players.find((item: any) => item.id === playerId);
+    if (!player || player.photo_url || player.face_photo_url || player.image_url || !player.player_documents?.some((doc: any) => doc.document_type === 'FACE_PHOTO')) return;
+    const cachedUrl = lineupPhotoCache.current.get(playerId);
+    if (cachedUrl) {
+      player.photo_url = cachedUrl;
+      setLineupPhotoUrls((current) => ({ ...current, [playerId]: cachedUrl }));
+      return;
+    }
+    const pendingRequest = lineupPhotoRequests.current.get(playerId);
+    if (pendingRequest) return pendingRequest;
+    const request = (async () => {
+    try {
+      const result = isDemo ? { success: false as const } : await getPlayerIdentityDocumentUrl(slug, selectedTeam.id, playerId, 'FACE_PHOTO');
+      if (result.success && result.data?.url) {
+        lineupPhotoCache.current.set(playerId, result.data.url);
+        player.photo_url = result.data.url;
+        setLineupPhotoUrls((current) => ({ ...current, [playerId]: result.data.url }));
+      }
+    } catch { /* la foto es opcional para la alineación */ }
+    })().finally(() => lineupPhotoRequests.current.delete(playerId));
+    lineupPhotoRequests.current.set(playerId, request);
+    return request;
+  };
+
+  const assignLineupPlayer = (positionId: string, playerId: string) => {
+    if (playerId) void loadSelectedPlayerPhoto(playerId);
+    setLineupAssignments((current) => {
+      const next = { ...current };
+      Object.keys(next).forEach((key) => { if (key !== positionId && next[key] === playerId) next[key] = undefined; });
+      next[positionId] = playerId || undefined;
+      setLineupSelection(Object.values(next).filter(Boolean) as string[]);
+      return next;
+    });
+  };
+
+  const changeLineupFormation = (code: string) => {
+    const currentPlayers = Object.values(lineupAssignments).filter(Boolean) as string[];
+    const formation = getFootball9Formation(code);
+    const next = Object.fromEntries(formation.players.map((slot, index) => [slot.id, currentPlayers[index]]));
+    setLineupFormation(code); setLineupAssignments(next); setLineupSelection(Object.values(next).filter(Boolean) as string[]);
+  };
+
+  const handleSaveLineup = async () => {
+    if (!selectedTeam || !lineupMatch) return;
+    setLoading(true);
+    const result = isDemo ? { success: true as const, data: undefined } : await saveDelegateMatchLineup(slug, selectedTeam.id, lineupMatch.id, lineupSelection);
+    if (!result.success) toast.error(result.error); else {
+      toast.success('Alineación enviada a Mesa de Control');
+      try { localStorage.setItem(`sportscore:default-lineup:${slug}:${selectedTeam.id}`, JSON.stringify({ formation: lineupFormation, players: lineupSelection })); } catch { /* almacenamiento local no disponible */ }
+      if (isDemo) {
+        setData((current: any) => {
+          if (!current) return current;
+          const existingEvents = current.eventsByMatch?.[lineupMatch.id] || [];
+          const lineupEvents = lineupSelection.map((playerId, index) => ({ id: `demo-lineup-${lineupMatch.id}-${selectedTeam.id}-${index}`, match_id: lineupMatch.id, team_id: selectedTeam.id, player_id: playerId, event_type: 'STARTING_LINEUP', period: '0' }));
+          return { ...current, eventsByMatch: { ...(current.eventsByMatch || {}), [lineupMatch.id]: [...existingEvents.filter((event: any) => !(event.event_type === 'STARTING_LINEUP' && event.team_id === selectedTeam.id)), ...lineupEvents] } };
+        });
+      } else window.location.reload();
+      setLineupMatch(null);
+    }
+    setLoading(false);
+  };
+
   const openPlayerDocument = async (playerId: string, documentType: 'FACE_PHOTO' | 'IDENTITY_FRONT' | 'IDENTITY_BACK') => {
     if (!selectedTeam) return;
     if (isDemo) return toast('Archivo simulado: la demo no sube documentos a servidores.');
@@ -962,6 +1106,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
         </div>
       </div>
       <p className={`mt-4 text-center text-[9px] font-black uppercase tracking-widest ${match.status === 'LIVE' ? 'text-red-500' : 'text-slate-400'}`}>{matchStatusLabel(match.status)}</p>
+      {match.status === 'SCHEDULED' && selectedTeam && <button type="button" onClick={() => openLineupEditor(match)} className="mt-3 w-full rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-[10px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100">{(eventsByMatch[match.id] || []).some((event: any) => event.event_type === 'STARTING_LINEUP' && event.team_id === selectedTeam.id) ? 'Editar alineación' : 'Organizar alineación'}</button>}
     </div>
     );
   };
@@ -1012,6 +1157,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
         </div>
       </div>
       <p className={`text-[9px] font-black uppercase mt-2 ${match.status === 'LIVE' ? 'text-red-500' : 'text-slate-400'}`}>{matchStatusLabel(match.status)}</p>
+      {match.status === 'SCHEDULED' && selectedTeam && <button type="button" onClick={() => openLineupEditor(match)} className="mt-3 w-full rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-[10px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100">{(eventsByMatch[match.id] || []).some((event: any) => event.event_type === 'STARTING_LINEUP' && event.team_id === selectedTeam.id) ? 'Editar alineación' : 'Organizar alineación'}</button>}
     </div>
     );
   };
@@ -1064,7 +1210,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
           />
         </div>
       )}
-      <header className="relative z-10 overflow-hidden bg-slate-950 px-4 py-6 text-white sm:py-8">
+      <header className="sticky top-0 z-40 overflow-hidden bg-slate-950 px-4 py-4 text-white shadow-xl shadow-slate-950/20 sm:py-6">
         {selectedTeam?.schools?.logo_url && (
           <img
             src={selectedTeam.schools.logo_url}
@@ -1095,10 +1241,20 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   <span>{selectedTeam.categories?.sports?.name} / {selectedTeam.categories?.name}</span>
                 </div>
               )}
-              {selectedTeam && <div className="mt-3 flex items-center gap-2">
+              {selectedTeam && <div className="mt-3 flex flex-wrap items-center gap-2">
                 <a href={`/${slug}/equipo/${toTeamSlug(selectedTeam.name)}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-[8px] font-black uppercase tracking-wider text-white transition hover:bg-white/15 sm:text-[9px]"><ExternalLink size={13} /> Ver resultados del equipo</a>
                 <button type="button" onClick={copyPublicTeamLink} className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/10 text-blue-300 transition hover:bg-white/15" aria-label="Copiar enlace de resultados" title="Copiar enlace de resultados"><ClipboardCopy size={13} /></button>
               </div>}
+              {selectedTeam && <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[9px] font-bold uppercase tracking-wider text-slate-300">
+                <span className="text-violet-300">Técnico: <span className="text-slate-200">{teamStaff.find((member: any) => member.role === 'HEAD_COACH')?.full_name || 'Sin registrar'}</span></span>
+                <span className="text-violet-300">Asistente: <span className="text-slate-200">{teamStaff.find((member: any) => member.role === 'ASSISTANT_COACH')?.full_name || 'Sin registrar'}</span></span>
+                {canEditRoster && <button type="button" onClick={() => setShowStaffEditor((open) => !open)} className="rounded-md bg-white/10 px-2 py-1 text-[8px] font-black text-violet-200 transition hover:bg-white/20" aria-expanded={showStaffEditor}>{showStaffEditor ? 'Cerrar' : 'Editar'}</button>}
+              </div>}
+              {showStaffEditor && canEditRoster && <form onSubmit={handleSaveStaff} className="mt-3 grid max-w-2xl gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                <label className="text-[8px] font-black uppercase tracking-widest text-slate-400">Técnico<input required value={staffForm.headCoach} onChange={(event) => setStaffForm({ ...staffForm, headCoach: event.target.value.toUpperCase() })} className="mt-1 w-full rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-[10px] font-bold uppercase text-white outline-none focus:border-violet-300" /></label>
+                <label className="text-[8px] font-black uppercase tracking-widest text-slate-400">Asistente<input required value={staffForm.assistantCoach} onChange={(event) => setStaffForm({ ...staffForm, assistantCoach: event.target.value.toUpperCase() })} className="mt-1 w-full rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-[10px] font-bold uppercase text-white outline-none focus:border-violet-300" /></label>
+                <button disabled={loading} className="self-end rounded-lg bg-violet-600 px-4 py-2 text-[9px] font-black uppercase tracking-widest text-white disabled:opacity-50">Guardar</button>
+              </form>}
             </div>
           </div>
           <button onClick={handleLogout} aria-label="Salir" className="flex w-fit shrink-0 items-center gap-2 rounded-xl bg-white/10 p-3 text-xs font-black uppercase tracking-widest hover:bg-white/15 sm:px-4">
@@ -1405,12 +1561,28 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               </header>
               <div className="max-h-[65vh] divide-y divide-slate-100 overflow-y-auto p-5">
                 {statDetailEvents.map((event: any) => (
-                  <div key={event.id} className="flex items-center justify-between gap-4 py-3">
+                  <button type="button" key={event.id} onClick={() => event.player_id && setSelectedFineEvent(event)} className="flex w-full items-center justify-between gap-4 py-3 text-left transition-colors hover:bg-slate-50">
                     <div className="min-w-0"><p className="truncate text-xs font-black uppercase">#{event.players?.shirt_number || '-'} {event.players?.name || 'Jugador sin asignar'}</p><p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">{eventLabel(event.event_type)} · vs. {eventOpponent(event)}{event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · {event.period || 'Periodo sin registrar'}{event.minute_record ? ` · ${event.minute_record}'` : ''}</p></div>
-                    {selectedStatDetail === 'DEBT' && <span className="shrink-0 text-sm font-black text-violet-700">${eventFineAmount(event).toLocaleString('es-CO')}</span>}
-                  </div>
+                    {selectedStatDetail === 'DEBT' && <span className="shrink-0 text-sm font-black text-violet-700">{formatCopAmount(eventFineAmount(event))}</span>}
+                  </button>
                 ))}
                 {statDetailEvents.length === 0 && <p className="py-10 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">No hay registros para mostrar</p>}
+              </div>
+            </section>
+          </div>
+        )}
+
+        {selectedFineEvent && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-sm" onClick={() => setSelectedFineEvent(null)}>
+            <section role="dialog" aria-modal="true" aria-labelledby="fine-proof-title" className="w-full max-w-lg overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+              <header className="flex items-start justify-between gap-4 bg-slate-950 p-6 text-white">
+                <div><p className="text-[9px] font-black uppercase tracking-[0.25em] text-blue-300">Perfil operativo del jugador</p><h2 id="fine-proof-title" className="mt-1 text-xl font-black uppercase">{selectedFineEvent.players?.name || 'Jugador'}</h2><p className="mt-1 text-xs font-bold text-slate-300">Dorsal #{selectedFineEvent.players?.shirt_number || '-'} · {eventLabel(selectedFineEvent.event_type)}</p></div>
+                <button type="button" onClick={() => setSelectedFineEvent(null)} className="rounded-xl bg-white/10 p-2.5 text-white" aria-label="Cerrar perfil"><X size={18} /></button>
+              </header>
+              <div className="space-y-4 p-6">
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4"><p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Multa asociada</p><p className="mt-1 text-2xl font-black text-slate-900">{formatCopAmount(eventFineAmount(selectedFineEvent))}</p><p className="mt-1 text-xs font-bold uppercase text-amber-800">{selectedFineEvent.fine_status === 'PAID' ? 'Pagada · pendiente de sincronización visual' : 'Pendiente de validación administrativa'}</p></div>
+                {selectedFineEvent.fine_status !== 'PAID' && <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-center text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-blue-200 hover:bg-blue-700"> <Upload size={16} /> Subir comprobante<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" disabled={loading} onChange={(event) => handleFineProofUpload(event.target.files?.[0])} /></label>}
+                <p className="text-center text-[10px] font-bold uppercase tracking-wider text-slate-400">El comprobante será revisado por la administración. La habilitación solo ocurre después de su aprobación.</p>
               </div>
             </section>
           </div>
@@ -1428,49 +1600,52 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
           </section>
         )}
 
-        <div className="delegate-team-tabs flex gap-3 overflow-x-auto pb-2 pr-8">
+        {data.teams.length > 1 && <div className="delegate-team-tabs flex gap-3 overflow-x-auto pb-2 pr-8">
           {data.teams.map((team: any) => (
             <button key={team.id} onClick={() => setSelectedTeamId(team.id)} className={`shrink-0 flex items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-all ${selectedTeam?.id === team.id ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-100' : 'bg-white text-slate-700 border-slate-200 hover:border-blue-300'}`}>
               <TeamLogo team={team} className="w-10 h-10" />
               <div>
                 <p className="font-black uppercase text-xs">{team.name}</p>
-                <p className={`text-[9px] font-black uppercase tracking-widest ${selectedTeam?.id === team.id ? 'text-blue-100' : 'text-slate-400'}`}>{team.categories?.sports?.name} / {team.categories?.name}</p>
+                {teamTournamentCount > 1 && <p className={`text-[9px] font-black uppercase tracking-widest ${selectedTeam?.id === team.id ? 'text-blue-100' : 'text-slate-400'}`}>{team.categories?.tournaments?.name || 'Torneo'}</p>}
               </div>
             </button>
           ))}
-        </div>
+        </div>}
 
         {selectedTeam && (
           <>
             <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-              <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
-                <Users className="text-blue-600 mb-2" size={20} />
+              <div className="flex min-h-32 flex-col items-center justify-center rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-center">
+                <Users className="mb-2 text-blue-600" size={22} />
                 <p className="text-2xl font-black">{players.length}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Inscritos</p>
               </div>
               {fixtureVisibleToDelegates && <>
-              <button type="button" onClick={() => setSelectedStatDetail('GOALS')} className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md" aria-label="Ver goleadores">
-                <Trophy className="text-emerald-600 mb-2" size={20} />
+              <button type="button" onClick={() => setSelectedStatDetail('GOALS')} className="flex min-h-32 flex-col items-center justify-center rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4 text-center transition hover:-translate-y-0.5 hover:shadow-md" aria-label="Ver goleadores">
+                <Trophy className="mb-2 text-emerald-600" size={22} />
                 <p className="text-2xl font-black">{totalScoring}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Goles/Puntos</p>
+                <p className="mt-2 text-[8px] font-bold uppercase tracking-wider text-emerald-600/70">Toca para ver detalle</p>
               </button>
-              <button type="button" onClick={() => setSelectedStatDetail('YELLOW')} className="rounded-2xl border border-amber-100 bg-amber-50/70 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md" aria-label="Ver tarjetas amarillas">
-                <Square className="text-yellow-400 fill-yellow-400 mb-2" size={20} />
+              <button type="button" onClick={() => setSelectedStatDetail('YELLOW')} className="flex min-h-32 flex-col items-center justify-center rounded-2xl border border-amber-100 bg-amber-50/70 p-4 text-center transition hover:-translate-y-0.5 hover:shadow-md" aria-label="Ver tarjetas amarillas">
+                <Square className="mb-2 fill-yellow-400 text-yellow-400" size={22} />
                 <p className="text-2xl font-black">{eventSummary.YELLOW || 0}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Amarillas</p>
+                <p className="mt-2 text-[8px] font-bold uppercase tracking-wider text-amber-700/70">Toca para ver detalle</p>
               </button>
-              <button type="button" onClick={() => setSelectedStatDetail('RED')} className="rounded-2xl border border-red-100 bg-red-50/70 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md" aria-label="Ver tarjetas rojas">
-                <Square className="text-red-600 fill-red-600 mb-2" size={20} />
+              <button type="button" onClick={() => setSelectedStatDetail('RED')} className="flex min-h-32 flex-col items-center justify-center rounded-2xl border border-red-100 bg-red-50/70 p-4 text-center transition hover:-translate-y-0.5 hover:shadow-md" aria-label="Ver tarjetas rojas">
+                <Square className="mb-2 fill-red-600 text-red-600" size={22} />
                 <p className="text-2xl font-black">{eventSummary.RED || 0}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Rojas</p>
+                <p className="mt-2 text-[8px] font-bold uppercase tracking-wider text-red-600/70">Toca para ver detalle</p>
               </button>
-              <button type="button" onClick={() => setSelectedStatDetail('DEBT')} className="rounded-2xl border border-violet-100 bg-violet-50/70 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md" aria-label="Ver quién debe multas">
-                <Activity className="text-slate-700 mb-2" size={20} />
-                <p className="text-2xl font-black">${debt.toLocaleString('es-CO')}</p>
+              <button type="button" onClick={() => setSelectedStatDetail('DEBT')} className="flex min-h-32 flex-col items-center justify-center rounded-2xl border border-violet-100 bg-violet-50/70 p-4 text-center transition hover:-translate-y-0.5 hover:shadow-md" aria-label="Ver quién debe multas">
+                <Activity className="mb-2 text-slate-700" size={22} />
+                <p className="text-2xl font-black">{formatCopAmount(debt)}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Multas</p>
               </button>
-              <button type="button" onClick={() => document.getElementById('upcoming-matches')?.scrollIntoView({ behavior: 'smooth', block: 'center' })} className="col-span-2 rounded-2xl border border-cyan-100 bg-cyan-50/70 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md md:col-span-1" aria-label="Ver próximo partido">
-                <CalendarDays className="mb-2 text-cyan-600" size={20} />
+              <button type="button" onClick={() => document.getElementById('upcoming-matches')?.scrollIntoView({ behavior: 'smooth', block: 'center' })} className="col-span-2 flex min-h-32 flex-col items-center justify-center rounded-2xl border border-cyan-100 bg-cyan-50/70 p-4 text-center transition hover:-translate-y-0.5 hover:shadow-md md:col-span-1" aria-label="Ver próximo partido">
+                <CalendarDays className="mb-2 text-cyan-600" size={22} />
                 <p className="text-[9px] font-black uppercase tracking-widest text-cyan-700">Próximo rival</p>
                 <p className="mt-1 truncate text-sm font-black uppercase">{nextOpponent?.name || 'Sin programación'}</p>
                 <p className="mt-1 text-[9px] font-black uppercase tracking-widest text-slate-400">{nextMatch ? `${nextMatch.matchdays?.scheduled_date || 'Fecha pendiente'} · ${nextMatch.scheduled_time?.slice(0, 5) || '--:--'}` : 'Sin próximo partido'}</p>
@@ -1518,20 +1693,20 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               <div className="delegate-module delegate-module-amber rounded-[2rem] border border-amber-100 bg-amber-50/45 p-5">
                 <h2 className="text-lg font-black uppercase">Tarjetas y sanciones</h2>
                 <div className="mt-4 divide-y divide-slate-100">
-                  {cardEvents.map((event: any) => <div key={event.id} className="flex items-center justify-between gap-3 py-3"><div className="flex min-w-0 items-center gap-3"><Square size={18} className={event.event_type === 'RED' ? 'fill-red-600 text-red-600' : 'fill-yellow-400 text-yellow-400'} /><div className="min-w-0"><p className="truncate text-xs font-black uppercase">{event.players?.name || 'Jugador sin asignar'}</p><p className="text-[9px] font-bold uppercase text-slate-400">{eventLabel(event.event_type)} · vs. {eventOpponent(event)}{event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · {event.fine_status === 'PAID' ? 'Pagada' : 'Pendiente'}</p></div></div><span className="shrink-0 text-xs font-black">${eventFineAmount(event).toLocaleString('es-CO')}</span></div>)}
+                  {cardEvents.map((event: any) => <button type="button" key={event.id} onClick={() => setSelectedFineEvent(event)} className="flex w-full items-center justify-between gap-3 py-3 text-left transition-colors hover:bg-amber-50"><div className="flex min-w-0 items-center gap-3"><Square size={18} className={event.event_type === 'RED' ? 'fill-red-600 text-red-600' : 'fill-yellow-400 text-yellow-400'} /><div className="min-w-0"><p className="truncate text-xs font-black uppercase">{event.players?.name || 'Jugador sin asignar'}</p><p className="text-[9px] font-bold uppercase text-slate-400">{eventLabel(event.event_type)} · vs. {eventOpponent(event)}{event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · {event.fine_status === 'PAID' ? 'Pagada' : 'Pendiente'}</p></div></div><span className="shrink-0 text-xs font-black">{formatCopAmount(eventFineAmount(event))}</span></button>)}
                   {cardEvents.length === 0 && <p className="py-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Sin tarjetas ni sanciones</p>}
                 </div>
               </div>
             </section>}
 
-            <section className="delegate-module delegate-module-violet rounded-[2rem] border border-violet-100 bg-violet-50/50 p-5">
-              <div className="mb-4 flex items-center gap-3"><div className="rounded-xl bg-violet-600 p-3 text-white"><UserRoundCog size={20} /></div><div><h2 className="text-lg font-black uppercase">Cuerpo técnico</h2><p className="text-[9px] font-black uppercase tracking-widest text-violet-500">Inscripción oficial de la delegación</p></div></div>
+            {false && <section className="delegate-module delegate-module-violet rounded-[2rem] border border-violet-100 bg-violet-50/50 p-5">
+              <div className="mb-4 flex items-center gap-3"><div className="rounded-xl bg-violet-600 p-3 text-white"><Users size={20} /></div><div><h2 className="text-lg font-black uppercase">Cuerpo técnico</h2><p className="text-[9px] font-black uppercase tracking-widest text-violet-500">Inscripción oficial de la delegación</p></div></div>
               <form onSubmit={handleSaveStaff} className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
                 <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">Técnico<input required value={staffForm.headCoach} onChange={(event) => setStaffForm({ ...staffForm, headCoach: event.target.value.toUpperCase() })} placeholder="Nombre completo del técnico" className="mt-1.5 w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-xs font-bold uppercase outline-none focus:border-violet-500" /></label>
                 <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">Asistente técnico<input required value={staffForm.assistantCoach} onChange={(event) => setStaffForm({ ...staffForm, assistantCoach: event.target.value.toUpperCase() })} placeholder="Nombre completo del asistente" className="mt-1.5 w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-xs font-bold uppercase outline-none focus:border-violet-500" /></label>
                 <button disabled={loading || !canEditRoster} className="self-end rounded-xl bg-violet-600 px-5 py-3 text-xs font-black uppercase tracking-widest text-white disabled:opacity-40">Guardar</button>
               </form>
-            </section>
+            </section>}
 
             <div className="flex justify-end"><button type="button" onClick={() => { setTransferSourceTeamId(''); setShowTransferModal(true); }} disabled={transferableTeams.length === 0 || !canEditRoster} className="rounded-xl border border-blue-200 bg-white px-4 py-3 text-[9px] font-black uppercase tracking-widest text-blue-700 shadow-sm disabled:cursor-not-allowed disabled:opacity-40">Copiar expediente desde otro torneo</button></div>
             <section className="grid grid-cols-1 gap-6">
@@ -1631,7 +1806,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   <div className="delegate-table-scroll hidden overflow-x-auto lg:block">
                     <table className="min-w-[1180px] w-full text-left text-xs">
                       <thead className="bg-slate-950 text-[9px] font-black uppercase tracking-widest text-white">
-                        <tr><th className="p-3 text-center">#</th><th className="p-3 text-center">Dorsal</th><th className="p-3">Jugador</th><th className="p-3">Identificación</th><th className="p-3">Nacimiento</th><th className="p-3 text-center">Edad</th><th className="p-3">Vínculo</th><th className="p-3 text-center">Foto</th><th className="p-3 text-center">Documento</th><th className="p-3">Estado</th><th className="p-3"></th></tr>
+                        <tr><th className="sticky left-0 z-30 w-12 min-w-12 bg-slate-950 p-3 text-center">#</th><th className="sticky left-12 z-30 w-20 min-w-20 bg-slate-950 p-3 text-center">Dorsal</th><th className="sticky left-32 z-30 min-w-[220px] bg-slate-950 p-3 shadow-[8px_0_12px_-12px_rgba(15,23,42,0.55)]">Jugador</th><th className="p-3">Identificación</th><th className="p-3">Nacimiento</th><th className="p-3 text-center">Edad</th><th className="p-3">Vínculo</th><th className="p-3 text-center">Foto</th><th className="p-3 text-center">Documento</th><th className="p-3">Estado</th><th className="p-3"></th></tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 bg-white">
                         {players.map((player: any, index: number) => {
@@ -1650,9 +1825,9 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                           );
                           return (
                             <tr key={player.id} className={`transition-colors ${hasCompleteFiles ? 'bg-emerald-50/60 hover:bg-emerald-50' : 'bg-red-50/60 hover:bg-red-50'}`}>
-                              <td className="p-3 text-center font-black text-slate-400">{index + 1}</td>
-                              <td className="p-3 text-center"><span className="inline-flex min-w-10 justify-center rounded-lg bg-blue-50 px-2 py-2 font-black text-blue-700">#{player.shirt_number || '-'}</span></td>
-                              <td className="p-3"><div className="flex items-center gap-2"><p className="font-black uppercase text-slate-950">{player.name}</p>{rosterEditMode && <button type="button" onClick={() => openPlayerEditor(player)} className="rounded-lg bg-blue-100 p-2 text-blue-700 hover:bg-blue-200" aria-label={`Editar a ${player.name}`}><Pencil size={14} /></button>}</div>{player.relationship_detail && <p className="mt-1 text-[9px] font-bold uppercase text-slate-400">{player.relationship_detail}</p>}</td>
+                              <td className="sticky left-0 z-20 bg-inherit p-3 text-center font-black text-slate-400">{index + 1}</td>
+                              <td className="sticky left-12 z-20 bg-inherit p-3 text-center"><span className="inline-flex min-w-10 justify-center rounded-lg bg-blue-50 px-2 py-2 font-black text-blue-700">#{player.shirt_number || '-'}</span></td>
+                              <td className="sticky left-32 z-20 min-w-[220px] bg-inherit p-3 shadow-[8px_0_12px_-12px_rgba(15,23,42,0.55)]"><div className="flex items-center gap-2"><p className="font-black uppercase text-slate-950">{player.name}</p>{rosterEditMode && <button type="button" onClick={() => openPlayerEditor(player)} className="rounded-lg bg-blue-100 p-2 text-blue-700 hover:bg-blue-200" aria-label={`Editar a ${player.name}`}><Pencil size={14} /></button>}</div>{player.relationship_detail && <p className="mt-1 text-[9px] font-bold uppercase text-slate-400">{player.relationship_detail}</p>}</td>
                               <td className="p-3 font-bold text-slate-600">{player.identity_number || 'SIN REGISTRAR'}</td>
                               <td className="p-3 font-bold text-slate-600">{player.birth_date || player.birth_year || 'SIN FECHA'}</td>
                               <td className="p-3 text-center font-black text-slate-600">{ageOnDate(player.birth_date, selectedCategory?.tournaments?.schedule_dates?.[0]) ?? '-'}</td>
@@ -1677,8 +1852,9 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   <h2 className="font-black uppercase text-lg mb-1">Próximo partido</h2>
                   <p className="mb-4 text-[9px] font-black uppercase tracking-widest text-slate-400">Tu equipo vs. próximo rival</p>
                   <div className="space-y-3">
-                    {teamUpcomingMatches.map((match: any) => renderMatchCard(match))}
+                    {(showAllUpcoming ? teamUpcomingMatches : teamUpcomingMatches.slice(0, 1)).map((match: any) => renderMatchCard(match))}
                     {teamUpcomingMatches.length === 0 && <p className="text-center text-slate-400 text-xs font-black uppercase tracking-widest py-8">Sin partidos pendientes</p>}
+                    {teamUpcomingMatches.length > 1 && <button type="button" onClick={() => setShowAllUpcoming((open) => !open)} className="w-full rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-700 transition hover:bg-cyan-100" aria-expanded={showAllUpcoming}>{showAllUpcoming ? 'Mostrar solo el próximo' : `Ver los ${teamUpcomingMatches.length} partidos`}</button>}
                   </div>
                 </div> : <div className="rounded-[2rem] border border-indigo-100 bg-indigo-50 p-6 text-center xl:min-w-[420px]"><Lock className="mx-auto text-indigo-400" size={24} /><h2 className="mt-3 text-sm font-black uppercase text-indigo-800">Fixture pendiente de publicación</h2><p className="mt-2 text-[9px] font-bold uppercase tracking-widest text-indigo-400">La organización lo habilitará cuando esté confirmado.</p></div>}
               </div>
@@ -1703,26 +1879,43 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   {lastScheduledRound && <button type="button" onClick={() => setActiveRound(lastScheduledRound)} className="shrink-0 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100">Ver última programada</button>}
                 </div>
                 {roundEntries.length > 0 && (
-                  <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  <div className="mb-4 space-y-2">
                     {roundEntries.map(([round, roundMatches]) => (
-                      <button
-                        key={round}
-                        onClick={() => setActiveRound(round)}
-                        className={`rounded-xl border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition-colors ${selectedRound === round ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-50 text-slate-500 border-slate-200 hover:border-blue-300'}`}
-                      >
-                        {round}
-                        <span className={`ml-2 rounded-full px-2 py-0.5 ${selectedRound === round ? 'bg-white/20' : 'bg-white'}`}>{(roundMatches as any[]).length}</span>
-                      </button>
+                      <div key={round} className="space-y-2">
+                        <button
+                          type="button"
+                          onClick={() => setActiveRound(selectedRound === round ? '' : round)}
+                          className={`flex w-full items-center justify-center rounded-xl border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition-colors ${selectedRound === round ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-50 text-slate-500 border-slate-200 hover:border-blue-300'}`}
+                          aria-expanded={selectedRound === round}
+                        >
+                          {round}
+                          <span className={`ml-2 rounded-full px-2 py-0.5 ${selectedRound === round ? 'bg-white/20' : 'bg-white'}`}>{(roundMatches as any[]).length}</span>
+                          <ChevronDown size={15} className={`ml-2 transition-transform ${selectedRound === round ? 'rotate-180' : ''}`} />
+                        </button>
+                        {selectedRound === round && <div className="space-y-2 rounded-2xl border border-blue-100 bg-blue-50/35 p-2 sm:p-3">
+                          {(roundMatches as any[]).map((match) => renderRoundMatchCard(match))}
+                        </div>}
+                      </div>
                     ))}
                   </div>
                 )}
-                <div className="space-y-2 max-h-[620px] overflow-y-auto pr-1">
-                  {((scheduleRounds[selectedRound] || []) as any[]).map((match) => renderRoundMatchCard(match))}
-                  {currentPhaseSchedule.length === 0 && <p className="text-center text-slate-400 text-xs font-black uppercase tracking-widest py-8">No hay jornadas generadas para esta fase</p>}
-                </div>
+                {roundEntries.length === 0 && <p className="rounded-2xl border border-dashed border-blue-200 bg-blue-50/50 p-8 text-center text-[10px] font-black uppercase tracking-widest text-blue-500">No hay jornadas generadas para esta fase</p>}
               </div>}
             </section>}
           </>
+        )}
+        {lineupMatch && selectedTeam && (
+          <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/70 p-3 backdrop-blur-sm" onClick={() => setLineupMatch(null)}>
+            <section role="dialog" aria-modal="true" aria-labelledby="lineup-title" className="flex max-h-[92dvh] w-full max-w-xl flex-col overflow-hidden rounded-[2rem] bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+              <header className="flex items-start justify-between bg-slate-950 p-5 text-white"><div><p className="text-[9px] font-black uppercase tracking-[0.25em] text-blue-300">Partido del día</p><h2 id="lineup-title" className="text-xl font-black uppercase">Organizar alineación</h2><p className="mt-1 text-xs font-bold text-slate-300">{lineupMatch.home_team?.name} vs {lineupMatch.away_team?.name}</p></div><button type="button" onClick={() => setLineupMatch(null)} className="rounded-xl bg-white/10 p-2" aria-label="Cerrar"><X size={18}/></button></header>
+              <div className="overflow-y-auto p-5 space-y-4">
+                {isFootball9Category && <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-blue-100 bg-blue-50/70 p-3"><div><p className="text-[10px] font-black uppercase tracking-widest text-slate-700">Plantilla del equipo</p><p className="mt-1 text-[10px] font-bold text-slate-500">Puedes iniciar una nueva o reutilizar la guardada.</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={startNewLineup} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-[9px] font-black uppercase tracking-wider text-slate-600">Nueva</button>{savedDefaultLineup && <button type="button" onClick={useSavedDefaultLineup} className="rounded-xl border border-blue-200 bg-white px-3 py-2 text-[9px] font-black uppercase tracking-wider text-blue-700">Usar guardada</button>}<button type="button" onClick={saveCurrentAsDefaultLineup} className="rounded-xl bg-blue-600 px-3 py-2 text-[9px] font-black uppercase tracking-wider text-white">Guardar predeterminada</button></div></div>}
+                {isFootball9Category && <div className="grid gap-4 md:grid-cols-[minmax(0,260px)_1fr] rounded-2xl border border-emerald-100 bg-emerald-50/40 p-3"><div><label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Formación Fútbol 9<select value={lineupFormation} onChange={(event) => changeLineupFormation(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs font-black text-slate-800">{['3-3-2', '3-2-3', '2-3-3', '2-4-2', '4-3-1', '3-4-1'].map((code) => <option key={code} value={code}>{code}{code === '3-3-2' ? ' · Recomendada' : ''}</option>)}</select></label><p className="mt-2 text-[9px] font-bold uppercase tracking-wider text-slate-500">{getFootball9Formation(lineupFormation).name} · 1 portero + 8 jugadores de campo</p></div><FormationBoard positions={getFootball9Formation(lineupFormation).players} assignments={lineupAssignments} players={players} blockedPlayerIds={players.filter((player: any) => events.some((event: any) => event.player_id === player.id && (event.event_type === 'RED' || (event.event_type === 'YELLOW' && event.fine_status !== 'PAID') || event.fine_status === 'UNPAID'))).map((player: any) => player.id)} onAssign={assignLineupPlayer} /></div>}
+                <div><p className="mb-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Titulares de {selectedTeam.name} · seleccionados {lineupSelection.length}{isFootball9Category ? ' / 9' : ''}</p><div className="grid gap-2 sm:grid-cols-2">{players.map((player: any) => { const blocked = events.some((event: any) => { if (event.player_id !== player.id) return false; if (event.event_type === 'RED') return true; if (event.event_type === 'YELLOW') return event.fine_status !== 'PAID'; return event.fine_status === 'UNPAID'; }); const selected = lineupSelection.includes(player.id); const atFormationLimit = isFootball9Category && lineupSelection.length >= 9 && !selected; return <button type="button" key={player.id} disabled={blocked || atFormationLimit} onClick={() => setLineupSelection((current) => selected ? current.filter((id) => id !== player.id) : [...current, player.id])} className={`flex items-center gap-3 rounded-xl border p-3 text-left ${selected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-white text-slate-700'} ${blocked || atFormationLimit ? 'cursor-not-allowed bg-slate-100 opacity-50' : ''}`}><span className="w-8 text-center text-lg font-black">#{player.shirt_number || '-'}</span><span className="truncate text-xs font-black uppercase">{player.name}</span>{blocked ? <span className="ml-auto text-[9px] font-black uppercase text-red-600">Bloqueado</span> : atFormationLimit ? <span className="ml-auto text-[9px] font-black uppercase text-slate-400">Máximo 9</span> : selected && <CheckCircle2 size={16} className="ml-auto"/>}</button>; })}</div></div>
+              </div>
+              <footer className="flex gap-3 border-t border-slate-100 p-5"><button type="button" onClick={() => setLineupMatch(null)} className="flex-1 rounded-xl bg-slate-100 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-600">Cancelar</button><button type="button" disabled={loading} onClick={handleSaveLineup} className="flex-1 rounded-xl bg-blue-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white disabled:opacity-50">Enviar a Mesa</button></footer>
+            </section>
+          </div>
         )}
       </div>
     </main>

@@ -67,6 +67,7 @@ export default function ResultadosPublicos() {
   const [activeTab, setActiveTab] = useState<'FIXTURE' | 'POSICIONES' | 'ESTADISTICAS'>('FIXTURE');
 
   const [matchFilter, setMatchFilter] = useState<'ALL' | 'LIVE' | 'SCHEDULED' | 'FINISHED'>('ALL');
+  const [selectedRound, setSelectedRound] = useState('');
 
   const [selectedMatchDetails, setSelectedMatchDetails] = useState<any | null>(null);
   const [matchEvents, setMatchEvents] = useState<any[]>([]);
@@ -147,12 +148,40 @@ export default function ResultadosPublicos() {
     }
   }, [selectedCategory]);
 
+  // Keep the public scoreboard in sync while a match is being operated in Mesa.
+  // The match row is the source of truth for the score; no optimistic values are
+  // introduced here, so a failed event never appears as a successful goal.
+  useEffect(() => {
+    if (!selectedCategory) return;
+    const channel = supabase
+      .channel(`public-results-${selectedCategory}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'matches' }, (payload) => {
+        const updated = payload.new as any;
+        setMatches((current) => current.map((match) => (
+          match.id === updated.id
+            ? { ...match, ...updated }
+            : match
+        )));
+        setLiveMatches((current) => current.map((match) => (
+          match.id === updated.id
+            ? { ...match, ...updated }
+            : match
+        )));
+        setSelectedMatchDetails((current: any) => (
+          current?.id === updated.id ? { ...current, ...updated } : current
+        ));
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [selectedCategory]);
+
   async function fetchCategoryData(categoryId: string) {
     if (isRefreshingResults.current) return;
     isRefreshingResults.current = true;
 
     try {
-    if (activeTournament && activeTournament.fixture_visible_to_public !== true) {
+    if (activeTournament && activeTournament.fixture_visible_to_public === false) {
       setMatches([]); setLiveMatches([]); setTeams([]); setScorers([]); setMatchEvents([]); return;
     }
     const activeCat = categories.find(c => c.id === categoryId);
@@ -183,12 +212,13 @@ export default function ResultadosPublicos() {
         if (statusPriority[a.status] !== statusPriority[b.status]) {
           return statusPriority[a.status] - statusPriority[b.status];
         }
-        if (a.matchdays.round_number !== b.matchdays.round_number) {
-          return a.matchdays.round_number - b.matchdays.round_number;
-        }
         const timeA = new Date(`${a.matchdays.scheduled_date}T${a.scheduled_time || '00:00:00'}`).getTime();
         const timeB = new Date(`${b.matchdays.scheduled_date}T${b.scheduled_time || '00:00:00'}`).getTime();
-        return timeA - timeB;
+        // La agenda pública debe seguir la fecha/hora real del partido. La
+        // jornada no siempre es cronológica (puede haber jornadas reordenadas
+        // o fechas editadas), así que se usa únicamente como desempate estable.
+        if (timeA !== timeB) return timeA - timeB;
+        return (a.matchdays.round_number ?? 0) - (b.matchdays.round_number ?? 0);
       });
       
       setMatches(sortedMatches);
@@ -416,6 +446,20 @@ export default function ResultadosPublicos() {
     acc[roundName].push(match);
     return acc;
   }, {});
+
+  // Las jornadas se presentan como pestañas ordenadas por la primera fecha y
+  // hora real de sus partidos. Así una jornada numerada más alta no aparece
+  // antes solo por su número cuando el calendario fue reordenado.
+  const orderedRounds = Object.entries(groupedMatches)
+    .map(([name, roundMatches]) => ({
+      name,
+      matches: roundMatches as any[],
+      firstTime: Math.min(...(roundMatches as any[]).map((match: any) => new Date(`${match.matchdays?.scheduled_date || '9999-12-31'}T${match.scheduled_time || '23:59:59'}`).getTime())),
+    }))
+    .sort((a, b) => a.firstTime - b.firstTime);
+  const activeRound = orderedRounds.some((round) => round.name === selectedRound)
+    ? selectedRound
+    : (orderedRounds[0]?.name || '');
 
   return (
     <>
@@ -783,7 +827,7 @@ export default function ResultadosPublicos() {
                 
                 {activeTab === 'FIXTURE' && selectedCategory && (
                   <div className="max-w-6xl mx-auto w-full">
-                    {activeTournament?.fixture_visible_to_public !== true ? (
+                    {activeTournament?.fixture_visible_to_public === false ? (
                       <div className="text-center py-16 md:py-20 bg-indigo-50 rounded-[2rem] border border-indigo-100 shadow-sm"><Clock3 size={48} className="mx-auto text-indigo-400 mb-4" /><p className="text-indigo-800 font-black uppercase tracking-widest text-xs md:text-sm px-4">Competencia aún no publicada</p><p className="mt-2 text-indigo-500 font-semibold text-xs px-4">La programación y los resultados estarán disponibles próximamente.</p></div>
                     ) : filteredMatches.length === 0 ? (
                       <div className="text-center py-16 md:py-20 bg-white rounded-[2rem] border border-slate-200 shadow-sm">
@@ -793,8 +837,22 @@ export default function ResultadosPublicos() {
                         </p>
                       </div>
                     ) : (
-                      <div className="space-y-12">
-                        {Object.keys(groupedMatches).map((roundName) => (
+                      <div className="space-y-6">
+                        <div className="flex w-full gap-2 overflow-x-auto border-b border-slate-200 pb-2 scrollbar-hide" role="tablist" aria-label="Jornadas del fixture">
+                          {orderedRounds.map((round) => (
+                            <button
+                              key={round.name}
+                              type="button"
+                              role="tab"
+                              aria-selected={activeRound === round.name}
+                              onClick={() => setSelectedRound(round.name)}
+                              className={`min-h-11 shrink-0 rounded-xl border px-5 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${activeRound === round.name ? 'border-blue-600 bg-blue-600 text-white shadow-md shadow-blue-200' : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:text-blue-600'}`}
+                            >
+                              {round.name}
+                            </button>
+                          ))}
+                        </div>
+                        {orderedRounds.filter((round) => round.name === activeRound).map(({ name: roundName, matches: roundMatches }) => (
                           <div key={roundName} className="space-y-4">
                             
                             <div className="flex items-center gap-4 mb-6">
@@ -805,7 +863,7 @@ export default function ResultadosPublicos() {
                             </div>
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
-                              {groupedMatches[roundName].map((match: any) => {
+                              {roundMatches.map((match: any) => {
                                  
                                  // 🚨 PASO 2 INTEGRADO AQUÍ: LÓGICA DE DESCANSO 🚨
                                  const isDescanso = match.venue === 'Descansa' || !match.away_team || !match.home_team;

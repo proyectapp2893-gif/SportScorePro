@@ -44,6 +44,9 @@ export async function saveTournamentWizard(slug: string, input: SaveTournamentIn
     if (invalidCategory) return { success: false, error: `El formato Máster 35+ requiere exactamente 8 equipos en ${invalidCategory.name}.` };
   }
   let tournamentId = input.editingTournamentId || null;
+  const legacyTournamentPayload = { ...safeTournament };
+  delete legacyTournamentPayload.sport_modality;
+  const isMissingSportModalityColumn = (error: { code?: string; message?: string } | null | undefined) => Boolean(error && error.code === '42703' && /sport_modality/i.test(error.message || ''));
 
   if (tournamentId) {
     const { data: existingTournament } = await supabase
@@ -54,14 +57,26 @@ export async function saveTournamentWizard(slug: string, input: SaveTournamentIn
       .maybeSingle();
     if (!existingTournament) return { success: false, error: 'El torneo no pertenece a este cliente.' };
 
-    const { error } = await supabase.from('tournaments').update(safeTournament).eq('id', tournamentId);
-    if (error) return { success: false, error: 'No se pudo actualizar el torneo.' };
+    let { error } = await supabase.from('tournaments').update(safeTournament).eq('id', tournamentId);
+    // Compatibilidad temporal con proyectos cuyo schema aún no tiene la columna nueva.
+    // El reintento conserva todos los campos históricos y nunca elimina datos.
+    if (isMissingSportModalityColumn(error)) {
+      ({ error } = await supabase.from('tournaments').update(legacyTournamentPayload).eq('id', tournamentId));
+    }
+    if (error) return { success: false, error: 'No se pudo actualizar el torneo. Los datos existentes no fueron modificados.' };
   } else {
-    const { data: newTournament, error } = await supabase
+    let { data: newTournament, error } = await supabase
       .from('tournaments')
       .insert([{ ...safeTournament, client_id: clientId }])
       .select('id')
       .single();
+    if (isMissingSportModalityColumn(error)) {
+      ({ data: newTournament, error } = await supabase
+        .from('tournaments')
+        .insert([{ ...legacyTournamentPayload, client_id: clientId }])
+        .select('id')
+        .single());
+    }
     if (error || !newTournament) return { success: false, error: 'No se pudo crear el torneo.' };
     tournamentId = newTournament.id;
   }

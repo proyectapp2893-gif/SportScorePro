@@ -84,7 +84,7 @@ export default function StartingLineupModal({
                 <Users className="text-blue-600"/> Acta Inicial de Juego
               </h3>
               <p className="text-slate-500 font-bold uppercase tracking-[0.2em] text-[10px] md:text-xs mt-2">
-                Seleccione los {maxPlayers} titulares por equipo. Mínimo {minPlayers} para iniciar.
+                Seleccione hasta {maxPlayers} titulares por equipo. La alineación es opcional y puede completarse antes de iniciar.
               </p>
             </div>
             <div className="hidden md:flex items-center gap-2 ml-4">
@@ -116,7 +116,7 @@ export default function StartingLineupModal({
             </button>
           </div>
           <div className="hidden md:block"></div>
-          <button onClick={onTurnMatchLive} disabled={loading || homeStartingLineup.length < minPlayers || awayStartingLineup.length < minPlayers} className="w-full md:w-auto px-12 py-4 md:py-5 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-black text-sm uppercase tracking-[0.2em] flex items-center justify-center gap-3 shadow-[0_0_40px_rgba(220,38,38,0.4)] transition-all disabled:opacity-50">
+          <button onClick={onTurnMatchLive} disabled={loading} className="w-full md:w-auto px-12 py-4 md:py-5 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-black text-sm uppercase tracking-[0.2em] flex items-center justify-center gap-3 shadow-[0_0_40px_rgba(220,38,38,0.4)] transition-all disabled:opacity-50">
             <Radio size={20} className="animate-pulse" /> Confirmar Alineaciones e Iniciar
           </button>
         </div>
