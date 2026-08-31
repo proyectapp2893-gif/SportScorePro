@@ -14,6 +14,7 @@ import { addDemoDocument, addDemoPlayers, deleteDemoPlayer, saveDemoStaff, updat
 import { confirmDialog } from '@/app/components/AppDialog';
 import { normalizePlayerBirthDate } from '@/app/lib/players/date';
 import { formatCopAmount } from '@/app/lib/formatters';
+import { normalizeDoubleCautions } from '@/app/lib/discipline/double-caution';
 import FormationBoard from '@/app/components/FormationBoard';
 import { getFootball9Formation } from '@/app/lib/sports/formations';
 
@@ -477,7 +478,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     });
     return Object.values(byPlayer).sort((a: any, b: any) => b.total - a.total);
   }, [events]);
-  const cardEvents = events.filter((event: any) => event.event_type === 'YELLOW' || event.event_type === 'RED');
+  const cardEvents = normalizeDoubleCautions(events.filter((event: any) => event.event_type === 'YELLOW' || event.event_type === 'RED'));
   const statDetailEvents = selectedStatDetail === 'GOALS'
     ? events.filter((event: any) => ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3'].includes(event.event_type))
     : selectedStatDetail === 'DEBT'

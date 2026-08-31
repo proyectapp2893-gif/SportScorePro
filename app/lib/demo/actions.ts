@@ -161,7 +161,14 @@ export function recordDemoFootballEvent(input: any) {
   const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === input.matchId); if (!match) throw new Error('Partido demo no encontrado.');
   const player = db.players.find((item) => item.id === input.playerId); const team = db.teams.find((item) => item.id === input.teamId); const tournamentRow = db.tournaments.find((item) => item.id === team?.categories?.tournament_id) || db.tournaments[0];
   const eventType = input.eventType; const isCard = eventType === 'YELLOW' || eventType === 'RED';
-  db.match_events.push({ id: id('demo-event'), match_id: input.matchId, team_id: input.teamId, player_id: input.playerId || null, event_type: eventType, period: input.period, minute_record: input.minuteRecord ? `${input.minuteRecord}'` : null, match_second: input.matchSecond, fine_status: isCard ? 'UNPAID' : 'NONE', fine_amount: eventType === 'RED' ? tournamentRow?.fine_red_amount || 0 : eventType === 'YELLOW' ? tournamentRow?.fine_yellow_amount || 0 : 0, created_at: new Date().toISOString(), players: player ? { name: player.name, shirt_number: player.shirt_number, teams: team } : null, teams: team, matches: match });
+  const priorYellows = eventType === 'YELLOW' && input.playerId
+    ? db.match_events.filter((event: any) => event.match_id === input.matchId && event.team_id === input.teamId && event.player_id === input.playerId && event.event_type === 'YELLOW')
+    : [];
+  const isDoubleCaution = Boolean(eventType === 'YELLOW' && input.generatedRed && priorYellows.length >= 1);
+  const createdAt = new Date().toISOString();
+  db.match_events.push({ id: id('demo-event'), match_id: input.matchId, team_id: input.teamId, player_id: input.playerId || null, event_type: eventType, period: input.period, minute_record: input.minuteRecord ? `${input.minuteRecord}'` : null, match_second: input.matchSecond, fine_status: isDoubleCaution ? 'NONE' : isCard ? 'UNPAID' : 'NONE', fine_amount: isDoubleCaution ? 0 : eventType === 'RED' ? tournamentRow?.fine_red_amount || 0 : eventType === 'YELLOW' ? tournamentRow?.fine_yellow_amount || 0 : 0, created_at: createdAt, players: player ? { name: player.name, shirt_number: player.shirt_number, teams: team } : null, teams: team, matches: match });
+  if (isDoubleCaution) priorYellows.slice(-1).forEach((event: any) => { event.fine_status = 'NONE'; event.fine_amount = 0; });
+  if (isDoubleCaution) db.match_events.push({ id: id('demo-event'), match_id: input.matchId, team_id: input.teamId, player_id: input.playerId, event_type: 'RED', period: input.period, minute_record: input.minuteRecord ? `${input.minuteRecord}'` : null, match_second: input.matchSecond, fine_status: 'UNPAID', fine_amount: tournamentRow?.fine_red_amount || 0, created_at: createdAt, players: player ? { name: player.name, shirt_number: player.shirt_number, teams: team } : null, teams: team, matches: match });
   if (eventType === 'GOAL' || eventType === 'SCORE_ADJUST') { const field = input.teamId === match.home_team_id ? 'home_score' : 'away_score'; match[field] = Math.max(0, Number(match[field] || 0) + Number(input.scoreDelta || 0)); }
   saveDemoDatabase(db); return { success: true, home_score: match.home_score || 0, away_score: match.away_score || 0 };
 }
@@ -181,6 +188,21 @@ export function revertDemoLastFootballGoal(matchId: string, teamId: string, play
   if (updateMatchScore) match[field] = Math.max(0, Number(match[field] || 0) - 1);
   saveDemoDatabase(db);
   return { success: true, home_score: match.home_score || 0, away_score: match.away_score || 0 };
+}
+
+/** Remove a selected yellow card in the local demo, including its generated
+ * red card when the existing demo data represents a second caution. */
+export function removeDemoYellowCard(matchId: string, eventId: string) {
+  const db = loadDemoDatabase();
+  const event = db.match_events.find((item: any) => item.id === eventId && item.match_id === matchId);
+  if (!event || event.event_type !== 'YELLOW') return { success: false, error: 'No se encontró la tarjeta seleccionada.' };
+  const yellows = db.match_events.filter((item: any) => item.match_id === matchId && item.team_id === event.team_id && item.player_id === event.player_id && item.event_type === 'YELLOW').sort((a: any, b: any) => String(a.created_at).localeCompare(String(b.created_at)));
+  const causedRed = yellows.findIndex((item: any) => item.id === event.id) > 0;
+  const generatedRed = causedRed ? db.match_events.find((item: any) => item.match_id === matchId && item.team_id === event.team_id && item.player_id === event.player_id && item.event_type === 'RED' && item.created_at === event.created_at) : null;
+  const removeIds = new Set([event.id, ...(generatedRed ? [generatedRed.id] : [])]);
+  db.match_events = db.match_events.filter((item: any) => !removeIds.has(item.id));
+  saveDemoDatabase(db);
+  return { success: true, removedEventIds: [...removeIds], removedGeneratedRed: Boolean(generatedRed) };
 }
 
 export function changeDemoMatchPeriod(matchId: string, period: string) { const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === matchId); if (match) match.current_period = period; saveDemoDatabase(db); return { success: true }; }

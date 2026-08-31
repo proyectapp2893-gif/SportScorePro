@@ -7,6 +7,7 @@ import { Scale, AlertTriangle, ShieldCheck, DollarSign, Search, CheckCircle2, Fl
 import toast from 'react-hot-toast';
 import Link from 'next/link';
 import { formatCopAmount } from '@/app/lib/formatters';
+import { normalizeDoubleCautions } from '@/app/lib/discipline/double-caution';
 import { approveFinePaymentProof, getFinePaymentProofs, getFinePaymentProofUrl } from './actions';
 
 export default function TribunalPage() {
@@ -56,6 +57,7 @@ export default function TribunalPage() {
           // 🚨 AHORA PEDIMOS round_number EN LUGAR DE name 🚨
           .select(`
             id, event_type, fine_status, created_at, minute_record, period,
+            match_id, player_id, team_id, match_second,
             players!inner(name, shirt_number, teams(name, schools(logo_url))),
             matches!inner(matchdays!inner(round_number, categories!inner(tournaments!inner(id, client_id))))
           `)
@@ -70,7 +72,7 @@ export default function TribunalPage() {
           toast.error(`Error BD: ${error.message}`);
         }
 
-        if (eventsData) setFines(eventsData);
+        if (eventsData) setFines(normalizeDoubleCautions(eventsData as any));
 
         const proofsResult = await getFinePaymentProofs(slug, trns.id);
         if (proofsResult.success) setPaymentProofs(proofsResult.data);
@@ -354,7 +356,7 @@ export default function TribunalPage() {
                            <div className="flex items-center gap-3">
                               <div className={`w-5 h-7 rounded-[4px] shadow-sm border border-black/10 ${isRed ? 'bg-red-500' : 'bg-yellow-400'}`}></div>
                               <span className="text-[11px] font-black uppercase tracking-widest text-slate-700">
-                                 {isRed ? 'Roja Directa / Doble' : 'Amonestación'}
+                                 {isRed ? (fine.isDoubleCaution ? 'Roja por doble amonestación' : 'Roja directa') : 'Amonestación'}
                               </span>
                            </div>
                         </td>

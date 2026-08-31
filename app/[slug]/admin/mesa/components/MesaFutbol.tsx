@@ -13,9 +13,9 @@ import StartingLineupModal from './modals/StartingLineupModal';
 import WalkoverModal from './modals/WalkoverModal';
 import MatchSummaryModal from './modals/MatchSummaryModal';
 import PenaltyShootout from './PenaltyShootout';
-import { applyFootballWalkover, changeMatchPeriod, finishFootballMatch, getFootballMatchRoster, recordFootballMatchEvent, resetFootballTimer, startLiveMatch, revertLastScoringEvent } from '../actions';
+import { applyFootballWalkover, changeMatchPeriod, finishFootballMatch, getFootballMatchRoster, recordFootballMatchEvent, resetFootballTimer, startLiveMatch, revertLastScoringEvent, removeYellowCardEvent } from '../actions';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
-import { applyDemoWalkover, changeDemoMatchPeriod, finishDemoFootballMatch, getDemoFootballRoster, recordDemoFootballEvent, startDemoFootballMatch, revertDemoLastFootballGoal } from '@/app/lib/demo/actions';
+import { applyDemoWalkover, changeDemoMatchPeriod, finishDemoFootballMatch, getDemoFootballRoster, recordDemoFootballEvent, startDemoFootballMatch, revertDemoLastFootballGoal, removeDemoYellowCard } from '@/app/lib/demo/actions';
 import { evaluatePlayerEligibility, type PlayerEligibility } from '@/app/lib/competition/player-eligibility';
 
 interface MesaFutbolProps {
@@ -55,6 +55,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   const [showRosterModal, setShowRosterModal] = useState<'HOME' | 'AWAY' | null>(null); 
   const [goalCorrectionTeam, setGoalCorrectionTeam] = useState<'HOME' | 'AWAY' | null>(null);
   const [goalCorrectionPlayer, setGoalCorrectionPlayer] = useState<string>('');
+  const [yellowCorrectionEvent, setYellowCorrectionEvent] = useState<any | null>(null);
   const [showTimeline, setShowTimeline] = useState(false);
   
   const [scoringAction, setScoringAction] = useState<{ team: 'HOME' | 'AWAY', type: 'SCORE' | 'YELLOW' | 'RED' | 'SUB' | 'ASSIST' | 'MVP', points: number } | null>(null);
@@ -283,6 +284,22 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
       setGoalCorrectionTeam(null);
     } catch (error) { toast.error(error instanceof Error ? error.message : 'No fue posible eliminar el gol.'); }
     finally { setLoading(false); }
+  };
+
+  const confirmYellowCorrection = async () => {
+    if (!yellowCorrectionEvent) return;
+    setLoading(true);
+    try {
+      const result = isDemo
+        ? removeDemoYellowCard(match.id, yellowCorrectionEvent.id)
+        : await removeYellowCardEvent({ slug, matchId: match.id, eventId: yellowCorrectionEvent.id });
+      if (!result?.success) throw new Error(('error' in result && result.error) || 'No fue posible eliminar la tarjeta.');
+      await fetchLiveEvents();
+      toast.success(result.removedGeneratedRed ? 'Tarjeta eliminada y doble amarilla revertida.' : 'Tarjeta amarilla eliminada con sus efectos asociados.');
+      setYellowCorrectionEvent(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No fue posible eliminar la tarjeta.');
+    } finally { setLoading(false); }
   };
 
   const handleTimeoutOrInjury = () => {
@@ -597,7 +614,12 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
           </button>
           {showTimeline && <section id="match-event-timeline" aria-label="Línea de tiempo del partido" className="mt-2 max-h-28 overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/90 p-3 backdrop-blur-md">
             <div className="mb-2 flex items-center justify-between text-[9px] font-black uppercase tracking-widest text-slate-400"><span>Últimos eventos</span><span>{liveEvents.length} registrados</span></div>
-            {liveEvents.length === 0 ? <p className="text-[10px] font-semibold text-slate-500">Aún no hay eventos registrados.</p> : <div className="space-y-1">{liveEvents.slice(-6).reverse().map((event: any) => <div key={event.id} className="flex items-center gap-2 text-[10px] font-bold text-white"><span className="w-10 shrink-0 text-slate-400">{event.minute_record || '--'}</span><span className="w-5 shrink-0" aria-hidden="true">{event.event_type === 'GOAL' ? '⚽' : event.event_type === 'YELLOW' ? '🟨' : event.event_type === 'RED' ? '🟥' : event.event_type === 'SUB' ? '🔄' : '•'}</span><span className="truncate">{event.players?.name || 'Evento de equipo'} · {event.event_type}</span></div>)}</div>}
+            {liveEvents.length === 0 ? <p className="text-[10px] font-semibold text-slate-500">Aún no hay eventos registrados.</p> : <div className="space-y-1">{liveEvents.slice(-6).reverse().map((event: any) => {
+              const content = <><span className="w-10 shrink-0 text-slate-400">{event.minute_record || '--'}</span><span className="w-5 shrink-0" aria-hidden="true">{event.event_type === 'GOAL' ? '⚽' : event.event_type === 'YELLOW' ? '🟨' : event.event_type === 'RED' ? '🟥' : event.event_type === 'SUB' ? '🔄' : '•'}</span><span className="truncate">{event.players?.name || 'Evento de equipo'} · {event.event_type}</span></>;
+              return event.event_type === 'YELLOW'
+                ? <button type="button" key={event.id} onClick={() => setYellowCorrectionEvent(event)} aria-label={`Corregir tarjeta amarilla de ${event.players?.name || 'jugador'}`} className="flex w-full items-center gap-2 rounded-lg text-left text-[10px] font-bold text-white hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400">{content}</button>
+                : <div key={event.id} className="flex items-center gap-2 text-[10px] font-bold text-white">{content}</div>;
+            })}</div>}
           </section>}
         </div>
       </div>
@@ -716,6 +738,26 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
               <div className="mt-5 grid grid-cols-2 gap-3">
                 <button type="button" onClick={() => setGoalCorrectionTeam(null)} className="rounded-xl bg-slate-100 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-600 hover:bg-slate-200">Cancelar</button>
                 <button type="button" disabled={loading} onClick={confirmGoalCorrection} className="rounded-xl bg-red-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-red-700 disabled:opacity-50">Eliminar gol</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {yellowCorrectionEvent && (
+          <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="yellow-correction-title">
+            <div className="w-full max-w-lg rounded-3xl border border-slate-700 bg-white p-5 text-slate-900 shadow-2xl sm:p-6">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-600">Corrección disciplinaria</p>
+                  <h3 id="yellow-correction-title" className="mt-1 text-xl font-black uppercase">¿Eliminar tarjeta amarilla?</h3>
+                  <p className="mt-2 text-xs font-semibold leading-relaxed text-slate-500">Se eliminará este evento y todos los registros asociados, incluido el comprobante de pago. Si fue la segunda amarilla, también se revertirá la expulsión generada.</p>
+                </div>
+                <button type="button" aria-label="Cerrar corrección de tarjeta" onClick={() => setYellowCorrectionEvent(null)} className="rounded-full bg-slate-100 p-2 text-slate-500 hover:bg-slate-200"><X className="h-5 w-5" /></button>
+              </div>
+              <div className="rounded-2xl bg-amber-50 p-4 text-sm font-bold text-slate-700">{yellowCorrectionEvent.players?.name || 'Jugador'} · {yellowCorrectionEvent.minute_record || '--'} · {match.home_team.id === yellowCorrectionEvent.team_id ? match.home_team.name : match.away_team.name}</div>
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <button type="button" onClick={() => setYellowCorrectionEvent(null)} className="rounded-xl bg-slate-100 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-600 hover:bg-slate-200">Cancelar</button>
+                <button type="button" disabled={loading} onClick={confirmYellowCorrection} className="rounded-xl bg-red-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-red-700 disabled:opacity-50">Eliminar tarjeta</button>
               </div>
             </div>
           </div>
