@@ -33,7 +33,7 @@ export default function StartingLineupModal({
   };
 
   const renderTeamList = (team: 'HOME' | 'AWAY', teamData: any, roster: any[], lineup: string[]) => (
-    <div className="flex-1 flex flex-col h-full bg-slate-50 rounded-[2rem] border border-slate-200 overflow-hidden">
+    <div className="flex-1 flex flex-col min-h-0 bg-slate-50 rounded-[2rem] border border-slate-200 overflow-hidden h-[34vh] md:h-full">
       <div className="p-6 bg-white border-b border-slate-200 flex justify-between items-center shrink-0 shadow-sm">
         <div className="flex items-center gap-4">
           <div className="w-12 h-12 bg-slate-50 border border-slate-100 rounded-xl flex items-center justify-center p-2 shadow-inner">
@@ -73,8 +73,8 @@ export default function StartingLineupModal({
   );
 
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/80 backdrop-blur-sm p-4 animate-in fade-in duration-300">
-      <div className="bg-white border border-slate-200 p-6 md:p-8 rounded-[2rem] md:rounded-[3rem] w-full max-w-6xl shadow-2xl flex flex-col h-[90vh] relative overflow-hidden">
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/80 backdrop-blur-sm p-2 sm:p-4 animate-in fade-in duration-300">
+      <div className="bg-white border border-slate-200 p-4 sm:p-6 md:p-8 rounded-[2rem] md:rounded-[3rem] w-full max-w-6xl shadow-2xl flex flex-col h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] md:h-[90vh] md:max-h-[90vh] relative overflow-hidden">
         
         {/* Header */}
         <div className="flex justify-between items-start mb-6 border-b border-slate-100 pb-6 shrink-0">
@@ -100,7 +100,7 @@ export default function StartingLineupModal({
         </div>
 
         {/* Content */}
-        <div className="flex flex-col md:flex-row gap-6 md:gap-8 flex-1 overflow-hidden">
+        <div className="flex flex-col md:flex-row gap-4 md:gap-8 flex-1 min-h-0 overflow-y-auto md:overflow-hidden">
           {renderTeamList('HOME', match.home_team, homeRoster, homeStartingLineup)}
           {renderTeamList('AWAY', match.away_team, awayRoster, awayStartingLineup)}
         </div>

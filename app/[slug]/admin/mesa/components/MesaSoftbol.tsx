@@ -562,7 +562,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
       {/* CABECERA OFICIAL BROADCAST */}
       <div className="bg-white px-4 sm:px-6 md:px-8 py-3 sm:py-4 md:py-6 border-b border-slate-200 flex items-center justify-between shadow-sm z-30 relative gap-2 sm:gap-4 shrink-0">
         <div className="flex items-center gap-2 sm:gap-4 w-1/4">
-          <button onClick={onClose} className="p-2 sm:p-3 bg-slate-50 text-slate-500 rounded-lg sm:rounded-xl hover:bg-slate-100 shadow-sm border border-slate-200 hidden md:block"><ArrowLeft className="w-5 h-5 md:w-6 md:h-6" /></button>
+          <button onClick={onClose} aria-label="Volver a mesas" className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-[8px] font-black uppercase tracking-widest text-slate-500 shadow-sm hover:bg-slate-100 sm:gap-2 sm:rounded-xl sm:px-3 sm:py-3"><ArrowLeft className="h-5 w-5" /><span className="hidden sm:inline">Mesas</span></button>
           {categoryData?.tournaments?.logo_url && <img src={categoryData.tournaments.logo_url} alt="Torneo" className="h-8 sm:h-10 md:h-14 w-auto object-contain hidden sm:block" />}
         </div>
         <div className="w-2/4 text-center flex flex-col items-center overflow-hidden">

@@ -475,7 +475,7 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
       {/* CABECERA OFICIAL */}
       <div className="bg-white px-4 md:px-8 py-3 md:py-5 border-b border-slate-200 flex items-center justify-between shadow-sm z-30 relative shrink-0">
         <div className="flex items-center gap-4 w-1/4">
-          <button onClick={onClose} className="p-3 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100 shadow-sm border border-slate-200"><ArrowLeft size={24} /></button>
+          <button onClick={onClose} aria-label="Volver a mesas" className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-[9px] font-black uppercase tracking-widest text-slate-500 shadow-sm hover:bg-slate-100"><ArrowLeft size={20} /><span className="hidden sm:inline">Mesas</span></button>
           {categoryData?.tournaments?.logo_url && <img src={categoryData.tournaments.logo_url} alt="Torneo" className="h-12 md:h-16 lg:h-20 w-auto object-contain hidden sm:block" />}
         </div>
         <div className="w-2/4 text-center flex flex-col items-center">

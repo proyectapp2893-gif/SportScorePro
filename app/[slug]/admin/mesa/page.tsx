@@ -36,6 +36,14 @@ function MesaControlContent() {
 
   const [activeMatch, setActiveMatch] = useState<any | null>(null);
 
+  // The match console is a focused full-screen workspace. Hide the shared
+  // tournament context bar while a match is open so it cannot cover the
+  // scoreboard or controls; the console keeps its own return-to-mesas action.
+  useEffect(() => {
+    document.body.classList.toggle('mesa-match-active', Boolean(activeMatch));
+    return () => document.body.classList.remove('mesa-match-active');
+  }, [activeMatch]);
+
   // 2. LÓGICA DE CARGA MULTICUENTA (HUB)
   useEffect(() => {
     async function loadTenantCategories() {

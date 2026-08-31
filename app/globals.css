@@ -28,6 +28,113 @@ body {
   overflow-x: hidden;
 }
 
+/* Mesa de Control uses the full viewport while a match is open. */
+body.mesa-match-active [data-admin-tournament-context] {
+  display: none !important;
+}
+
+/* Keep the compact horizontal Mesa composition from being stretched by
+   desktop/tablet utility classes. Portrait sizing remains responsive. */
+/* Landscape compact rules are intended for phones/tablets only. On a desktop
+   monitor the regular md/lg Mesa sizing should remain in effect. */
+@media (orientation: landscape) and (max-width: 1100px) {
+  .mesa-team-logo {
+    width: 8rem !important;
+    height: 8rem !important;
+    position: relative;
+    top: -1rem;
+  }
+
+  .mesa-action-row {
+    transform: scale(.78);
+    transform-origin: top center;
+    margin-bottom: -1.5rem;
+    position: relative;
+    top: -1rem;
+  }
+
+  .mesa-advance-action {
+    width: min(24rem, 70vw) !important;
+    max-width: 24rem !important;
+    min-height: 2.75rem !important;
+    font-size: 0.78rem !important;
+  }
+
+  .mesa-timeline {
+    right: 0.75rem !important;
+    bottom: 0.75rem !important;
+    transform: scale(0.88);
+    transform-origin: bottom right;
+  }
+}
+
+/* Desktop landscape uses the spacious Mesa composition. The compact
+   landscape utilities above must not make a wide monitor look miniature. */
+@media (orientation: landscape) and (min-width: 1101px) {
+  .mesa-tournament-label {
+    font-size: 0.9rem !important;
+  }
+
+  .mesa-scoreboard {
+    height: 4.5rem !important;
+    max-width: 80rem !important;
+  }
+
+  .mesa-team-name {
+    font-size: 1.5rem !important;
+  }
+
+  .mesa-score-value {
+    min-width: 11rem !important;
+    font-size: 3rem !important;
+  }
+
+  .mesa-periods button {
+    padding: 0.75rem 1.75rem !important;
+    font-size: 0.9rem !important;
+  }
+
+  .mesa-advance-action {
+    max-width: 30rem !important;
+    min-height: 3.5rem !important;
+    font-size: 0.9rem !important;
+  }
+
+  .mesa-team-logo {
+    width: 15rem !important;
+    height: 15rem !important;
+    padding: 2rem !important;
+    margin-bottom: 1.5rem !important;
+    position: relative;
+    top: -1.75rem;
+  }
+
+  .mesa-action-row {
+    position: relative;
+    top: -1.75rem;
+  }
+
+  .mesa-action-row {
+    transform: none;
+    margin-bottom: 1.5rem;
+  }
+
+  .mesa-score-row {
+    gap: 1rem;
+    padding: 1rem;
+  }
+
+  .mesa-score-row button:first-child {
+    width: 5rem !important;
+    height: 4rem !important;
+  }
+
+  .mesa-score-row button:last-child {
+    width: 10rem !important;
+    height: 5rem !important;
+  }
+}
+
 img,
 svg,
 video,
