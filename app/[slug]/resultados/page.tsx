@@ -846,7 +846,7 @@ export default function ResultadosPublicos() {
                               role="tab"
                               aria-selected={activeRound === round.name}
                               onClick={() => setSelectedRound(round.name)}
-                              className={`min-h-11 shrink-0 rounded-xl border px-5 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${activeRound === round.name ? 'border-blue-600 bg-blue-600 text-white shadow-md shadow-blue-200' : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:text-blue-600'}`}
+                              className={`min-h-11 shrink-0 min-w-max whitespace-nowrap rounded-xl border px-4 sm:px-5 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${activeRound === round.name ? 'border-blue-600 bg-blue-600 text-white shadow-md shadow-blue-200' : 'border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:text-blue-600'}`}
                             >
                               {round.name}
                             </button>

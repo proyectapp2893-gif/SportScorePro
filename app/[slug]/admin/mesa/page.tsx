@@ -212,7 +212,7 @@ function MesaControlContent() {
           <div className="bg-white border border-slate-200 rounded-[2rem] sm:rounded-[2.5rem] overflow-hidden shadow-sm animate-in fade-in slide-in-from-bottom-8">
             <div className="flex overflow-x-auto bg-slate-50 px-4 pt-4 border-b border-slate-100 gap-2 scrollbar-hide">
               {availableRounds.map((round) => (
-                <button key={round} onClick={() => setActiveRound(round)} className={`px-8 py-4 rounded-t-2xl font-black uppercase tracking-widest text-[10px] transition-all ${activeRound === round ? 'bg-white text-blue-600 border-t-2 border-x border-slate-100 z-10 -mb-[1px] shadow-sm' : 'bg-slate-100 text-slate-400 hover:bg-white hover:text-slate-600 border-t border-transparent'}`}>
+                <button key={round} onClick={() => setActiveRound(round)} className={`shrink-0 min-w-max whitespace-nowrap px-6 sm:px-8 py-4 rounded-t-2xl font-black uppercase tracking-widest text-[10px] transition-all ${activeRound === round ? 'bg-white text-blue-600 border-t-2 border-x border-slate-100 z-10 -mb-[1px] shadow-sm' : 'bg-slate-100 text-slate-400 hover:bg-white hover:text-slate-600 border-t border-transparent'}`}>
                   {round === 100 || round >= 201 ? 'FASE 3 · FINALES' : round >= 101 ? `FASE 2 · JORNADA ${round - 100}` : `FASE 1 · JORNADA ${round}`}
                 </button>
               ))}

@@ -399,7 +399,7 @@ function EstadisticasContent() {
             <div className="bg-white border border-slate-200 rounded-[2.5rem] overflow-hidden shadow-sm flex flex-col min-h-[500px]">
               
               {/* TABS NAVEGACIÓN DINÁMICOS */}
-              <div className="flex overflow-x-auto bg-slate-50 px-4 pt-4 border-b border-slate-100 gap-2 scrollbar-hide flex-wrap sm:flex-nowrap">
+              <div className="flex flex-nowrap overflow-x-auto bg-slate-50 px-4 pt-4 border-b border-slate-100 gap-2 scrollbar-hide">
                 {[
                   { id: 'STANDINGS', label: 'TABLA DE POSICIONES', icon: <Trophy size={14}/> },
                   { id: 'SCORERS', label: scorersTabLabel, icon: <Activity size={14}/> }
@@ -409,7 +409,7 @@ function EstadisticasContent() {
                 }).map(tab => (
                   <button
                     key={tab.id} onClick={() => setActiveTab(tab.id as any)}
-                    className={`px-8 py-4 rounded-t-2xl font-black uppercase tracking-[0.2em] text-[10px] transition-all whitespace-nowrap flex items-center gap-2
+                    className={`shrink-0 min-w-max px-6 sm:px-8 py-4 rounded-t-2xl font-black uppercase tracking-[0.2em] text-[10px] transition-all whitespace-nowrap flex items-center gap-2
                       ${activeTab === tab.id 
                         ? 'bg-white text-blue-600 border-t-2 border-x border-slate-100 shadow-sm z-10 -mb-[1px]' 
                         : 'bg-slate-100 text-slate-400 hover:bg-white hover:text-slate-600 border-t border-transparent'}
