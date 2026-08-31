@@ -3,12 +3,20 @@ import { Inter } from 'next/font/google';
 import './globals.css';
 import { Toaster } from 'react-hot-toast';
 import { AppDialogHost } from './components/AppDialog';
+import { InstallAppPrompt } from './components/InstallAppPrompt';
 
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'SportScore Pro',
   description: 'Gestor Integral de Competiciones',
+  manifest: '/manifest.webmanifest',
+  applicationName: 'SportScore Pro',
+  appleWebApp: {
+    capable: true,
+    title: 'SportScore Pro',
+    statusBarStyle: 'default',
+  },
 }
 
 export default function RootLayout({
@@ -29,6 +37,7 @@ export default function RootLayout({
           }}
         />
         <AppDialogHost />
+        <InstallAppPrompt />
         {children}
       </body>
     </html>

@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { supabase } from '../../../supabase'; 
-import { Trophy, Plus, School, CheckCircle2, ChevronRight, ChevronLeft, Image as ImageIcon, UploadCloud, Scale, DollarSign, X, Swords, GitMerge, Settings, Crown, ListOrdered, Grid2x2, LayoutGrid, TableProperties, Eraser, Database, Upload, Trash2, AlertTriangle, Edit2, Check, Clock, CalendarDays } from 'lucide-react';
+import { Trophy, Plus, School, CheckCircle2, ChevronRight, ChevronLeft, Image as ImageIcon, UploadCloud, Scale, DollarSign, X, Swords, GitMerge, Settings, Crown, ListOrdered, Grid2x2, LayoutGrid, TableProperties, Eraser, Database, Upload, Trash2, AlertTriangle, Edit2, Check, Clock, CalendarDays, ChevronDown } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { confirmDialog } from '@/app/components/AppDialog';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall, FaTableTennis, FaGolfBall } from 'react-icons/fa';
@@ -14,6 +14,7 @@ import Image from 'next/image';
 import AppSelect from '@/app/components/AppSelect';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
 import { createDemoSchools, deleteDemoSchool, saveDemoTournament, updateDemoSchool } from '@/app/lib/demo/actions';
+import { SPORT_MODALITY_OPTIONS, type SportModality } from '@/app/lib/sports/formations';
 
 export default function CrearTorneoPage() {
   const router = useRouter();
@@ -33,6 +34,8 @@ export default function CrearTorneoPage() {
   const [availableSports, setAvailableSports] = useState<any[]>([]);
   const [selectedSport, setSelectedSport] = useState<any | null>(null);
   const [tournamentFormat, setTournamentFormat] = useState<string>('LEAGUE');
+  const [sportModality, setSportModality] = useState<SportModality>('STANDARD');
+  const [modalityMenuOpen, setModalityMenuOpen] = useState(false);
 
   // Paso 3: Info del Torneo
   const [newTournamentName, setNewTournamentName] = useState('');
@@ -117,6 +120,7 @@ export default function CrearTorneoPage() {
       setNewTournamentName(tournament.name);
       setExistingLogoUrl(tournament.logo_url);
       setTournamentFormat(tournament.tournament_format || 'LEAGUE');
+      setSportModality((tournament.sport_modality as SportModality) || 'STANDARD');
       
       setFpEnabled(tournament.fair_play_enabled || false);
       setFpStartingPoints(tournament.fp_starting_points || 1000);
@@ -362,6 +366,7 @@ export default function CrearTorneoPage() {
         name: newTournamentName.trim().toUpperCase(),
         logo_url: finalLogoUrl,
         tournament_format: tournamentFormat,
+        sport_modality: sportModality,
         fair_play_enabled: fpEnabled,
         fp_starting_points: Number(fpStartingPoints) || 0,
         fp_yellow_deduction: Number(fpYellowDeduction) || 0,
@@ -554,6 +559,23 @@ export default function CrearTorneoPage() {
                       <div className="w-12 h-12 rounded-2xl bg-slate-200 text-slate-600 flex items-center justify-center"><Settings size={24}/></div>
                       <div><h5 className="font-black uppercase text-sm text-slate-900 mb-1">Libre (Custom)</h5><p className="text-xs text-slate-500 font-medium">Constructor manual. Activa o desactiva grupos y llaves a medida.</p></div>
                     </button>
+                    <div className="md:col-span-2 lg:col-span-3 rounded-3xl border-2 border-indigo-200 bg-indigo-50/60 p-6">
+                      <label htmlFor="sport-modality" className="block text-sm font-black uppercase tracking-widest text-indigo-900">Modalidad de juego</label>
+                      <p className="mt-2 text-xs font-medium leading-relaxed text-slate-600">Define cuántos titulares y qué formación se mostrarán en las alineaciones. Es independiente del formato del torneo y de la categoría de edad (por ejemplo, +35).</p>
+                      <div className="relative mt-4">
+                        <button id="sport-modality" type="button" aria-haspopup="listbox" aria-expanded={modalityMenuOpen} onClick={() => setModalityMenuOpen((open) => !open)} className="flex min-h-14 w-full items-center justify-between gap-4 rounded-2xl border border-indigo-200 bg-white px-4 py-3 text-left outline-none transition-all hover:border-indigo-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100">
+                          <span className="min-w-0"><span className="block truncate text-sm font-black text-slate-900">{SPORT_MODALITY_OPTIONS.find((option) => option.value === sportModality)?.label}</span><span className="mt-0.5 block truncate text-[10px] font-bold uppercase tracking-wider text-slate-400">Modalidad seleccionada</span></span>
+                          <ChevronDown size={20} className={`shrink-0 text-indigo-500 transition-transform ${modalityMenuOpen ? 'rotate-180' : ''}`} />
+                        </button>
+                        {modalityMenuOpen && <div role="listbox" aria-label="Modalidad de juego" className="absolute left-0 right-0 z-30 mt-2 overflow-hidden rounded-2xl border border-indigo-100 bg-white p-2 shadow-2xl shadow-indigo-900/15">
+                          {SPORT_MODALITY_OPTIONS.map((option) => <button key={option.value} type="button" role="option" aria-selected={sportModality === option.value} onClick={() => { setSportModality(option.value); setModalityMenuOpen(false); }} className={`flex w-full items-start gap-3 rounded-xl px-3 py-3 text-left transition-colors ${sportModality === option.value ? 'bg-indigo-600 text-white' : 'text-slate-800 hover:bg-indigo-50'}`}>
+                            <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-black ${sportModality === option.value ? 'bg-white text-indigo-600' : 'bg-indigo-100 text-indigo-500'}`}>{sportModality === option.value ? '✓' : ''}</span>
+                            <span className="min-w-0"><span className="block text-sm font-black">{option.label}</span><span className={`mt-1 block text-[10px] font-medium leading-relaxed ${sportModality === option.value ? 'text-indigo-100' : 'text-slate-500'}`}>{option.description}</span></span>
+                          </button>)}
+                        </div>}
+                      </div>
+                      {sportModality === 'SOCCER_9' && <p className="mt-3 text-xs font-black uppercase tracking-wider text-indigo-700">✓ Las alineaciones permitirán seleccionar 1 portero y 8 jugadores de campo.</p>}
+                    </div>
                   </div>
                 ) : (
                   <div className="text-center max-w-lg mx-auto p-8 border-2 border-dashed border-slate-300 rounded-3xl bg-white">

@@ -136,10 +136,6 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
   };
 
   const handleTurnMatchLive = async () => {
-    if (homeStartingLineup.length < minPlayers || awayStartingLineup.length < minPlayers) {
-      return toast.error(`Ambos equipos deben tener ${minPlayers} jugadores.`);
-    }
-
     setLoading(true);
     const toastId = toast.loading('Registrando acta...');
     try {
@@ -402,7 +398,7 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
                 <Zap size={18} className="text-amber-500" /> Partido Rápido
               </button>
               <div className="hidden md:block"></div>
-              <button onClick={handleTurnMatchLive} disabled={loading || homeStartingLineup.length < minPlayers || awayStartingLineup.length < minPlayers} className="w-full md:w-auto px-12 py-4 md:py-5 bg-yellow-600 hover:bg-yellow-500 text-white rounded-2xl font-black text-sm uppercase tracking-[0.2em] flex items-center justify-center gap-3 shadow-[0_0_40px_rgba(202,138,4,0.4)] transition-all disabled:opacity-50">
+              <button onClick={handleTurnMatchLive} disabled={loading} className="w-full md:w-auto px-12 py-4 md:py-5 bg-yellow-600 hover:bg-yellow-500 text-white rounded-2xl font-black text-sm uppercase tracking-[0.2em] flex items-center justify-center gap-3 shadow-[0_0_40px_rgba(202,138,4,0.4)] transition-all disabled:opacity-50">
                 <FaVolleyballBall size={20} className="animate-spin-slow" /> Confirmar e Iniciar Set
               </button>
             </div>
@@ -561,8 +557,9 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
       {/* CABECERA OFICIAL (ESTILO VÓLEY) */}
       <div className="bg-slate-900 px-4 md:px-8 py-3 md:py-4 border-b border-slate-800 flex flex-col md:flex-row items-center justify-between shadow-lg z-30 relative gap-4 shrink-0 text-white">
         <div className="flex items-center gap-2 sm:gap-4 w-full md:w-1/4 justify-start">
-          <button onClick={onClose} className="p-2 md:p-3 bg-white/10 text-slate-300 rounded-lg md:rounded-xl hover:bg-white/20 hover:text-white transition-colors">
+          <button onClick={onClose} aria-label="Volver a mesas" className="flex items-center gap-2 rounded-lg bg-white/10 px-2 py-2 text-[8px] font-black uppercase tracking-widest text-slate-300 transition-colors hover:bg-white/20 hover:text-white md:rounded-xl md:px-3 md:py-3">
             <ArrowLeft className="w-5 h-5 md:w-6 md:h-6" />
+            <span className="hidden sm:inline">Mesas</span>
           </button>
         </div>
         

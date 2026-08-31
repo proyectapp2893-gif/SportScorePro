@@ -15,7 +15,7 @@ async function loadTeamAccess(supabase: ReturnType<typeof createServerSupabaseAd
         categories(
           id, name, gender, registration_open, registration_deadline, min_roster_size, max_roster_size, roster_locked_message,
           sports(name),
-          tournaments(name, fair_play_enabled, fine_yellow_amount, fine_red_amount, fp_yellow_deduction, fp_red_deduction, schedule_dates, fixture_visible_to_delegates)
+          tournaments(name, fair_play_enabled, fine_yellow_amount, fine_red_amount, fp_yellow_deduction, fp_red_deduction, schedule_dates, fixture_visible_to_delegates, sport_modality)
         )
       )
     `)
@@ -32,7 +32,7 @@ async function loadTeamAccess(supabase: ReturnType<typeof createServerSupabaseAd
         categories(
           id, name, gender,
           sports(name),
-          tournaments(name, fair_play_enabled, fine_yellow_amount, fine_red_amount, fp_yellow_deduction, fp_red_deduction)
+          tournaments(name, fair_play_enabled, fine_yellow_amount, fine_red_amount, fp_yellow_deduction, fp_red_deduction, sport_modality)
         )
       )
     `)
@@ -105,6 +105,8 @@ async function loadDelegatePortalData(slug: string) {
       : playersQuery.data;
 
     (players || []).forEach((player: any) => {
+      // Reutilizamos el logo del equipo en la alineación sin descargarlo por jugador.
+      player.team_logo_url = teams.find((team: any) => team.id === player.team_id)?.schools?.logo_url || null;
       if (!playersByTeam[player.team_id]) playersByTeam[player.team_id] = [];
       playersByTeam[player.team_id].push(player);
     });

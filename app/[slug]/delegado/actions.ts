@@ -23,6 +23,7 @@ type PlayerInput = {
 const MAX_LOGO_SIZE_BYTES = 800 * 1024;
 const MAX_PLAYER_DOCUMENT_SIZE_BYTES = 5 * 1024 * 1024;
 const PLAYER_DOCUMENT_TYPES = ['FACE_PHOTO', 'IDENTITY_FRONT', 'IDENTITY_BACK'] as const;
+const MAX_PAYMENT_PROOF_SIZE_BYTES = 5 * 1024 * 1024;
 
 async function getDelegateForSlug(slug: string) {
   const delegateId = await getDelegateSession(slug);
@@ -63,7 +64,7 @@ async function assertDelegateTeam(slug: string, teamId: string) {
       team_id,
       teams!inner(
         id, school_id, category_id,
-        categories!inner(id, tournament_id, registration_open, registration_deadline, min_roster_size, max_roster_size, roster_locked_message, tournaments(id, tournament_format, schedule_dates))
+        categories!inner(id, tournament_id, registration_open, registration_deadline, min_roster_size, max_roster_size, roster_locked_message, tournaments(id, tournament_format, sport_modality, schedule_dates))
       )
     `)
     .eq('delegate_user_id', delegate.id)
@@ -142,6 +143,7 @@ export async function addDelegatePlayers(slug: string, teamId: string, players: 
   const normalizeBirthDate = (value: string | null | undefined) => {
     const raw = String(value || '').trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    if (/^\d{8}$/.test(raw)) return `${raw.slice(4)}-${raw.slice(2, 4)}-${raw.slice(0, 2)}`;
     const match = raw.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})$/);
     if (!match) return raw;
     return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
@@ -366,6 +368,59 @@ export async function uploadPlayerIdentityDocument(
   if (previous?.storage_path) await supabase.storage.from('player-documents').remove([previous.storage_path]);
 
   await logAuditEvent({ action: 'delegate.player_document.upload', actorType: 'delegate', actorId: access.delegate.id, clientId: access.delegate.client_id, targetType: 'player', targetId: playerId, metadata: { slug, teamId, documentType } });
+  return { success: true, data: undefined };
+}
+
+/** Uploads a private proof of payment linked to one specific disciplinary event. */
+export async function uploadPlayerFinePaymentProof(
+  slug: string,
+  teamId: string,
+  playerId: string,
+  matchEventId: string,
+  file: File,
+): Promise<DelegateActionResult> {
+  const access = await assertDelegateTeam(slug, teamId);
+  if (!access.success) return { success: false, error: access.error };
+  if (!file || file.size <= 0 || file.size > MAX_PAYMENT_PROOF_SIZE_BYTES) return { success: false, error: 'El comprobante debe pesar máximo 5 MB.' };
+  if (!['image/jpeg', 'image/png', 'image/webp', 'application/pdf'].includes(file.type)) return { success: false, error: 'Usa un comprobante JPG, PNG, WebP o PDF.' };
+
+  const supabase = createServerSupabaseAdminClient();
+  const { data: event } = await supabase.from('match_events').select('id, player_id, team_id, fine_status').eq('id', matchEventId).eq('player_id', playerId).eq('team_id', teamId).maybeSingle();
+  if (!event) return { success: false, error: 'La multa no pertenece a este jugador.' };
+  if (event.fine_status === 'PAID') return { success: false, error: 'Esta multa ya fue validada.' };
+
+  const extension = file.type === 'application/pdf' ? 'pdf' : file.type.split('/')[1].replace('jpeg', 'jpg');
+  const storagePath = `${access.delegate.client_id}/${teamId}/${playerId}/fine-proof-${matchEventId}-${randomUUID()}.${extension}`;
+  const { error: uploadError } = await supabase.storage.from('player-documents').upload(storagePath, file, { contentType: file.type, upsert: false });
+  if (uploadError) return { success: false, error: 'No se pudo almacenar el comprobante privado.' };
+  const { error } = await supabase.from('fine_payment_proofs').insert({ player_id: playerId, team_id: teamId, match_event_id: matchEventId, storage_path: storagePath, original_filename: file.name.slice(0, 180), mime_type: file.type, file_size: file.size, status: 'PENDING', submitted_by_delegate_id: access.delegate.id });
+  if (error) {
+    await supabase.storage.from('player-documents').remove([storagePath]);
+    return { success: false, error: 'No se pudo registrar el comprobante. Verifica que la actualización esté disponible.' };
+  }
+  await logAuditEvent({ action: 'delegate.fine_payment_proof.upload', actorType: 'delegate', actorId: access.delegate.id, clientId: access.delegate.client_id, targetType: 'player', targetId: playerId, metadata: { slug, teamId, matchEventId } });
+  return { success: true, data: undefined };
+}
+
+export async function saveDelegateMatchLineup(slug: string, teamId: string, matchId: string, playerIds: string[]) : Promise<DelegateActionResult> {
+  const access = await assertDelegateTeam(slug, teamId);
+  if (!access.success) return { success: false, error: access.error };
+  const supabase = createServerSupabaseAdminClient();
+  const { data: match } = await supabase.from('matches').select('id, status, home_team_id, away_team_id').eq('id', matchId).maybeSingle();
+  if (!match || (match.home_team_id !== teamId && match.away_team_id !== teamId)) return { success: false, error: 'El partido no pertenece a este equipo.' };
+  if (match.status !== 'SCHEDULED') return { success: false, error: 'La alineación está bloqueada porque el partido ya inició.' };
+  const validPlayers = playerIds.length
+    ? await supabase.from('players').select('id').eq('team_id', teamId).in('id', playerIds)
+    : { data: [], error: null };
+  if (validPlayers.error) return { success: false, error: 'No se pudo validar la nómina.' };
+  const validIds = new Set((validPlayers.data || []).map((player) => player.id));
+  if (validIds.size !== new Set(playerIds).size) return { success: false, error: 'La alineación contiene jugadores inválidos.' };
+  await supabase.from('match_events').delete().eq('match_id', matchId).eq('team_id', teamId).eq('event_type', 'STARTING_LINEUP');
+  if (playerIds.length) {
+    const { error } = await supabase.from('match_events').insert(playerIds.map((playerId) => ({ match_id: matchId, team_id: teamId, player_id: playerId, event_type: 'STARTING_LINEUP', period: '0' })));
+    if (error) return { success: false, error: 'No se pudo guardar la alineación.' };
+  }
+  await logAuditEvent({ action: 'delegate.match_lineup.save', actorType: 'delegate', actorId: access.delegate.id, clientId: access.delegate.client_id, targetType: 'match', targetId: matchId, metadata: { teamId, playerCount: playerIds.length } });
   return { success: true, data: undefined };
 }
 

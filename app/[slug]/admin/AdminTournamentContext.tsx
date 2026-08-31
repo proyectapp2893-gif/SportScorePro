@@ -20,9 +20,10 @@ export default function AdminTournamentContext() {
   const [tournaments, setTournaments] = useState<TournamentOption[]>([]);
   const [selectedId, setSelectedId] = useState(searchParams.get('tournament') || '');
   const isDashboard = pathname === `/${slug}/admin`;
+  const isMesaRoute = pathname.startsWith(`/${slug}/admin/mesa`);
 
   useEffect(() => {
-    if (isDashboard) return;
+    if (isDashboard || isMesaRoute) return;
     const load = async () => {
       if (slug === DEMO_SLUG) {
         const db = loadDemoDatabase();
@@ -52,9 +53,9 @@ export default function AdminTournamentContext() {
       if (candidate) window.localStorage.setItem(tournamentStorageKey(slug), candidate);
     };
     load();
-  }, [isDashboard, searchParams, slug]);
+  }, [isDashboard, isMesaRoute, searchParams, slug]);
 
-  if (isDashboard || !tournaments.length) return null;
+  if (isDashboard || isMesaRoute || !tournaments.length) return null;
   const selected = tournaments.find((item) => item.id === selectedId);
   const changeTournament = (id: string) => {
     if (!tournaments.some((item) => item.id === id)) return;
@@ -63,7 +64,7 @@ export default function AdminTournamentContext() {
     router.push(adminDashboardPath(slug, id));
   };
 
-  return <div className="sticky top-0 z-[90] border-b border-slate-200 bg-white/95 px-3 py-2.5 shadow-sm backdrop-blur-xl sm:px-6">
+  return <div data-admin-tournament-context className="sticky top-0 z-[90] border-b border-slate-200 bg-white/95 px-3 py-2.5 shadow-sm backdrop-blur-xl sm:px-6">
     <div className="mx-auto flex max-w-6xl items-center gap-3">
       <button type="button" onClick={() => router.push(adminDashboardPath(slug, selectedId))} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white transition hover:bg-blue-600 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200" aria-label="Volver al Centro de Operaciones"><LayoutDashboard size={18} /></button>
       <div className="hidden min-w-0 items-center gap-2 border-r border-slate-200 pr-4 md:flex"><Building2 className="shrink-0 text-slate-400" size={16} /><span className="max-w-44 truncate text-[9px] font-black uppercase tracking-widest text-slate-500">{institution}</span></div>

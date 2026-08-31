@@ -166,6 +166,23 @@ export function recordDemoFootballEvent(input: any) {
   saveDemoDatabase(db); return { success: true, home_score: match.home_score || 0, away_score: match.away_score || 0 };
 }
 
+/** Removes the most recent goal for a team in the demo store and keeps the demo scoreboard in sync. */
+export function revertDemoLastFootballGoal(matchId: string, teamId: string, playerId?: string | null, updateMatchScore = true) {
+  const db = loadDemoDatabase();
+  const match = db.matches.find((item) => item.id === matchId);
+  if (!match) throw new Error('Partido demo no encontrado.');
+  const candidates = db.match_events
+    .filter((event: any) => event.match_id === matchId && event.team_id === teamId && event.event_type === 'GOAL')
+    .sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)));
+  const event = playerId ? candidates.find((item: any) => item.player_id === playerId) : candidates[0];
+  if (!event) return { success: false, error: 'No se encontró un gol para revertir.' };
+  db.match_events = db.match_events.filter((item: any) => item.id !== event.id);
+  const field = teamId === match.home_team_id ? 'home_score' : 'away_score';
+  if (updateMatchScore) match[field] = Math.max(0, Number(match[field] || 0) - 1);
+  saveDemoDatabase(db);
+  return { success: true, home_score: match.home_score || 0, away_score: match.away_score || 0 };
+}
+
 export function changeDemoMatchPeriod(matchId: string, period: string) { const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === matchId); if (match) match.current_period = period; saveDemoDatabase(db); return { success: true }; }
 export function finishDemoFootballMatch(matchId: string, homeScore: number, awayScore: number, currentPeriod: string) { const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === matchId); if (match) Object.assign(match, { status: 'FINISHED', home_score: homeScore, away_score: awayScore, current_period: currentPeriod, is_timer_running: false, timer_start_time: null, match_phase: 'FINISHED' }); saveDemoDatabase(db); return { success: true }; }
 export function applyDemoWalkover(matchId: string, absentTeamId: string) { const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === matchId); if (match) Object.assign(match, { status: 'FINISHED', home_score: absentTeamId === match.home_team_id ? 0 : 3, away_score: absentTeamId === match.away_team_id ? 0 : 3, is_timer_running: false }); saveDemoDatabase(db); return { success: true }; }
