@@ -148,7 +148,7 @@ async function requireMatchAccess(slug: string, matchId: string) {
     .from('matches')
     .select(`
       id, status, home_team_id, away_team_id, home_score, away_score,
-      matchdays!inner(categories!inner(tournaments!inner(client_id)))
+      matchdays!inner(round_number, categories!inner(tournaments!inner(client_id)))
     `)
     .eq('id', matchId)
     .eq('matchdays.categories.tournaments.client_id', clientId)
@@ -190,14 +190,15 @@ export async function getFootballMatchRoster(slug: string, matchId: string) {
 
   const playerIds = (players || []).map((player) => player.id);
   const suspendedPlayers: Record<string, boolean> = {};
+  const currentRound = Number((match as any).matchdays?.round_number || 0);
   if (playerIds.length > 0) {
     const { data: disciplinaryEvents } = await supabase
       .from('match_events')
-      .select('id, match_id, player_id, team_id, event_type, created_at, period, match_second, minute_record, fine_status')
+      .select('id, match_id, player_id, team_id, event_type, created_at, period, match_second, minute_record, fine_status, suspension_matches, matches!inner(matchdays!inner(round_number))')
       .in('player_id', playerIds)
       .in('event_type', ['YELLOW', 'RED']);
     normalizeDoubleCautions(disciplinaryEvents || [])
-      .filter((event) => event.fine_status === 'UNPAID')
+      .filter((event: any) => event.fine_status === 'UNPAID' || (event.event_type === 'RED' && event.suspension_matches && currentRound > Number(event.matches?.matchdays?.round_number || 0) && currentRound <= Number(event.matches?.matchdays?.round_number || 0) + Number(event.suspension_matches)))
       .forEach((event) => { if (event.player_id) suspendedPlayers[event.player_id] = true; });
   }
 

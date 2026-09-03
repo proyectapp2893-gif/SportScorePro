@@ -3,12 +3,12 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../../supabase';
 import { useParams, useSearchParams } from 'next/navigation';
-import { Scale, AlertTriangle, ShieldCheck, DollarSign, Search, CheckCircle2, Flame, ArrowLeft, Wallet, Calendar, Clock, Flag, Eye } from 'lucide-react';
+import { Scale, AlertTriangle, ShieldCheck, DollarSign, Search, CheckCircle2, Flame, ArrowLeft, Wallet, Calendar, Clock, Flag, Eye, Settings2, MessageSquare } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
 import { formatCopAmount } from '@/app/lib/formatters';
 import { normalizeDoubleCautions } from '@/app/lib/discipline/double-caution';
-import { approveFinePaymentProof, getFinePaymentProofs, getFinePaymentProofUrl } from './actions';
+import { approveFinePaymentProof, getFinePaymentProofs, getFinePaymentProofUrl, updateDisciplinaryRecord } from './actions';
 
 export default function TribunalPage() {
   const params = useParams();
@@ -21,6 +21,10 @@ export default function TribunalPage() {
   const [paymentProofs, setPaymentProofs] = useState<any[]>([]);
   const [selectedProof, setSelectedProof] = useState<any | null>(null);
   const [selectedProofUrl, setSelectedProofUrl] = useState('');
+  const [selectedTeamHistory, setSelectedTeamHistory] = useState<any | null>(null);
+  const [selectedDisciplinary, setSelectedDisciplinary] = useState<any | null>(null);
+  const [disciplinaryComment, setDisciplinaryComment] = useState('');
+  const [suspensionMatches, setSuspensionMatches] = useState('');
   
   // Estados para los filtros y Pestañas
   const [searchTerm, setSearchTerm] = useState('');
@@ -56,7 +60,7 @@ export default function TribunalPage() {
           .from('match_events')
           // 🚨 AHORA PEDIMOS round_number EN LUGAR DE name 🚨
           .select(`
-            id, event_type, fine_status, created_at, minute_record, period,
+            id, event_type, fine_status, created_at, minute_record, period, disciplinary_comment, suspension_matches,
             match_id, player_id, team_id, match_second,
             players!inner(name, shirt_number, teams(name, schools(logo_url))),
             matches!inner(matchdays!inner(round_number, categories!inner(tournaments!inner(id, client_id))))
@@ -67,12 +71,15 @@ export default function TribunalPage() {
           .neq('fine_status', 'NONE') 
           .order('created_at', { ascending: false });
 
+        let compatibleEvents = eventsData;
         if (error) {
-          console.error("Error cargando tarjetas:", error);
-          toast.error(`Error BD: ${error.message}`);
+          // Compatibilidad mientras la migración disciplinaria aún no se aplica.
+          const fallback = await supabase.from('match_events').select(`id, event_type, fine_status, created_at, minute_record, period, match_id, player_id, team_id, match_second, players!inner(name, shirt_number, teams(name, schools(logo_url))), matches!inner(matchdays!inner(round_number, categories!inner(tournaments!inner(id, client_id))))`).eq('matches.matchdays.categories.tournaments.client_id', clientData.id).eq('matches.matchdays.categories.tournaments.id', trns.id).in('event_type', ['YELLOW', 'RED']).neq('fine_status', 'NONE').order('created_at', { ascending: false });
+          compatibleEvents = fallback.data as any;
+          if (fallback.error) toast.error(`Error BD: ${fallback.error.message}`);
         }
 
-        if (eventsData) setFines(normalizeDoubleCautions(eventsData as any));
+        if (compatibleEvents) setFines(normalizeDoubleCautions(compatibleEvents as any));
 
         const proofsResult = await getFinePaymentProofs(slug, trns.id);
         if (proofsResult.success) setPaymentProofs(proofsResult.data);
@@ -85,7 +92,7 @@ export default function TribunalPage() {
     const toastId = toast.loading('Validando comprobante...');
     const result = await approveFinePaymentProof(slug, proof.id);
     if (!result.success) return toast.error(result.error, { id: toastId });
-    toast.success('Pago validado. Jugador habilitado.', { id: toastId });
+    toast.success('Pago validado. Equipo habilitado.', { id: toastId });
     loadData();
   };
 
@@ -93,6 +100,20 @@ export default function TribunalPage() {
     const result = await getFinePaymentProofUrl(slug, path);
     if (!result.success) return toast.error(result.error);
     setSelectedProofUrl(result.data.url);
+  };
+
+  const openDisciplinaryEditor = (event: any) => {
+    setSelectedDisciplinary(event);
+    setDisciplinaryComment(event.disciplinary_comment || '');
+    setSuspensionMatches(event.event_type === 'RED' && event.suspension_matches ? String(event.suspension_matches) : '');
+  };
+  const saveDisciplinaryRecord = async () => {
+    if (!selectedDisciplinary) return;
+    const result = await updateDisciplinaryRecord(slug, selectedDisciplinary.id, disciplinaryComment, selectedDisciplinary.event_type === 'RED' && suspensionMatches ? Number(suspensionMatches) : null);
+    if (!result.success) return toast.error(result.error);
+    toast.success('Resolución disciplinaria guardada.');
+    setSelectedDisciplinary(null);
+    loadData();
   };
 
   const proofByEvent = paymentProofs.reduce((acc: Record<string, any>, proof: any) => { acc[proof.match_event_id] = proof; return acc; }, {});
@@ -144,15 +165,46 @@ export default function TribunalPage() {
   });
   
   const activeTab = (selectedTab !== 'GLOBAL' && !groupedFines[selectedTab]) ? 'GLOBAL' : selectedTab;
-  const finesToDisplay = activeTab === 'GLOBAL' ? filteredFines : groupedFines[activeTab];
+  const eventsToDisplay = activeTab === 'GLOBAL' ? filteredFines : groupedFines[activeTab];
 
-  const totalUnpaidCount = filteredFines.filter(f => f.fine_status === 'UNPAID').length;
-  const totalMoneyPending = filteredFines.filter(f => f.fine_status === 'UNPAID').reduce((sum, f) => {
-    return sum + (f.event_type === 'RED' ? (tournamentSettings?.fine_red_amount || 0) : (tournamentSettings?.fine_yellow_amount || 0));
-  }, 0);
-  const totalMoneyCollected = filteredFines.filter(f => f.fine_status === 'PAID').reduce((sum, f) => {
-    return sum + (f.event_type === 'RED' ? (tournamentSettings?.fine_red_amount || 0) : (tournamentSettings?.fine_yellow_amount || 0));
-  }, 0);
+  // La recaudación se consolida por equipo: el delegado realiza un único pago.
+  const teamBalances = (eventsToDisplay || []).reduce((acc: Record<string, any>, fine: any) => {
+    const teamId = fine.team_id || fine.players?.teams?.id || fine.players?.teams?.name || 'sin-equipo';
+    const team = acc[teamId] || {
+      id: teamId,
+      name: fine.players?.teams?.name || 'Equipo sin asignar',
+      events: [],
+      unpaid: 0,
+      paid: 0,
+      pendingAmount: 0,
+      collectedAmount: 0,
+      proof: null,
+    };
+    const amount = fine.event_type === 'RED' ? (tournamentSettings?.fine_red_amount || fine.fine_amount || 0) : (tournamentSettings?.fine_yellow_amount || fine.fine_amount || 0);
+    team.events.push(fine);
+    if (fine.fine_status === 'PAID') {
+      team.paid += 1;
+      team.collectedAmount += amount;
+    } else {
+      team.unpaid += 1;
+      team.pendingAmount += amount;
+    }
+    if (proofByEvent[fine.id]) team.proof = proofByEvent[fine.id];
+    acc[teamId] = team;
+    return acc;
+  }, {});
+  const balancesToDisplay = Object.values(teamBalances);
+  const finesToDisplay = balancesToDisplay.map((balance: any) => ({
+    ...balance.events[0],
+    id: `team-${balance.id}`,
+    teamBalance: balance,
+    fine_status: balance.unpaid > 0 ? 'UNPAID' : 'PAID',
+    fine_amount: balance.pendingAmount || balance.collectedAmount,
+  }));
+
+  const totalUnpaidCount = Object.values(filteredFines.reduce((acc: Record<string, boolean>, fine: any) => { if (fine.fine_status === 'UNPAID') acc[fine.team_id || fine.players?.teams?.name || fine.id] = true; return acc; }, {})).length;
+  const totalMoneyPending = filteredFines.filter(f => f.fine_status === 'UNPAID').reduce((sum, f) => sum + (f.event_type === 'RED' ? (tournamentSettings?.fine_red_amount || f.fine_amount || 0) : (tournamentSettings?.fine_yellow_amount || f.fine_amount || 0)), 0);
+  const totalMoneyCollected = filteredFines.filter(f => f.fine_status === 'PAID').reduce((sum, f) => sum + (f.event_type === 'RED' ? (tournamentSettings?.fine_red_amount || f.fine_amount || 0) : (tournamentSettings?.fine_yellow_amount || f.fine_amount || 0)), 0);
 
   if (!tournamentSettings?.fair_play_enabled) {
     return (
@@ -221,7 +273,7 @@ export default function TribunalPage() {
         <div className="bg-white border border-slate-200 rounded-[2.5rem] overflow-hidden shadow-xl animate-in fade-in slide-in-from-bottom-4">
 
           <section className="hidden">
-            <div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-600">Comprobantes recibidos</p><h2 className="text-xl font-black uppercase text-slate-900">Validar pagos de jugadores</h2></div><span className="rounded-full bg-blue-600 px-3 py-1 text-[10px] font-black uppercase text-white">{paymentProofs.length} pendientes</span></div>
+            <div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-600">Comprobantes recibidos</p><h2 className="text-xl font-black uppercase text-slate-900">Validar pagos de equipos</h2></div><span className="rounded-full bg-blue-600 px-3 py-1 text-[10px] font-black uppercase text-white">{paymentProofs.length} pendientes</span></div>
             {paymentProofs.length === 0 ? <p className="rounded-2xl border border-dashed border-blue-200 bg-white/70 p-4 text-xs font-bold uppercase tracking-wider text-slate-500">No hay comprobantes pendientes. Cuando un delegado cargue un baucher desde el perfil de su jugador, aparecerá aquí para revisarlo.</p> : <div className="grid gap-3 md:grid-cols-2">{paymentProofs.map((proof) => <div key={proof.id} className="flex items-center justify-between gap-3 rounded-2xl border border-blue-100 bg-white p-4"><div className="min-w-0"><p className="truncate text-sm font-black uppercase">#{proof.players?.shirt_number || '-'} {proof.players?.name}</p><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{proof.original_filename}</p></div><div className="flex shrink-0 gap-2"><button type="button" onClick={() => handleViewProof(proof.storage_path)} className="rounded-xl border border-blue-200 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-50">Ver</button><button type="button" onClick={() => handleApproveProof(proof)} className="rounded-xl bg-emerald-600 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white hover:bg-emerald-700">Aceptar</button></div></div>)}</div>}
           </section>
           
@@ -286,10 +338,10 @@ export default function TribunalPage() {
               <thead>
                 <tr className="bg-slate-100 text-[10px] text-slate-500 uppercase font-black tracking-[0.2em] border-b border-slate-200">
                   <th className="p-6 pl-8">Estado</th>
-                  <th className="p-6">Minuto / Hora</th>
-                  <th className="p-6">Jugador Infractor</th>
-                  <th className="p-6">Sanción</th>
-                  <th className="p-6 text-right">Monto a Pagar</th>
+                  <th className="p-6">Equipo</th>
+                  <th className="p-6">Sanciones</th>
+                  <th className="p-6">Modalidad</th>
+                  <th className="p-6 text-right">Saldo del equipo</th>
                   <th className="p-6 text-right pr-8">Acción</th>
                 </tr>
               </thead>
@@ -302,10 +354,9 @@ export default function TribunalPage() {
                   finesToDisplay.map((fine: any) => {
                     const isRed = fine.event_type === 'RED';
                     const isPaid = fine.fine_status === 'PAID';
-                    const amount = isRed ? tournamentSettings?.fine_red_amount : tournamentSettings?.fine_yellow_amount;
+                    const amount = fine.teamBalance?.pendingAmount || fine.teamBalance?.collectedAmount || (isRed ? tournamentSettings?.fine_red_amount : tournamentSettings?.fine_yellow_amount);
+                    const sanctionLabels = fine.teamBalance ? Array.from(new Set(fine.teamBalance.events.map((event: any) => event.event_type === 'RED' ? (event.isDoubleCaution ? 'Doble amarilla · roja' : 'Roja directa') : 'Amarilla'))) : [];
                     
-                    const dateObj = new Date(fine.created_at);
-
                     return (
                       <tr key={fine.id} className="hover:bg-slate-50 transition-colors group">
                         {/* ESTADO */}
@@ -326,10 +377,10 @@ export default function TribunalPage() {
                             </div>
                             <div className="flex flex-col">
                               <span className="text-sm font-black text-slate-800 tracking-tight">
-                                Minuto {fine.minute_record}'
+                                {fine.teamBalance?.unpaid || 0} pendientes
                               </span>
                               <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">
-                                {dateObj.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }).replace('.', '')} • {dateObj.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
+                                {fine.teamBalance?.events.length || 0} registros disciplinarios
                               </span>
                             </div>
                           </div>
@@ -343,7 +394,7 @@ export default function TribunalPage() {
                             </div>
                             <div className="flex flex-col">
                               <span className="font-black text-slate-900 uppercase tracking-tight text-sm flex items-center gap-2">
-                                 {fine.players?.name}
+                                 {fine.players?.teams?.name || 'Equipo sin asignar'}
                                  {!isPaid && <Flame size={14} className="text-red-500"/>}
                               </span>
                               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">{fine.players?.teams?.name}</span>
@@ -356,7 +407,7 @@ export default function TribunalPage() {
                            <div className="flex items-center gap-3">
                               <div className={`w-5 h-7 rounded-[4px] shadow-sm border border-black/10 ${isRed ? 'bg-red-500' : 'bg-yellow-400'}`}></div>
                               <span className="text-[11px] font-black uppercase tracking-widest text-slate-700">
-                                 {isRed ? (fine.isDoubleCaution ? 'Roja por doble amonestación' : 'Roja directa') : 'Amonestación'}
+                              {fine.teamBalance ? sanctionLabels.join(' · ') : (isRed ? (fine.isDoubleCaution ? 'Roja por doble amonestación' : 'Roja directa') : 'Amonestación')}
                               </span>
                            </div>
                         </td>
@@ -370,13 +421,16 @@ export default function TribunalPage() {
 
                         {/* BOTÓN DE ACCIÓN */}
                         <td className="p-6 pr-8 text-center">
+                           <div className="flex flex-col items-center gap-2">
+                           {fine.teamBalance && <button type="button" onClick={() => setSelectedTeamHistory(fine.teamBalance)} className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-indigo-700"><Calendar size={14}/> Historial</button>}
                            {isPaid ? (
                               <span className="inline-flex items-center gap-1.5 text-[10px] font-black text-emerald-600 uppercase tracking-widest bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-100">
                                  <ShieldCheck size={14}/> Liberado
                               </span>
                            ) : (
-                              proofByEvent[fine.id] ? <button type="button" onClick={async () => { setSelectedProof(proofByEvent[fine.id]); setSelectedProofUrl(''); await handleViewProof(proofByEvent[fine.id].storage_path); }} className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-center text-[10px] font-black uppercase tracking-widest transition-all shadow-md active:scale-95"><Eye size={14}/> Ver comprobante</button> : <span className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-4 py-2.5 text-center text-[10px] font-black uppercase tracking-widest text-slate-400"><Clock size={14}/> Sin comprobante</span>
+                              (fine.teamBalance?.proof || proofByEvent[fine.id]) ? <button type="button" onClick={async () => { const proof = fine.teamBalance?.proof || proofByEvent[fine.id]; setSelectedProof(proof); setSelectedProofUrl(''); await handleViewProof(proof.storage_path); }} className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-center text-[10px] font-black uppercase tracking-widest transition-all shadow-md active:scale-95"><Eye size={14}/> Ver comprobante</button> : <span className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-4 py-2.5 text-center text-[10px] font-black uppercase tracking-widest text-slate-400"><Clock size={14}/> Sin comprobante</span>
                            )}
+                           </div>
                         </td>
                       </tr>
                     )
@@ -386,12 +440,32 @@ export default function TribunalPage() {
             </table>
           </div>
         </div>
+        {selectedTeamHistory && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4" onClick={() => setSelectedTeamHistory(null)}>
+            <section role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+              <div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Historial disciplinario</p><h2 className="text-xl font-black uppercase">{selectedTeamHistory.name}</h2></div><button type="button" onClick={() => setSelectedTeamHistory(null)} className="rounded-xl bg-slate-100 p-2" aria-label="Cerrar">×</button></div>
+              <div className="max-h-[60vh] divide-y divide-slate-100 overflow-y-auto">
+                {selectedTeamHistory.events.map((event: any) => <div key={event.id} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="text-xs font-black uppercase">#{event.players?.shirt_number || '-'} {event.players?.name || 'Jugador sin asignar'} · {event.event_type === 'RED' ? 'Tarjeta roja' : 'Tarjeta amarilla'}</p><p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{new Date(event.created_at).toLocaleDateString('es-CO')} · {event.period || '--'} {event.minute_record ? `· ${event.minute_record}'` : ''} {event.suspension_matches ? `· Suspensión: ${event.suspension_matches} jornadas` : ''}</p>{event.disciplinary_comment && <p className="mt-1 text-[10px] font-semibold text-slate-500">{event.disciplinary_comment}</p>}</div><button type="button" onClick={() => openDisciplinaryEditor(event)} className="shrink-0 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-blue-700"><Settings2 size={14} className="mr-1 inline"/> Resolver</button></div>)}
+              </div>
+            </section>
+          </div>
+        )}
+        {selectedDisciplinary && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/70 p-4" onClick={() => setSelectedDisciplinary(null)}>
+            <section role="dialog" aria-modal="true" className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+              <p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Resolución disciplinaria</p><h2 className="mt-1 text-2xl font-black uppercase">{selectedDisciplinary.players?.name || 'Jugador'}</h2>
+              <label className="mt-5 block text-[10px] font-black uppercase tracking-widest text-slate-500">Motivo / comentario<textarea value={disciplinaryComment} onChange={(event) => setDisciplinaryComment(event.target.value)} rows={3} className="mt-2 w-full rounded-xl border border-slate-200 p-3 text-sm font-semibold outline-none focus:border-blue-500" placeholder="Describe el motivo de la amonestación…" /></label>
+              {selectedDisciplinary.event_type === 'RED' && <label className="mt-4 block text-[10px] font-black uppercase tracking-widest text-slate-500">Jornadas de suspensión<select value={suspensionMatches} onChange={(event) => setSuspensionMatches(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm font-black outline-none focus:border-blue-500"><option value="">Sin suspensión adicional</option>{Array.from({ length: 20 }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count} {count === 1 ? 'jornada' : 'jornadas'}</option>)}</select></label>}
+              <div className="mt-6 flex gap-3"><button type="button" onClick={() => setSelectedDisciplinary(null)} className="flex-1 rounded-xl bg-slate-100 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-600">Cancelar</button><button type="button" onClick={saveDisciplinaryRecord} className="flex-1 rounded-xl bg-blue-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white">Guardar resolución</button></div>
+            </section>
+          </div>
+        )}
         {selectedProof && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4" onClick={() => setSelectedProof(null)}>
             <section role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
               <div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Comprobante privado</p><h2 className="text-xl font-black uppercase">{selectedProof.players?.name}</h2></div><button type="button" onClick={() => setSelectedProof(null)} className="rounded-xl bg-slate-100 p-2" aria-label="Cerrar"><ArrowLeft size={18}/></button></div>
               {selectedProofUrl ? <iframe src={selectedProofUrl} title="Comprobante de pago" className="h-[55vh] w-full rounded-2xl border border-slate-200" /> : <div className="flex h-40 items-center justify-center text-sm font-bold text-slate-400">Cargando comprobante…</div>}
-              <button type="button" onClick={() => handleApproveProof(selectedProof)} className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-emerald-700"><CheckCircle2 size={16} className="mr-2 inline"/> Confirmar pago y habilitar jugador</button>
+              <button type="button" onClick={() => handleApproveProof(selectedProof)} className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-emerald-700"><CheckCircle2 size={16} className="mr-2 inline"/> Confirmar pago y habilitar equipo</button>
             </section>
           </div>
         )}

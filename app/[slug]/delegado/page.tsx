@@ -132,6 +132,13 @@ async function loadDelegatePortalData(slug: string) {
     (events || []).forEach((event: any) => {
       if (!eventsByTeam[event.team_id]) eventsByTeam[event.team_id] = [];
       eventsByTeam[event.team_id].push(event);
+      // Mantener los eventos del equipo también disponibles por partido. Esto
+      // permite que el historial se vea incluso cuando el filtro de equipos
+      // no devuelve la consulta complementaria del fixture.
+      if (!eventsByMatch[event.match_id]) eventsByMatch[event.match_id] = [];
+      if (!eventsByMatch[event.match_id].some((item: any) => item.id === event.id)) {
+        eventsByMatch[event.match_id].push(event);
+      }
     });
 
     const { data: matches } = await supabase
@@ -157,17 +164,38 @@ async function loadDelegatePortalData(slug: string) {
 
     const matchIds = (matches || []).map((match: any) => match.id);
     if (matchIds.length > 0) {
-      const { data: matchEvents } = await supabase
+      const matchEventsQuery = await supabase
         .from('match_events')
         .select('id, match_id, team_id, player_id, event_type, period, minute_record, created_at, players(name, shirt_number), teams(name, schools(name, logo_url))')
         .in('match_id', matchIds)
         .in('event_type', ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3', 'YELLOW', 'RED'])
         .order('created_at', { ascending: true });
+      const matchEvents = matchEventsQuery.error
+        ? (await supabase
+          .from('match_events')
+          .select('id, match_id, team_id, player_id, event_type, period, minute_record, created_at')
+          .in('match_id', matchIds)
+          .in('event_type', ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3', 'YELLOW', 'RED'])
+          .order('created_at', { ascending: true })).data
+        : matchEventsQuery.data;
 
       (matchEvents || []).forEach((event: any) => {
         if (!eventsByMatch[event.match_id]) eventsByMatch[event.match_id] = [];
         eventsByMatch[event.match_id].push(event);
       });
+    }
+
+    // Los metadatos nuevos no deben bloquear la carga histórica. Se enriquecen
+    // aparte y se ignoran silenciosamente hasta que la migración exista.
+    const eventIds = [...Object.values(eventsByTeam).flat(), ...Object.values(eventsByMatch).flat()]
+      .map((event: any) => event.id)
+      .filter(Boolean)
+      .filter((id, index, ids) => ids.indexOf(id) === index);
+    if (eventIds.length > 0) {
+      const { data: disciplinaryMeta } = await supabase.from('match_events').select('id, disciplinary_comment, suspension_matches').in('id', eventIds);
+      const metadataById = new Map((disciplinaryMeta || []).map((event: any) => [event.id, event]));
+      Object.values(eventsByTeam).flat().forEach((event: any) => Object.assign(event, metadataById.get(event.id) || {}));
+      Object.values(eventsByMatch).flat().forEach((event: any) => Object.assign(event, metadataById.get(event.id) || {}));
     }
   }
 
@@ -184,6 +212,32 @@ async function loadDelegatePortalData(slug: string) {
       `)
       .in('matchdays.category_id', categoryIds)
       .order('matchdays(scheduled_date)', { ascending: true });
+
+    // El calendario visible al delegado incluye todos los equipos de la
+    // categoría. Cargamos también sus eventos para que el historial de cada
+    // partido no quede limitado al equipo autenticado.
+    const categoryMatchIds = (categoryMatches || []).map((match: any) => match.id).filter(Boolean);
+    if (categoryMatchIds.length > 0) {
+      const { data: categoryEvents } = await supabase
+        .from('match_events')
+        .select('id, match_id, team_id, player_id, event_type, period, minute_record, created_at, players(name, shirt_number), teams(name, schools(name, logo_url))')
+        .in('match_id', categoryMatchIds)
+        .in('event_type', ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3', 'YELLOW', 'RED'])
+        .order('created_at', { ascending: true });
+      (categoryEvents || []).forEach((event: any) => {
+        if (!eventsByMatch[event.match_id]) eventsByMatch[event.match_id] = [];
+        if (!eventsByMatch[event.match_id].some((item: any) => item.id === event.id)) eventsByMatch[event.match_id].push(event);
+      });
+      const categoryEventIds = (categoryEvents || []).map((event: any) => event.id).filter(Boolean);
+      if (categoryEventIds.length > 0) {
+        const { data: categoryDisciplinaryMeta } = await supabase
+          .from('match_events')
+          .select('id, disciplinary_comment, suspension_matches')
+          .in('id', categoryEventIds);
+        const metadataById = new Map((categoryDisciplinaryMeta || []).map((event: any) => [event.id, event]));
+        Object.values(eventsByMatch).flat().forEach((event: any) => Object.assign(event, metadataById.get(event.id) || {}));
+      }
+    }
 
     for (const team of teams) {
       const categorySchedule = (categoryMatches || []).filter((match: any) => match.matchdays?.category_id === team.category_id);

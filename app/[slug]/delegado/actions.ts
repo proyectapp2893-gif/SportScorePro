@@ -371,7 +371,7 @@ export async function uploadPlayerIdentityDocument(
   return { success: true, data: undefined };
 }
 
-/** Uploads a private proof of payment linked to one specific disciplinary event. */
+/** Uploads one private proof representing the consolidated disciplinary balance of a team. */
 export async function uploadPlayerFinePaymentProof(
   slug: string,
   teamId: string,
@@ -386,11 +386,11 @@ export async function uploadPlayerFinePaymentProof(
 
   const supabase = createServerSupabaseAdminClient();
   const { data: event } = await supabase.from('match_events').select('id, player_id, team_id, fine_status').eq('id', matchEventId).eq('player_id', playerId).eq('team_id', teamId).maybeSingle();
-  if (!event) return { success: false, error: 'La multa no pertenece a este jugador.' };
-  if (event.fine_status === 'PAID') return { success: false, error: 'Esta multa ya fue validada.' };
+  if (!event) return { success: false, error: 'La sanción no pertenece a este equipo.' };
+  if (event.fine_status === 'PAID') return { success: false, error: 'El saldo de este equipo ya fue validado.' };
 
   const extension = file.type === 'application/pdf' ? 'pdf' : file.type.split('/')[1].replace('jpeg', 'jpg');
-  const storagePath = `${access.delegate.client_id}/${teamId}/${playerId}/fine-proof-${matchEventId}-${randomUUID()}.${extension}`;
+  const storagePath = `${access.delegate.client_id}/${teamId}/team-fine-proof-${matchEventId}-${randomUUID()}.${extension}`;
   const { error: uploadError } = await supabase.storage.from('player-documents').upload(storagePath, file, { contentType: file.type, upsert: false });
   if (uploadError) return { success: false, error: 'No se pudo almacenar el comprobante privado.' };
   const { error } = await supabase.from('fine_payment_proofs').insert({ player_id: playerId, team_id: teamId, match_event_id: matchEventId, storage_path: storagePath, original_filename: file.name.slice(0, 180), mime_type: file.type, file_size: file.size, status: 'PENDING', submitted_by_delegate_id: access.delegate.id });
@@ -398,7 +398,7 @@ export async function uploadPlayerFinePaymentProof(
     await supabase.storage.from('player-documents').remove([storagePath]);
     return { success: false, error: 'No se pudo registrar el comprobante. Verifica que la actualización esté disponible.' };
   }
-  await logAuditEvent({ action: 'delegate.fine_payment_proof.upload', actorType: 'delegate', actorId: access.delegate.id, clientId: access.delegate.client_id, targetType: 'player', targetId: playerId, metadata: { slug, teamId, matchEventId } });
+  await logAuditEvent({ action: 'delegate.fine_payment_proof.upload', actorType: 'delegate', actorId: access.delegate.id, clientId: access.delegate.client_id, targetType: 'team', targetId: teamId, metadata: { slug, teamId, matchEventId, consolidated: true } });
   return { success: true, data: undefined };
 }
 

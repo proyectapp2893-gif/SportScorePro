@@ -18,6 +18,8 @@ import { normalizeDoubleCautions } from '@/app/lib/discipline/double-caution';
 import FormationBoard from '@/app/components/FormationBoard';
 import { getFootball9Formation } from '@/app/lib/sports/formations';
 
+const DISCIPLINARY_PAYMENT_URL = 'https://eco.credibanco.com/payment/docsite/payform-1.html?token=g9f5bncp69drlh26jr28c0438u&ask=amount&def=%7B%22iva%22:%220.00%22%7D&ask=email&ask=%7B%22name%22:%22CODIGO_DEL_ALUMNO%22,%22placeholder%22:%22C%25C3%25B3digo%2520del%2520Alumno%22,%22label%22:%22C%25C3%2593DIGO%2520DEL%2520ALUMNO%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22NOMBRE_DEL_ALUMNO%22,%22placeholder%22:%22Ingrese%2520Nombre%2520del%2520Alumno%22,%22label%22:%22NOMBRE%2520DEL%2520ALUMNO%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22CONCEPTO%22,%22placeholder%22:%22Digite%2520Concepto%2520del%2520Pago%22,%22label%22:%22CONCEPTO%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22DOCUMENTO_DE_REFERENCIA%22,%22placeholder%22:%22Digite%2520Documento%2520de%2520Referencia%22,%22label%22:%22DOCUMENTO%2520DE%2520REFERENCIA%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22OBSERVACIONES%22,%22placeholder%22:%22Digite%2520Observaciones%22,%22label%22:%22OBSERVACIONES%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D';
+
 type DelegatePortalClientProps = {
   slug: string;
   initialData: any | null;
@@ -321,6 +323,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const [transferSourceTeamId, setTransferSourceTeamId] = useState('');
   const [editPlayerForm, setEditPlayerForm] = useState({ name: '', identityNumber: '', shirtNumber: '', birthDate: '', vinculo: '', relationshipDetail: '' });
   const failedAutoSyncRows = useRef(new Set<string>());
+  const bulkValidationTimer = useRef<number | null>(null);
 
   const selectedTeam = data?.teams?.find((team: any) => team.id === selectedTeamId) || data?.teams?.[0];
   const selectedCategory = selectedTeam?.categories;
@@ -412,6 +415,10 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     return () => window.clearTimeout(timeout);
   }, [bulkDraftKey, bulkRows, showBulkUpload]);
 
+  useEffect(() => () => {
+    if (bulkValidationTimer.current !== null) window.clearTimeout(bulkValidationTimer.current);
+  }, []);
+
   useEffect(() => {
     if (!fullSchedule.some((match: any) => match.status === 'LIVE')) return;
     const interval = window.setInterval(() => router.refresh(), 15000);
@@ -479,10 +486,20 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     return Object.values(byPlayer).sort((a: any, b: any) => b.total - a.total);
   }, [events]);
   const cardEvents = normalizeDoubleCautions(events.filter((event: any) => event.event_type === 'YELLOW' || event.event_type === 'RED'));
+  const historyEvents = selectedHistoryMatch
+    ? (eventsByMatch[selectedHistoryMatch.id] || []).filter((event: any) => ['GOAL', 'YELLOW', 'RED'].includes(event.event_type))
+    : [];
+  const historyDoubleRedIds = new Set(
+    normalizeDoubleCautions(historyEvents)
+      .filter((event: any) => event.isDoubleCaution)
+      .map((event: any) => event.id),
+  );
+  const teamDebtEvents = cardEvents.filter((event: any) => event.fine_status !== 'PAID');
+  const teamDebtTotal = teamDebtEvents.reduce((sum: number, event: any) => sum + eventFineAmount(event), 0);
   const statDetailEvents = selectedStatDetail === 'GOALS'
     ? events.filter((event: any) => ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3'].includes(event.event_type))
     : selectedStatDetail === 'DEBT'
-      ? cardEvents.filter((event: any) => event.fine_status !== 'PAID')
+      ? (teamDebtEvents.length ? [{ ...teamDebtEvents[0], teamDebtEvents, teamDebtTotal }] : [])
       : cardEvents.filter((event: any) => event.event_type === selectedStatDetail);
   const statDetailTitle = selectedStatDetail === 'GOALS' ? 'Goles y anotadores' : selectedStatDetail === 'YELLOW' ? 'Tarjetas amarillas' : selectedStatDetail === 'RED' ? 'Tarjetas rojas' : 'Multas pendientes';
   const eventOpponent = (event: any) => {
@@ -569,6 +586,12 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       error: undefined,
     }));
     const meaningfulRows = normalized.filter((row) => row.name || row.identityNumber || row.shirtNumber || row.birthDate || row.vinculo || row.relationshipDetail);
+    const shirtNumberCounts = new Map<number, number>();
+    const identityCounts = new Map<string, number>();
+    meaningfulRows.forEach((row) => {
+      if (row.shirtNumber) shirtNumberCounts.set(row.shirtNumber, (shirtNumberCounts.get(row.shirtNumber) || 0) + 1);
+      if (row.identityNumber) identityCounts.set(row.identityNumber, (identityCounts.get(row.identityNumber) || 0) + 1);
+    });
 
     return normalized.map((row) => {
       if (!row.name && !row.identityNumber && !row.shirtNumber && !row.birthDate && !row.vinculo && !row.relationshipDetail) return row;
@@ -582,8 +605,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       if (row.vinculo === 'PADRE DE FAMILIA' && row.relationshipDetail.length < 5) errors.push('Falta estudiante');
       if (!row.faceFile) errors.push('Falta foto');
       if (!row.identityFile) errors.push('Falta documento');
-      if (row.shirtNumber && meaningfulRows.filter((item) => item.shirtNumber === row.shirtNumber).length > 1) errors.push('Dorsal repetido');
-      if (row.identityNumber && meaningfulRows.filter((item) => item.identityNumber === row.identityNumber).length > 1) errors.push('Identidad repetida');
+      if (row.shirtNumber && (shirtNumberCounts.get(row.shirtNumber) || 0) > 1) errors.push('Dorsal repetido');
+      if (row.identityNumber && (identityCounts.get(row.identityNumber) || 0) > 1) errors.push('Identidad repetida');
       return { ...row, error: errors.join(' · ') || undefined };
     });
   };
@@ -667,8 +690,17 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       [field]: field === 'shirtNumber' || field === 'birthYear' ? (normalizedValue ? Number(normalizedValue) : null) : normalizedValue,
       ...(field === 'birthDate' ? { birthYear: normalizedValue.match(/^\d{4}-\d{2}-\d{2}$/) ? Number(normalizedValue.slice(0, 4)) : null } : {}),
       ...(field === 'vinculo' ? { relationshipDetail: '' } : {}),
+      // Prevent the auto-sync effect from treating a partially typed row as ready.
+      error: 'Validando…',
     } : row);
-    setBulkRows(validateBulkRows(rows));
+    // Full-form validation performs duplicate checks across every row. Debounce it
+    // so typing remains responsive even for large rosters.
+    setBulkRows(rows);
+    if (bulkValidationTimer.current !== null) window.clearTimeout(bulkValidationTimer.current);
+    bulkValidationTimer.current = window.setTimeout(() => {
+      setBulkRows((currentRows) => validateBulkRows(currentRows));
+      bulkValidationTimer.current = null;
+    }, 180);
   };
 
   const updateBulkFile = async (index: number, field: 'faceFile' | 'identityFile', file?: File) => {
@@ -1140,7 +1172,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     );
 
     return (
-    <div key={match.id} className="border border-slate-100 rounded-xl p-3 bg-white">
+    <div key={match.id} role="button" tabIndex={0} onClick={() => setSelectedHistoryMatch(match)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') setSelectedHistoryMatch(match); }} className="cursor-pointer border border-slate-100 rounded-xl p-3 bg-white transition hover:border-blue-200 hover:shadow-sm">
       <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1 mb-2">
         <CalendarDays size={12} /> {match.matchdays?.scheduled_date || 'Sin fecha'} / {match.scheduled_time?.slice(0, 5) || '--:--'}
       </p>
@@ -1158,7 +1190,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
         </div>
       </div>
       <p className={`text-[9px] font-black uppercase mt-2 ${match.status === 'LIVE' ? 'text-red-500' : 'text-slate-400'}`}>{matchStatusLabel(match.status)}</p>
-      {match.status === 'SCHEDULED' && selectedTeam && <button type="button" onClick={() => openLineupEditor(match)} className="mt-3 w-full rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-[10px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100">{(eventsByMatch[match.id] || []).some((event: any) => event.event_type === 'STARTING_LINEUP' && event.team_id === selectedTeam.id) ? 'Editar alineación' : 'Organizar alineación'}</button>}
+      {match.status === 'SCHEDULED' && selectedTeam && <button type="button" onClick={(event) => { event.stopPropagation(); openLineupEditor(match); }} className="mt-3 w-full rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-[10px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100">{(eventsByMatch[match.id] || []).some((event: any) => event.event_type === 'STARTING_LINEUP' && event.team_id === selectedTeam.id) ? 'Editar alineación' : 'Organizar alineación'}</button>}
     </div>
     );
   };
@@ -1388,8 +1420,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                           <label className="col-span-2 flex cursor-pointer items-center gap-3 rounded-xl border border-cyan-200 bg-white p-3 text-[10px] font-black uppercase tracking-wider text-cyan-700"><span className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-full bg-cyan-50">{row.facePreview ? <img src={row.facePreview} alt="Rostro" className="h-full w-full object-cover" /> : <Camera size={20} />}</span>{row.faceFile ? 'Cambiar foto del rostro' : 'Agregar foto del rostro'}<input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(event) => updateBulkFile(index, 'faceFile', event.target.files?.[0])} /></label>
                           <label className="col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Número de identidad<input type="text" inputMode="numeric" pattern="[0-9]*" value={row.identityNumber} onChange={(event) => updateBulkRow(index, 'identityNumber', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-900 outline-none focus:border-blue-500" /></label>
                           <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Dorsal<input type="number" inputMode="numeric" min="1" max="999" value={row.shirtNumber ?? ''} onChange={(event) => updateBulkRow(index, 'shirtNumber', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-bold text-slate-900 outline-none focus:border-blue-500" /></label>
+                          <label className="col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Vínculo con la institución<select aria-label="Vínculo con la institución" value={row.vinculo} onChange={(event) => updateBulkRow(index, 'vinculo', event.target.value)} className="mt-1.5 w-full rounded-xl border border-blue-200 bg-white px-3 py-3 font-black uppercase text-slate-900 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"><option value="">Seleccionar vínculo</option>{ALLOWED_RELATIONSHIPS.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}</select></label>
                           <label className="col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Fecha de nacimiento · año, mes y día<div className="mt-1.5"><BirthDateCards value={row.birthDate} onChange={(value) => updateBulkRow(index, 'birthDate', value)} /></div></label>
-                          <label className="col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">Vínculo<select value={row.vinculo} onChange={(event) => updateBulkRow(index, 'vinculo', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-bold uppercase text-slate-900 outline-none focus:border-blue-500"><option value="">Seleccionar</option>{ALLOWED_RELATIONSHIPS.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}</select></label>
                           {row.vinculo !== 'COLABORADOR' && row.vinculo && <label className="col-span-2 text-[10px] font-black uppercase tracking-wider text-slate-500">{row.vinculo === 'EX-ALUMNO' ? 'Año de la promoción' : 'Nombre completo del estudiante'}<input type={row.vinculo === 'EX-ALUMNO' ? 'number' : 'text'} inputMode={row.vinculo === 'EX-ALUMNO' ? 'numeric' : undefined} value={row.relationshipDetail} onChange={(event) => updateBulkRow(index, 'relationshipDetail', event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-bold uppercase text-slate-900 outline-none focus:border-blue-500" /></label>}
                           <label className={`col-span-2 flex cursor-pointer items-center justify-center gap-2 rounded-xl border px-3 py-3 text-[10px] font-black uppercase tracking-wider ${row.identityFile ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-indigo-200 bg-white text-indigo-700'}`}><FileCheck2 size={16} /> {row.identityFile ? row.identityFile.name : 'Agregar documento de identidad'}<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" onChange={(event) => updateBulkFile(index, 'identityFile', event.target.files?.[0])} /></label>
                         </div>
@@ -1506,11 +1538,11 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 <div className="pointer-events-none absolute left-1/2 top-1/2 h-28 w-28 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/25" />
 
                 <div className="relative max-h-[54vh] overflow-y-auto p-4 sm:p-5">
-                  {(eventsByMatch[selectedHistoryMatch.id] || []).length === 0 ? (
+                  {historyEvents.length === 0 ? (
                     <p className="relative text-center text-white text-xs font-black uppercase tracking-widest py-10">No hay goles ni tarjetas registradas</p>
                   ) : (
                     <div className="relative space-y-4">
-                      {(eventsByMatch[selectedHistoryMatch.id] || []).map((event: any) => {
+                      {historyEvents.filter((event: any, index: number, list: any[]) => list.findIndex((item) => item.id === event.id) === index).map((event: any) => {
                       const isHomeEvent = event.team_id === selectedHistoryMatch.home_team_id;
                       const isAwayEvent = event.team_id === selectedHistoryMatch.away_team_id;
                       const eventCard = (
@@ -1519,7 +1551,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                             <div className={`flex items-center gap-3 min-w-0 ${isHomeEvent ? 'flex-row-reverse' : ''}`}>
                               <TeamLogo team={event.teams} className="w-9 h-9" />
                               <div className="min-w-0">
-                                <p className="font-black uppercase text-xs sm:text-sm">{eventLabel(event.event_type)}</p>
+                                <p className="font-black uppercase text-xs sm:text-sm">{event.event_type === 'RED' && historyDoubleRedIds.has(event.id) ? 'Roja por doble amonestación' : eventLabel(event.event_type)}</p>
                                 <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest opacity-70 truncate">{event.teams?.name || 'Equipo'}</p>
                               </div>
                             </div>
@@ -1532,6 +1564,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                               #{event.players?.shirt_number || '-'} {event.players.name}
                             </p>
                           )}
+                          {event.disciplinary_comment && <p className={`mt-2 text-[10px] font-semibold text-slate-600 ${isHomeEvent ? 'text-right' : ''}`}>Motivo: {event.disciplinary_comment}</p>}
+                          {event.suspension_matches && <p className={`mt-1 text-[10px] font-black uppercase text-red-700 ${isHomeEvent ? 'text-right' : ''}`}>Suspensión: {event.suspension_matches} {event.suspension_matches === 1 ? 'jornada' : 'jornadas'}</p>}
                         </div>
                       );
 
@@ -1563,8 +1597,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               <div className="max-h-[65vh] divide-y divide-slate-100 overflow-y-auto p-5">
                 {statDetailEvents.map((event: any) => (
                   <button type="button" key={event.id} onClick={() => event.player_id && setSelectedFineEvent(event)} className="flex w-full items-center justify-between gap-4 py-3 text-left transition-colors hover:bg-slate-50">
-                    <div className="min-w-0"><p className="truncate text-xs font-black uppercase">#{event.players?.shirt_number || '-'} {event.players?.name || 'Jugador sin asignar'}</p><p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">{eventLabel(event.event_type)} · vs. {eventOpponent(event)}{event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · {event.period || 'Periodo sin registrar'}{event.minute_record ? ` · ${event.minute_record}'` : ''}</p></div>
-                    {selectedStatDetail === 'DEBT' && <span className="shrink-0 text-sm font-black text-violet-700">{formatCopAmount(eventFineAmount(event))}</span>}
+                    <div className="min-w-0"><p className="truncate text-xs font-black uppercase">{selectedStatDetail === 'DEBT' ? selectedTeam?.name : `#${event.players?.shirt_number || '-'} ${event.players?.name || 'Jugador sin asignar'}`}</p><p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">{selectedStatDetail === 'DEBT' ? `${event.teamDebtEvents.length} sanciones pendientes · comprobante y pago único del equipo` : `${eventLabel(event.event_type)} · vs. ${eventOpponent(event)}${event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · ${event.period || 'Periodo sin registrar'}${event.minute_record ? ` · ${event.minute_record}'` : ''}`}</p></div>
+                    {selectedStatDetail === 'DEBT' && <span className="shrink-0 text-sm font-black text-violet-700">{formatCopAmount(event.teamDebtTotal)}</span>}
                   </button>
                 ))}
                 {statDetailEvents.length === 0 && <p className="py-10 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">No hay registros para mostrar</p>}
@@ -1581,8 +1615,10 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 <button type="button" onClick={() => setSelectedFineEvent(null)} className="rounded-xl bg-white/10 p-2.5 text-white" aria-label="Cerrar perfil"><X size={18} /></button>
               </header>
               <div className="space-y-4 p-6">
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4"><p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Multa asociada</p><p className="mt-1 text-2xl font-black text-slate-900">{formatCopAmount(eventFineAmount(selectedFineEvent))}</p><p className="mt-1 text-xs font-bold uppercase text-amber-800">{selectedFineEvent.fine_status === 'PAID' ? 'Pagada · pendiente de sincronización visual' : 'Pendiente de validación administrativa'}</p></div>
-                {selectedFineEvent.fine_status !== 'PAID' && <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-center text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-blue-200 hover:bg-blue-700"> <Upload size={16} /> Subir comprobante<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" disabled={loading} onChange={(event) => handleFineProofUpload(event.target.files?.[0])} /></label>}
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4"><p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Saldo disciplinario del equipo</p><p className="mt-1 text-2xl font-black text-slate-900">{formatCopAmount(selectedFineEvent.teamDebtTotal || eventFineAmount(selectedFineEvent))}</p><p className="mt-1 text-xs font-bold uppercase text-amber-800">Pago único · {selectedFineEvent.teamDebtEvents?.length || 1} sanciones pendientes</p></div>
+                {selectedFineEvent.disciplinary_comment && <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Comentario del Tribunal</p><p className="mt-1 text-sm font-semibold text-slate-700">{selectedFineEvent.disciplinary_comment}</p></div>}
+                {selectedFineEvent.suspension_matches && <div className="rounded-2xl border border-red-200 bg-red-50 p-4"><p className="text-[10px] font-black uppercase tracking-widest text-red-600">Suspensión aplicada</p><p className="mt-1 text-sm font-black uppercase text-red-700">{selectedFineEvent.suspension_matches} {selectedFineEvent.suspension_matches === 1 ? 'jornada' : 'jornadas'}</p></div>}
+                {selectedFineEvent.fine_status !== 'PAID' && <><a href={DISCIPLINARY_PAYMENT_URL} target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-xs font-black uppercase tracking-widest text-emerald-700 hover:bg-emerald-100"><ExternalLink size={16} /> Link de pago</a><label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-center text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-blue-200 hover:bg-blue-700"> <Upload size={16} /> Subir comprobante<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" disabled={loading} onChange={(event) => handleFineProofUpload(event.target.files?.[0])} /></label></>}
                 <p className="text-center text-[10px] font-bold uppercase tracking-wider text-slate-400">El comprobante será revisado por la administración. La habilitación solo ocurre después de su aprobación.</p>
               </div>
             </section>
@@ -1694,7 +1730,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               <div className="delegate-module delegate-module-amber rounded-[2rem] border border-amber-100 bg-amber-50/45 p-5">
                 <h2 className="text-lg font-black uppercase">Tarjetas y sanciones</h2>
                 <div className="mt-4 divide-y divide-slate-100">
-                  {cardEvents.map((event: any) => <button type="button" key={event.id} onClick={() => setSelectedFineEvent(event)} className="flex w-full items-center justify-between gap-3 py-3 text-left transition-colors hover:bg-amber-50"><div className="flex min-w-0 items-center gap-3"><Square size={18} className={event.event_type === 'RED' ? 'fill-red-600 text-red-600' : 'fill-yellow-400 text-yellow-400'} /><div className="min-w-0"><p className="truncate text-xs font-black uppercase">{event.players?.name || 'Jugador sin asignar'}</p><p className="text-[9px] font-bold uppercase text-slate-400">{eventLabel(event.event_type)} · vs. {eventOpponent(event)}{event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · {event.fine_status === 'PAID' ? 'Pagada' : 'Pendiente'}</p></div></div><span className="shrink-0 text-xs font-black">{formatCopAmount(eventFineAmount(event))}</span></button>)}
+                  {cardEvents.map((event: any) => <button type="button" key={event.id} onClick={() => setSelectedFineEvent(event)} className="flex w-full items-center justify-between gap-3 py-3 text-left transition-colors hover:bg-amber-50"><div className="flex min-w-0 items-center gap-3"><Square size={18} className={event.event_type === 'RED' ? 'fill-red-600 text-red-600' : 'fill-yellow-400 text-yellow-400'} /><div className="min-w-0"><p className="truncate text-xs font-black uppercase">{event.players?.name || 'Jugador sin asignar'}</p><p className="text-[9px] font-bold uppercase text-slate-400">{eventLabel(event.event_type)} · vs. {eventOpponent(event)}{event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · {event.fine_status === 'PAID' ? 'Pagada' : 'Pendiente'}</p>{event.disciplinary_comment && <p className="mt-1 truncate text-[9px] font-semibold text-slate-500">Motivo: {event.disciplinary_comment}</p>}{event.suspension_matches && <p className="text-[9px] font-black uppercase text-red-600">Suspensión: {event.suspension_matches} {event.suspension_matches === 1 ? 'jornada' : 'jornadas'}</p>}</div></div><span className="shrink-0 text-xs font-black">{formatCopAmount(eventFineAmount(event))}</span></button>)}
                   {cardEvents.length === 0 && <p className="py-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Sin tarjetas ni sanciones</p>}
                 </div>
               </div>
@@ -1911,7 +1947,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               <header className="flex items-start justify-between bg-slate-950 p-5 text-white"><div><p className="text-[9px] font-black uppercase tracking-[0.25em] text-blue-300">Partido del día</p><h2 id="lineup-title" className="text-xl font-black uppercase">Organizar alineación</h2><p className="mt-1 text-xs font-bold text-slate-300">{lineupMatch.home_team?.name} vs {lineupMatch.away_team?.name}</p></div><button type="button" onClick={() => setLineupMatch(null)} className="rounded-xl bg-white/10 p-2" aria-label="Cerrar"><X size={18}/></button></header>
               <div className="overflow-y-auto p-5 space-y-4">
                 {isFootball9Category && <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-blue-100 bg-blue-50/70 p-3"><div><p className="text-[10px] font-black uppercase tracking-widest text-slate-700">Plantilla del equipo</p><p className="mt-1 text-[10px] font-bold text-slate-500">Puedes iniciar una nueva o reutilizar la guardada.</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={startNewLineup} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-[9px] font-black uppercase tracking-wider text-slate-600">Nueva</button>{savedDefaultLineup && <button type="button" onClick={useSavedDefaultLineup} className="rounded-xl border border-blue-200 bg-white px-3 py-2 text-[9px] font-black uppercase tracking-wider text-blue-700">Usar guardada</button>}<button type="button" onClick={saveCurrentAsDefaultLineup} className="rounded-xl bg-blue-600 px-3 py-2 text-[9px] font-black uppercase tracking-wider text-white">Guardar predeterminada</button></div></div>}
-                {isFootball9Category && <div className="grid gap-4 md:grid-cols-[minmax(0,260px)_1fr] rounded-2xl border border-emerald-100 bg-emerald-50/40 p-3"><div><label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Formación Fútbol 9<select value={lineupFormation} onChange={(event) => changeLineupFormation(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs font-black text-slate-800">{['3-3-2', '3-2-3', '2-3-3', '2-4-2', '4-3-1', '3-4-1'].map((code) => <option key={code} value={code}>{code}{code === '3-3-2' ? ' · Recomendada' : ''}</option>)}</select></label><p className="mt-2 text-[9px] font-bold uppercase tracking-wider text-slate-500">{getFootball9Formation(lineupFormation).name} · 1 portero + 8 jugadores de campo</p></div><FormationBoard positions={getFootball9Formation(lineupFormation).players} assignments={lineupAssignments} players={players} blockedPlayerIds={players.filter((player: any) => events.some((event: any) => event.player_id === player.id && (event.event_type === 'RED' || (event.event_type === 'YELLOW' && event.fine_status !== 'PAID') || event.fine_status === 'UNPAID'))).map((player: any) => player.id)} onAssign={assignLineupPlayer} /></div>}
+                {isFootball9Category && <div className="grid gap-4 md:grid-cols-[minmax(0,260px)_1fr] rounded-2xl border border-emerald-100 bg-emerald-50/40 p-3"><div><label data-formation-selector="true" className="text-[10px] font-black uppercase tracking-widest text-slate-500">Formación Fútbol 9<select value={lineupFormation} onChange={(event) => changeLineupFormation(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs font-black text-slate-800">{['3-3-2', '3-2-3', '2-3-3', '2-4-2', '4-3-1', '3-4-1'].map((code) => <option key={code} value={code}>{code}{code === '3-3-2' ? ' · Recomendada' : ''}</option>)}</select></label><p className="mt-2 text-[9px] font-bold uppercase tracking-wider text-slate-500">{getFootball9Formation(lineupFormation).name} · 1 portero + 8 jugadores de campo</p></div><FormationBoard positions={getFootball9Formation(lineupFormation).players} assignments={lineupAssignments} players={players} blockedPlayerIds={players.filter((player: any) => events.some((event: any) => event.player_id === player.id && (event.event_type === 'RED' || (event.event_type === 'YELLOW' && event.fine_status !== 'PAID') || event.fine_status === 'UNPAID'))).map((player: any) => player.id)} onAssign={assignLineupPlayer} /></div>}
                 <div><p className="mb-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Titulares de {selectedTeam.name} · seleccionados {lineupSelection.length}{isFootball9Category ? ' / 9' : ''}</p><div className="grid gap-2 sm:grid-cols-2">{players.map((player: any) => { const blocked = events.some((event: any) => { if (event.player_id !== player.id) return false; if (event.event_type === 'RED') return true; if (event.event_type === 'YELLOW') return event.fine_status !== 'PAID'; return event.fine_status === 'UNPAID'; }); const selected = lineupSelection.includes(player.id); const atFormationLimit = isFootball9Category && lineupSelection.length >= 9 && !selected; return <button type="button" key={player.id} disabled={blocked || atFormationLimit} onClick={() => setLineupSelection((current) => selected ? current.filter((id) => id !== player.id) : [...current, player.id])} className={`flex items-center gap-3 rounded-xl border p-3 text-left ${selected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-white text-slate-700'} ${blocked || atFormationLimit ? 'cursor-not-allowed bg-slate-100 opacity-50' : ''}`}><span className="w-8 text-center text-lg font-black">#{player.shirt_number || '-'}</span><span className="truncate text-xs font-black uppercase">{player.name}</span>{blocked ? <span className="ml-auto text-[9px] font-black uppercase text-red-600">Bloqueado</span> : atFormationLimit ? <span className="ml-auto text-[9px] font-black uppercase text-slate-400">Máximo 9</span> : selected && <CheckCircle2 size={16} className="ml-auto"/>}</button>; })}</div></div>
               </div>
               <footer className="flex gap-3 border-t border-slate-100 p-5"><button type="button" onClick={() => setLineupMatch(null)} className="flex-1 rounded-xl bg-slate-100 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-600">Cancelar</button><button type="button" disabled={loading} onClick={handleSaveLineup} className="flex-1 rounded-xl bg-blue-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white disabled:opacity-50">Enviar a Mesa</button></footer>

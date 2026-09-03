@@ -186,7 +186,7 @@ label[for] {
   ) {
     touch-action: manipulation;
     -webkit-tap-highlight-color: rgba(37, 99, 235, 0.2);
-    transition-property: scale, filter, opacity, box-shadow;
+    transition-property: transform, scale, filter, opacity, box-shadow;
     transition-duration: 90ms;
     transition-timing-function: ease-out;
     user-select: none;
@@ -246,6 +246,23 @@ label[for] {
     transform: scale(0.975);
     filter: brightness(0.94) saturate(1.06);
   }
+}
+
+/* Refuerzo de feedback al tocar: algunos componentes usan transition-all y
+   pueden sobrescribir la propiedad scale. transform mantiene la sensación
+   de presión en todo el portal. */
+:where(
+  button,
+  [role="button"],
+  input[type="button"],
+  input[type="submit"],
+  input[type="reset"],
+  a[href][class],
+  label:has(input[type="file"]),
+  summary
+):active:not(:disabled):not([aria-disabled="true"]) {
+  transform: scale(0.975);
+  filter: brightness(0.93) saturate(1.06);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -364,13 +381,14 @@ label[for] {
   height: 4.5rem;
 }
 
-/* El selector visual de formación vive en la cancha; el select se conserva
-   para mantener el flujo React y accesibilidad del formulario. */
-[role="dialog"] label:has(> select) {
+/* El selector visual de formación vive en la cancha; únicamente se oculta
+   su control auxiliar. No ocultar otros selects del formulario (por ejemplo,
+   el vínculo con la institución en inscripción de delegados). */
+[data-formation-selector] {
   display: none;
 }
 
-[role="dialog"] label > select {
+[data-formation-selector] > select {
   display: none;
 }
 
