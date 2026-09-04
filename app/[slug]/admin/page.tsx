@@ -350,6 +350,8 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
       { name: 'Central de Inscripción', description: 'Atletas y documentación.', icon: Users, tone: 'blue', action: () => goToCategoryModule('inscripcion') },
       { name: 'Portal de Delegados', description: 'Accesos y cierres de inscripción.', icon: UserCog, tone: 'cyan', action: () => goToTournamentModule('delegados') },
       { name: 'Fixture y Resultados', description: 'Calendarios, fases y jornadas.', icon: CalendarDays, tone: 'emerald', action: () => goToCategoryModule('grupos') },
+      { name: 'Estatutos del Torneo', description: 'PDF oficial para los delegados.', icon: FileText, tone: 'indigo', action: () => isDemo ? toast('Disponible para torneos reales.') : goToTournamentModule('estatutos') },
+      { name: 'Boletines del Torneo', description: 'Publicación e historial oficial.', icon: ClipboardList, tone: 'violet', action: () => isDemo ? toast('Disponible para torneos reales.') : goToTournamentModule('boletines') },
     ] },
     { title: 'Competencia', subtitle: 'Operación de los partidos', modules: [
       { name: 'Game Day', description: 'Jornada operativa en una sola pantalla.', icon: Activity, tone: 'blue', action: () => goToTournamentModule('game-day') },

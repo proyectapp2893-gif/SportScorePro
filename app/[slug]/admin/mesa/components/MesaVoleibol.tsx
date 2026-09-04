@@ -177,6 +177,7 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
            slug,
            matchId: match.id,
            teamId: team === 'HOME' ? match.home_team.id : match.away_team.id,
+           eventId: lastGoal.id,
            period: currentPeriod,
            updateMatchScore: false,
          });

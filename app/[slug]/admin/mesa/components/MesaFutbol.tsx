@@ -275,7 +275,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
         // while the operator is correcting it during 2T or after the period
         // changed. Passing null searches the whole match and avoids the false
         // "no hay puntos recientes" result.
-        : await revertLastScoringEvent({ slug, matchId: match.id, teamId, period: null, updateMatchScore: !scoreWasAlreadyAdjusted });
+        : await revertLastScoringEvent({ slug, matchId: match.id, teamId, eventId: latestGoal.id, period: null, updateMatchScore: !scoreWasAlreadyAdjusted });
       if (!result?.success) throw new Error(result?.error || 'No fue posible revertir el gol.');
       if (typeof result.home_score === 'number') setHomeScore(result.home_score);
       if (typeof result.away_score === 'number') setAwayScore(result.away_score);

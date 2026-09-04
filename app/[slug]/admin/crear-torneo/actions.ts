@@ -255,6 +255,12 @@ export async function deleteTournament(slug: string, tournamentId: string) {
 
   if (tournamentError || !tournament) return { success: false, error: 'El torneo no existe o no pertenece a este cliente.' };
 
+  const { data: statutes } = await supabase
+    .from('tournament_statutes')
+    .select('storage_path')
+    .eq('tournament_id', tournamentId)
+    .maybeSingle();
+
   const { data: tournamentTeams, error: teamsError } = await supabase
     .from('teams')
     .select('id, categories!inner(tournament_id)')
@@ -286,6 +292,7 @@ export async function deleteTournament(slug: string, tournamentId: string) {
   if (error) return { success: false, error: 'Error. Verifica si hay datos asociados.' };
 
   if (playerDocumentPaths.length > 0) await supabase.storage.from('player-documents').remove(playerDocumentPaths);
+  if (statutes?.storage_path) await supabase.storage.from('tournament-statutes').remove([statutes.storage_path]);
 
   let deletedDelegates = 0;
   for (const delegateId of delegateIds) {

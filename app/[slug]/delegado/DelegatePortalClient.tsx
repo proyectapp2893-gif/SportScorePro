@@ -16,6 +16,7 @@ import { normalizePlayerBirthDate } from '@/app/lib/players/date';
 import { formatCopAmount } from '@/app/lib/formatters';
 import { normalizeDoubleCautions } from '@/app/lib/discipline/double-caution';
 import FormationBoard from '@/app/components/FormationBoard';
+import DelegateBulletinsCard from './DelegateBulletinsCard';
 import { getFootball9Formation } from '@/app/lib/sports/formations';
 
 const DISCIPLINARY_PAYMENT_URL = 'https://eco.credibanco.com/payment/docsite/payform-1.html?token=g9f5bncp69drlh26jr28c0438u&ask=amount&def=%7B%22iva%22:%220.00%22%7D&ask=email&ask=%7B%22name%22:%22CODIGO_DEL_ALUMNO%22,%22placeholder%22:%22C%25C3%25B3digo%2520del%2520Alumno%22,%22label%22:%22C%25C3%2593DIGO%2520DEL%2520ALUMNO%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22NOMBRE_DEL_ALUMNO%22,%22placeholder%22:%22Ingrese%2520Nombre%2520del%2520Alumno%22,%22label%22:%22NOMBRE%2520DEL%2520ALUMNO%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22CONCEPTO%22,%22placeholder%22:%22Digite%2520Concepto%2520del%2520Pago%22,%22label%22:%22CONCEPTO%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22DOCUMENTO_DE_REFERENCIA%22,%22placeholder%22:%22Digite%2520Documento%2520de%2520Referencia%22,%22label%22:%22DOCUMENTO%2520DE%2520REFERENCIA%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22OBSERVACIONES%22,%22placeholder%22:%22Digite%2520Observaciones%22,%22label%22:%22OBSERVACIONES%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D';
@@ -327,6 +328,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
 
   const selectedTeam = data?.teams?.find((team: any) => team.id === selectedTeamId) || data?.teams?.[0];
   const selectedCategory = selectedTeam?.categories;
+  const tournamentStatutes = data?.statutesByTournament?.[selectedCategory?.tournaments?.id];
+  const tournamentBulletins = data?.bulletinsByTournament?.[selectedCategory?.tournaments?.id] || [];
   const categoryDescriptor = `${selectedCategory?.name || ''} ${selectedCategory?.sports?.name || ''} ${selectedCategory?.format || ''} ${selectedCategory?.modality || ''} ${selectedCategory?.players_per_side || ''}`.toUpperCase();
   const isFootball9Category = selectedCategory?.tournaments?.sport_modality === 'SOCCER_9' || /F(?:Ú|U)TBOL\s*9|FOOTBALL\s*9|\b9\s*(?:JUGADORES|PLAYERS)\b/.test(categoryDescriptor) || Number(selectedCategory?.players_per_side) === 9;
   const teamTournamentCount = new Set((data?.teams || []).map((team: any) => team.categories?.tournaments?.id || team.categories?.tournaments?.name).filter(Boolean)).size;
@@ -1297,6 +1300,17 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       </header>
 
       <div className="delegate-portal-content relative z-10 mx-auto max-w-6xl space-y-6 px-4 py-8">
+        {(tournamentBulletins.length > 0 || tournamentStatutes) && <div className="grid items-start gap-5 lg:grid-cols-2">
+        {tournamentBulletins.length > 0 && <DelegateBulletinsCard bulletins={tournamentBulletins} />}
+        {tournamentStatutes && <section className="flex min-h-52 flex-col gap-4 rounded-3xl border border-blue-200 bg-gradient-to-br from-blue-50 to-white p-5 shadow-sm sm:p-6">
+          <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-200"><FileCheck2 size={26} /></span>
+          <div className="min-w-0 flex-1"><p className="text-[9px] font-black uppercase tracking-[.22em] text-blue-600">Documento oficial</p><h2 className="mt-1 text-lg font-black uppercase tracking-tight text-slate-900">Estatutos del torneo</h2><p className="mt-1 truncate text-xs font-semibold text-slate-500">{tournamentStatutes.original_filename}</p></div>
+          <div className="mt-auto flex flex-col gap-2 sm:flex-row">
+            <a href={tournamentStatutes.viewUrl} target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-white px-5 py-3 text-xs font-black uppercase tracking-widest text-blue-700 hover:border-blue-300 hover:bg-blue-50"><Eye size={16} /> Ver PDF</a>
+            <a href={tournamentStatutes.downloadUrl} className="flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-5 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-blue-700" download><Download size={16} /> Descargar PDF</a>
+          </div>
+        </section>}
+        </div>}
         {showTransferModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
             <section role="dialog" aria-modal="true" aria-labelledby="transfer-title" className="w-full max-w-lg rounded-[2rem] bg-white p-6 text-slate-900 shadow-2xl sm:p-8">

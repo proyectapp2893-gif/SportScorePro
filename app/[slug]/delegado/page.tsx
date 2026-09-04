@@ -4,6 +4,7 @@ import DelegatePortalClient from './DelegatePortalClient';
 import { inferMissingTeamByes } from '@/app/lib/tournaments/byes';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
 import DemoDelegatePortal from './DemoDelegatePortal';
+import { buildBulletinSnapshot, hydrateDynamicBulletinFields } from '@/app/lib/tournaments/bulletin';
 
 async function loadTeamAccess(supabase: ReturnType<typeof createServerSupabaseAdminClient>, delegateId: string) {
   const fullQuery = await supabase
@@ -15,7 +16,7 @@ async function loadTeamAccess(supabase: ReturnType<typeof createServerSupabaseAd
         categories(
           id, name, gender, registration_open, registration_deadline, min_roster_size, max_roster_size, roster_locked_message,
           sports(name),
-          tournaments(name, fair_play_enabled, fine_yellow_amount, fine_red_amount, fp_yellow_deduction, fp_red_deduction, schedule_dates, fixture_visible_to_delegates, sport_modality)
+          tournaments(id, name, fair_play_enabled, fine_yellow_amount, fine_red_amount, fp_yellow_deduction, fp_red_deduction, schedule_dates, fixture_visible_to_delegates, sport_modality)
         )
       )
     `)
@@ -32,7 +33,7 @@ async function loadTeamAccess(supabase: ReturnType<typeof createServerSupabaseAd
         categories(
           id, name, gender,
           sports(name),
-          tournaments(name, fair_play_enabled, fine_yellow_amount, fine_red_amount, fp_yellow_deduction, fp_red_deduction, sport_modality)
+          tournaments(id, name, fair_play_enabled, fine_yellow_amount, fine_red_amount, fp_yellow_deduction, fp_red_deduction, sport_modality)
         )
       )
     `)
@@ -93,6 +94,33 @@ async function loadDelegatePortalData(slug: string) {
   const eventsByMatch: Record<string, any[]> = {};
   const schedulesByTeam: Record<string, any[]> = {};
   const staffByTeam: Record<string, any[]> = {};
+  const statutesByTournament: Record<string, any> = {};
+  const bulletinsByTournament: Record<string, any> = {};
+
+  const tournamentIds = Array.from(new Set(teams.map((team: any) => team.categories?.tournaments?.id).filter(Boolean))) as string[];
+  if (tournamentIds.length > 0) {
+    const { data: statutes } = await supabase.from('tournament_statutes').select('tournament_id, storage_path, original_filename, file_size, uploaded_at').in('tournament_id', tournamentIds);
+    await Promise.all((statutes || []).map(async (document: any) => {
+      const [viewSigned, downloadSigned] = await Promise.all([
+        supabase.storage.from('tournament-statutes').createSignedUrl(document.storage_path, 3600),
+        supabase.storage.from('tournament-statutes').createSignedUrl(document.storage_path, 3600, { download: document.original_filename }),
+      ]);
+      if (viewSigned.data?.signedUrl && downloadSigned.data?.signedUrl) {
+        statutesByTournament[document.tournament_id] = {
+          ...document,
+          viewUrl: viewSigned.data.signedUrl,
+          downloadUrl: downloadSigned.data.signedUrl,
+        };
+      }
+    }));
+    const { data: bulletins } = await supabase.from('tournament_bulletins').select('id,tournament_id,bulletin_number,confirmed_at,snapshot').in('tournament_id', tournamentIds).order('bulletin_number', { ascending: false });
+    const liveSnapshots = new Map(await Promise.all(tournamentIds.map(async (tournamentId) => [tournamentId, await buildBulletinSnapshot(supabase, tournamentId)] as const)));
+    tournamentIds.forEach((tournamentId) => {
+      const tournamentBulletins = (bulletins || []).filter((bulletin: any) => bulletin.tournament_id === tournamentId);
+      const currentNumber = Number(tournamentBulletins[0]?.bulletin_number || 0);
+      bulletinsByTournament[tournamentId] = tournamentBulletins.map((bulletin: any) => ({ ...bulletin, snapshot: hydrateDynamicBulletinFields(bulletin.snapshot, liveSnapshots.get(tournamentId) || { categories: [] }, currentNumber) }));
+    });
+  }
 
   if (teamIds.length > 0) {
     const playersQuery = await supabase
@@ -261,6 +289,8 @@ async function loadDelegatePortalData(slug: string) {
     matchesByTeam,
     eventsByMatch,
     schedulesByTeam,
+    statutesByTournament,
+    bulletinsByTournament,
     schemaReady: accessLoad.schemaReady,
   };
 }

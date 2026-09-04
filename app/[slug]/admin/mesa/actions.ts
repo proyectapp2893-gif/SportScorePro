@@ -88,6 +88,7 @@ type RevertScoringEventInput = {
   slug: string;
   matchId: string;
   teamId: string;
+  eventId: string;
   period?: string | null;
   updateMatchScore?: boolean;
 };
@@ -529,6 +530,27 @@ export async function revertLastScoringEvent(input: RevertScoringEventInput) {
   assertMatchTeam(input.teamId, match);
 
   const supabase = createPrivilegedSupabaseClient();
+  const { data: selectedEvent, error: selectedEventError } = await supabase
+    .from('match_events')
+    .select('id')
+    .eq('id', input.eventId)
+    .eq('match_id', input.matchId)
+    .eq('team_id', input.teamId)
+    .eq('event_type', 'GOAL')
+    .maybeSingle();
+  if (selectedEventError || !selectedEvent) throw new Error('El gol seleccionado ya no existe o no pertenece a este partido.');
+
+  const { data: latestEvent, error: latestEventError } = await supabase
+    .from('match_events')
+    .select('id')
+    .eq('match_id', input.matchId)
+    .eq('team_id', input.teamId)
+    .eq('event_type', 'GOAL')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestEventError || latestEvent?.id !== input.eventId) throw new Error('El gol seleccionado no es el evento más reciente del equipo. Actualiza Mesa e inténtalo de nuevo.');
+
   const { data, error } = await supabase.rpc('sportscore_revert_last_scoring_event', {
     p_match_id: input.matchId,
     p_team_id: input.teamId,
@@ -537,7 +559,12 @@ export async function revertLastScoringEvent(input: RevertScoringEventInput) {
   });
 
   if (error) throw new Error(error.message);
-  return data as { success?: boolean; error?: string; home_score?: number; away_score?: number };
+  const result = data as { success?: boolean; error?: string; home_score?: number; away_score?: number };
+  if (!result.success) return result;
+  const { data: persistedEvent, error: verificationError } = await supabase.from('match_events').select('id').eq('id', input.eventId).maybeSingle();
+  if (verificationError) throw new Error('No se pudo verificar la eliminación del gol.');
+  if (persistedEvent) throw new Error('El marcador cambió, pero el evento continuó en la base de datos. No se reportó la eliminación como exitosa.');
+  return { ...result, removedEventId: input.eventId };
 }
 
 /**

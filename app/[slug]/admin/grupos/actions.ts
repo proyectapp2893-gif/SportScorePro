@@ -527,7 +527,8 @@ export async function updateFixtureMatch(
       }).eq('id', match.away_team_id);
     }
 
-    await supabase.from('match_events').delete().eq('match_id', match.id);
+    const { error: resetEventsError } = await supabase.from('match_events').delete().eq('match_id', match.id);
+    if (resetEventsError) return { success: false, error: 'No se pudo restablecer el partido porque sus eventos no fueron eliminados.' };
     finalHomeScore = null;
     finalAwayScore = null;
   }

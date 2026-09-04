@@ -198,6 +198,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
            slug,
            matchId: match.id,
            teamId: team === 'HOME' ? match.home_team.id : match.away_team.id,
+           eventId: lastGoal.id,
            updateMatchScore: true,
          });
          const { data: eventsP } = await supabase.from('match_events').select('*').eq('match_id', match.id);
