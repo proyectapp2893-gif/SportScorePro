@@ -153,7 +153,7 @@ async function loadDelegatePortalData(slug: string) {
     const events = eventsQuery.error
       ? (await supabase
         .from('match_events')
-        .select('id, match_id, team_id, player_id, event_type, period, minute_record, players(name, shirt_number), teams(name, schools(name, logo_url)), matches(status, matchdays(round_number))')
+        .select('id, match_id, team_id, player_id, event_type, period, minute_record, fine_status, players(name, shirt_number), teams(name, schools(name, logo_url)), matches(status, matchdays(round_number))')
         .in('team_id', teamIds)).data
       : eventsQuery.data;
 
@@ -194,14 +194,14 @@ async function loadDelegatePortalData(slug: string) {
     if (matchIds.length > 0) {
       const matchEventsQuery = await supabase
         .from('match_events')
-        .select('id, match_id, team_id, player_id, event_type, period, minute_record, created_at, players(name, shirt_number), teams(name, schools(name, logo_url))')
+        .select('id, match_id, team_id, player_id, event_type, period, minute_record, created_at, fine_amount, fine_status, players(name, shirt_number), teams(name, schools(name, logo_url))')
         .in('match_id', matchIds)
         .in('event_type', ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3', 'YELLOW', 'RED'])
         .order('created_at', { ascending: true });
       const matchEvents = matchEventsQuery.error
         ? (await supabase
           .from('match_events')
-          .select('id, match_id, team_id, player_id, event_type, period, minute_record, created_at')
+          .select('id, match_id, team_id, player_id, event_type, period, minute_record, created_at, fine_status')
           .in('match_id', matchIds)
           .in('event_type', ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3', 'YELLOW', 'RED'])
           .order('created_at', { ascending: true })).data
@@ -220,7 +220,7 @@ async function loadDelegatePortalData(slug: string) {
       .filter(Boolean)
       .filter((id, index, ids) => ids.indexOf(id) === index);
     if (eventIds.length > 0) {
-      const { data: disciplinaryMeta } = await supabase.from('match_events').select('id, disciplinary_comment, suspension_matches').in('id', eventIds);
+      const { data: disciplinaryMeta } = await supabase.from('match_events').select('id, fine_amount, fine_status, disciplinary_comment, suspension_matches').in('id', eventIds);
       const metadataById = new Map((disciplinaryMeta || []).map((event: any) => [event.id, event]));
       Object.values(eventsByTeam).flat().forEach((event: any) => Object.assign(event, metadataById.get(event.id) || {}));
       Object.values(eventsByMatch).flat().forEach((event: any) => Object.assign(event, metadataById.get(event.id) || {}));
@@ -248,7 +248,7 @@ async function loadDelegatePortalData(slug: string) {
     if (categoryMatchIds.length > 0) {
       const { data: categoryEvents } = await supabase
         .from('match_events')
-        .select('id, match_id, team_id, player_id, event_type, period, minute_record, created_at, players(name, shirt_number), teams(name, schools(name, logo_url))')
+        .select('id, match_id, team_id, player_id, event_type, period, minute_record, created_at, fine_amount, fine_status, players(name, shirt_number), teams(name, schools(name, logo_url))')
         .in('match_id', categoryMatchIds)
         .in('event_type', ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3', 'YELLOW', 'RED'])
         .order('created_at', { ascending: true });
@@ -260,7 +260,7 @@ async function loadDelegatePortalData(slug: string) {
       if (categoryEventIds.length > 0) {
         const { data: categoryDisciplinaryMeta } = await supabase
           .from('match_events')
-          .select('id, disciplinary_comment, suspension_matches')
+          .select('id, fine_amount, fine_status, disciplinary_comment, suspension_matches')
           .in('id', categoryEventIds);
         const metadataById = new Map((categoryDisciplinaryMeta || []).map((event: any) => [event.id, event]));
         Object.values(eventsByMatch).flat().forEach((event: any) => Object.assign(event, metadataById.get(event.id) || {}));

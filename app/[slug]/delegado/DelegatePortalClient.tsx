@@ -423,8 +423,10 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   }, []);
 
   useEffect(() => {
-    if (!fullSchedule.some((match: any) => match.status === 'LIVE')) return;
-    const interval = window.setInterval(() => router.refresh(), 15000);
+    const refreshInterval = fullSchedule.some((match: any) => match.status === 'LIVE') ? 15000 : 30000;
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') router.refresh();
+    }, refreshInterval);
     return () => window.clearInterval(interval);
   }, [fullSchedule, router]);
 

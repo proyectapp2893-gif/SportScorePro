@@ -4,6 +4,7 @@ import { hasAdminSession } from '@/app/lib/auth';
 import { createPrivilegedSupabaseClient } from '@/app/lib/supabase/server';
 import { getClientIdBySlug } from '@/app/lib/tenant';
 import { logAuditEvent } from '@/app/lib/audit';
+import { revalidatePath } from 'next/cache';
 
 export async function updateDisciplinaryRecord(slug: string, eventId: string, comment: string, suspensionMatches: number | null) {
   if (!(await hasAdminSession(slug))) return { success: false as const, error: 'Sesión administrativa no válida.' };
@@ -49,6 +50,8 @@ export async function approveFinePaymentProof(slug: string, proofId: string) {
     ? await supabase.from('match_events').update({ fine_status: 'PAID' }).eq('team_id', teamId).in('match_id', matchIds).in('event_type', ['YELLOW', 'RED']).eq('fine_status', 'UNPAID')
     : { error: null };
   if (eventUpdate.error) return { success: false as const, error: 'Comprobante aprobado, pero las multas del equipo no pudieron actualizarse.' };
+  revalidatePath(`/${slug}/delegado`);
+  revalidatePath(`/${slug}/admin/boletines`);
   return { success: true as const };
 }
 
