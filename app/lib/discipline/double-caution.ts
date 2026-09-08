@@ -5,8 +5,9 @@
  * as two rows.  There is no dedicated relation column, so pairing is kept
  * deliberately conservative: the red must belong to the same match/player/
  * team and share the event timestamp (or the complete match position).
- * The second yellow is retained in the source history, but is not billable;
- * the red remains the single billable sanction for the double caution.
+ * A red supersedes all yellows for that match/player/team in these views,
+ * including a direct red after a single caution. Source history is retained.
+ * Pairing is only used to label a red as a double caution.
  */
 export type DisciplinaryEvent = {
   id: string;
@@ -34,7 +35,8 @@ function sameIdentity(a: DisciplinaryEvent, b: DisciplinaryEvent) {
 }
 
 function samePosition(a: DisciplinaryEvent, b: DisciplinaryEvent) {
-  return a.period === b.period
+  return Boolean(a.period && (a.match_second != null || a.minute_record != null))
+    && a.period === b.period
     && a.match_second === b.match_second
     && String(a.minute_record ?? '') === String(b.minute_record ?? '');
 }
@@ -52,6 +54,9 @@ export function normalizeDoubleCautions<T extends DisciplinaryEvent>(events: T[]
   const pairedYellowIds = new Set<string>();
   const doubleRedIds = new Set<string>();
   for (const yellows of yellowsByPlayer.values()) {
+    if (events.some((event) => event.event_type === 'RED' && sameIdentity(event, yellows[0]))) {
+      yellows.forEach((event) => pairedYellowIds.add(event.id));
+    }
     yellows.sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
     const secondYellow = yellows[1];
     if (!secondYellow) continue;

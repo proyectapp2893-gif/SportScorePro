@@ -91,7 +91,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
         const roster = isDemo ? getDemoFootballRoster(match.id) : await getFootballMatchRoster(slug, match.id);
         setHomeRoster(roster.home || []);
         setAwayRoster(roster.away || []);
-        setSuspendedPlayers(categoryData?.tournaments?.fair_play_enabled ? roster.suspendedPlayers : {});
+        setSuspendedPlayers(roster.suspendedPlayers);
         const allPlayers = [...(roster.home || []), ...(roster.away || [])];
         const eligibility: Record<string, PlayerEligibility> = {};
         allPlayers.forEach((player: any) => { eligibility[player.id] = evaluatePlayerEligibility({ playerId: player.id, registered: true, teamId: player.team_id, documents: player.player_documents || [], suspended: Boolean(roster.suspendedPlayers?.[player.id]), suspensionMessage: roster.suspendedPlayers?.[player.id] ? String(roster.suspendedPlayers[player.id]) : null }); });

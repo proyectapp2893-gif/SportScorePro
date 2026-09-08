@@ -4,7 +4,7 @@ import { getScorekeeperSession, hasAdminSession } from '@/app/lib/auth';
 import { createPrivilegedSupabaseClient } from '@/app/lib/supabase/server';
 import { logAuditEvent, type AuditActorType } from '@/app/lib/audit';
 import { getClientIdBySlug } from '@/app/lib/tenant';
-import { normalizeDoubleCautions } from '@/app/lib/discipline/double-caution';
+import { getDisciplinaryBlocks } from '@/app/lib/discipline/suspension';
 
 type RecordFootballEventInput = {
   slug: string;
@@ -149,7 +149,7 @@ async function requireMatchAccess(slug: string, matchId: string) {
     .from('matches')
     .select(`
       id, status, home_team_id, away_team_id, home_score, away_score,
-      matchdays!inner(round_number, categories!inner(tournaments!inner(client_id)))
+      matchdays!inner(round_number, categories!inner(id, tournament_id, tournaments!inner(client_id)))
     `)
     .eq('id', matchId)
     .eq('matchdays.categories.tournaments.client_id', clientId)
@@ -190,17 +190,27 @@ export async function getFootballMatchRoster(slug: string, matchId: string) {
   if (error) throw new Error('No se pudo cargar la nómina inscrita para este partido.');
 
   const playerIds = (players || []).map((player) => player.id);
-  const suspendedPlayers: Record<string, boolean> = {};
-  const currentRound = Number((match as any).matchdays?.round_number || 0);
+  let suspendedPlayers: Record<string, string> = {};
+  const category = (match as any).matchdays?.categories;
   if (playerIds.length > 0) {
-    const { data: disciplinaryEvents } = await supabase
-      .from('match_events')
-      .select('id, match_id, player_id, team_id, event_type, created_at, period, match_second, minute_record, fine_status, suspension_matches, matches!inner(matchdays!inner(round_number))')
-      .in('player_id', playerIds)
-      .in('event_type', ['YELLOW', 'RED']);
-    normalizeDoubleCautions(disciplinaryEvents || [])
-      .filter((event: any) => event.fine_status === 'UNPAID' || (event.event_type === 'RED' && event.suspension_matches && currentRound > Number(event.matches?.matchdays?.round_number || 0) && currentRound <= Number(event.matches?.matchdays?.round_number || 0) + Number(event.suspension_matches)))
-      .forEach((event) => { if (event.player_id) suspendedPlayers[event.player_id] = true; });
+    const [eventsResult, bulletinResult] = await Promise.all([
+      supabase.from('match_events')
+        .select('id, match_id, player_id, team_id, event_type, created_at, period, match_second, minute_record, fine_status, suspension_matches, matches!inner(matchdays!inner(category_id))')
+        .in('player_id', playerIds)
+        .eq('matches.matchdays.category_id', category.id)
+        .in('event_type', ['YELLOW', 'RED']),
+      supabase.from('tournament_bulletins')
+        .select('bulletin_number,snapshot')
+        .eq('tournament_id', category.tournament_id)
+        .order('bulletin_number', { ascending: false })
+        .limit(1).maybeSingle(),
+    ]);
+    if (eventsResult.error || bulletinResult.error) {
+      throw new Error('No se pudo verificar la habilitación disciplinaria. Intenta nuevamente.');
+    }
+    const latest = bulletinResult.data;
+    const sanctions = latest?.snapshot?.categories?.find((item:any) => item.id === category.id)?.sanctions || [];
+    suspendedPlayers = getDisciplinaryBlocks(eventsResult.data || [], sanctions, Number(latest?.bulletin_number || 0));
   }
 
   return {
@@ -215,6 +225,10 @@ export async function recordFootballMatchEvent(input: RecordFootballEventInput) 
   assertMatchTeam(input.teamId, match);
 
   const supabase = createPrivilegedSupabaseClient();
+  if (input.eventType === 'SUB' && input.playerId) {
+    const roster = await getFootballMatchRoster(input.slug, input.matchId);
+    if (roster.suspendedPlayers[input.playerId]) throw new Error(roster.suspendedPlayers[input.playerId]);
+  }
   if (input.eventType === 'MVP') {
     const { error: replaceMvpError } = await supabase
       .from('match_events')
@@ -438,6 +452,12 @@ export async function autoStopFootballTimer(input: CountdownClockInput) {
 export async function startLiveMatch(input: StartMatchInput) {
   const { clientId, match, actorType } = await requireMatchAccess(input.slug, input.matchId);
   const supabase = createPrivilegedSupabaseClient();
+  if (input.lineups?.length) {
+    const roster = await getFootballMatchRoster(input.slug, input.matchId);
+    for (const lineup of input.lineups) {
+      if (roster.suspendedPlayers[lineup.playerId]) throw new Error(roster.suspendedPlayers[lineup.playerId]);
+    }
+  }
   const lineupEvents = (input.lineups || []).map((lineup) => {
     assertMatchTeam(lineup.teamId, match);
     return {

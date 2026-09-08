@@ -315,3 +315,71 @@ export async function addRosterPlayers(
 
   return { success: true, data: { inserted: formattedPlayers.length } };
 }
+
+export async function updateRosterPlayer(slug: string, playerId: string, input: PlayerInput): Promise<RosterActionResult> {
+  if (!(await hasAdminSession(slug))) return { success: false, error: 'Sesión de administrador no válida.' };
+  const supabase = createServerSupabaseAdminClient();
+  const { data: current } = await supabase.from('players').select('id,team_id').eq('id', playerId).maybeSingle();
+  if (!current || !(await teamBelongsToClientSlug(current.team_id, slug))) return { success: false, error: 'El jugador no pertenece a este cliente.' };
+  const player = {
+    name: String(input.name || '').trim().toUpperCase(),
+    identity_number: input.identityNumber?.trim() || null,
+    shirt_number: input.shirtNumber ?? null,
+    birth_date: input.birthDate || null,
+    birth_year: input.birthDate ? Number(input.birthDate.slice(0, 4)) : input.birthYear ?? null,
+    vinculo: input.vinculo?.trim().toUpperCase() || null,
+    relationship_detail: input.relationshipDetail?.trim().toUpperCase() || null,
+  };
+  if (!player.name) return { success: false, error: 'Ingresa el nombre completo.' };
+  if (player.identity_number && !/^\d{5,30}$/.test(player.identity_number)) return { success: false, error: 'La identificación debe tener entre 5 y 30 dígitos.' };
+  if (player.shirt_number !== null && (!Number.isInteger(player.shirt_number) || player.shirt_number < 1 || player.shirt_number > 999)) return { success: false, error: 'El dorsal debe estar entre 1 y 999.' };
+  if (player.birth_date && (!/^\d{4}-\d{2}-\d{2}$/.test(player.birth_date) || Number.isNaN(Date.parse(player.birth_date)) || new Date(player.birth_date).toISOString().slice(0, 10) !== player.birth_date || new Date(player.birth_date) > new Date())) return { success: false, error: 'Fecha de nacimiento inválida.' };
+  if (player.birth_year !== null && (!Number.isInteger(player.birth_year) || player.birth_year < 1900 || player.birth_year > new Date().getFullYear())) return { success: false, error: 'Año de nacimiento inválido.' };
+  const { data: team, error: teamError } = await supabase.from('teams').select('categories(tournament_id,tournaments(tournament_format,schedule_dates))').eq('id', current.team_id).single();
+  if (teamError) return { success: false, error: 'No se pudo verificar el torneo.' };
+  const category = (team as any).categories;
+  if (category?.tournaments?.tournament_format === 'THREE_STAGE_35') {
+    const date = String(category.tournaments.schedule_dates?.[0] || `${new Date().getFullYear()}-12-31`);
+    const cutoff = new Date(`${date}T12:00:00`); cutoff.setFullYear(cutoff.getFullYear() - 35);
+    if (player.birth_date ? new Date(`${player.birth_date}T12:00:00`) > cutoff : !player.birth_year || player.birth_year > cutoff.getFullYear()) return { success: false, error: 'El participante debe tener 35 años cumplidos al iniciar el torneo.' };
+  }
+  if (player.identity_number) {
+    const duplicate = await supabase.from('players').select('id,teams!inner(categories!inner(tournament_id))').eq('identity_number', player.identity_number).eq('teams.categories.tournament_id', category.tournament_id).neq('id', playerId).limit(1);
+    if (duplicate.error) return { success: false, error: 'No se pudo verificar la identificación.' };
+    if (duplicate.data?.length) return { success: false, error: 'Esta identificación ya está inscrita en el torneo.' };
+  }
+  if (player.shirt_number !== null) {
+    const duplicate = await supabase.from('players').select('id').eq('team_id', current.team_id).eq('shirt_number', player.shirt_number).neq('id', playerId).limit(1);
+    if (duplicate.error) return { success: false, error: 'No se pudo verificar el dorsal.' };
+    if (duplicate.data?.length) return { success: false, error: 'El dorsal ya está usado por otro jugador del equipo.' };
+  }
+  const { data: saved, error } = await supabase.from('players').update(player).eq('id', playerId).eq('team_id', current.team_id).select('id').single();
+  if (error || !saved) return { success: false, error: 'No se pudo actualizar el jugador.' };
+  await logAuditEvent({ action: 'admin.roster.player_update', actorType: 'client', clientId: await getClientIdBySlug(slug), targetType: 'player', targetId: playerId, metadata: { slug, teamId: current.team_id } });
+  return { success: true, data: undefined };
+}
+
+export async function uploadRosterPlayerDocument(slug: string, playerId: string, documentType: string, file: File): Promise<RosterActionResult> {
+  if (!(await hasAdminSession(slug))) return { success: false, error: 'Sesión de administrador no válida.' };
+  const supabase = createServerSupabaseAdminClient();
+  const { data: player } = await supabase.from('players').select('id,team_id').eq('id', playerId).maybeSingle();
+  if (!player || !(await teamBelongsToClientSlug(player.team_id, slug))) return { success: false, error: 'El jugador no pertenece a este cliente.' };
+  if (!['FACE_PHOTO', 'IDENTITY_FRONT', 'IDENTITY_BACK'].includes(documentType)) return { success: false, error: 'Tipo de documento inválido.' };
+  if (!(file instanceof File) || file.size <= 0 || file.size > 5 * 1024 * 1024) return { success: false, error: 'El archivo debe pesar máximo 5 MB y no estar vacío.' };
+  const extensions: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'application/pdf': 'pdf' };
+  if (!extensions[file.type] || (documentType === 'FACE_PHOTO' && file.type === 'application/pdf')) return { success: false, error: 'Usa JPG, PNG o WebP para la foto; el documento también acepta PDF.' };
+  const previous = await supabase.from('player_documents').select('storage_path').eq('player_id', playerId).eq('document_type', documentType).maybeSingle();
+  if (previous.error) return { success: false, error: 'No se pudo consultar el archivo actual.' };
+  const clientId = await getClientIdBySlug(slug);
+  const storagePath = `${clientId}/${player.team_id}/${playerId}/${documentType.toLowerCase()}-${randomUUID()}.${extensions[file.type]}`;
+  const upload = await supabase.storage.from('player-documents').upload(storagePath, file, { contentType: file.type, upsert: false });
+  if (upload.error) return { success: false, error: 'No se pudo subir el archivo.' };
+  const record = await supabase.from('player_documents').upsert({ player_id: playerId, document_type: documentType, storage_path: storagePath, original_filename: file.name.slice(0, 180), mime_type: file.type, file_size: file.size, status: 'PENDING', rejection_reason: null, reviewed_at: null, uploaded_by_delegate_id: null, updated_at: new Date().toISOString() }, { onConflict: 'player_id,document_type' });
+  if (record.error) {
+    await supabase.storage.from('player-documents').remove([storagePath]);
+    return { success: false, error: 'No se pudo guardar el archivo. El anterior se conserva.' };
+  }
+  if (previous.data?.storage_path) await supabase.storage.from('player-documents').remove([previous.data.storage_path]);
+  await logAuditEvent({ action: 'admin.player_document.upload', actorType: 'client', clientId, targetType: 'player', targetId: playerId, metadata: { slug, documentType } });
+  return { success: true, data: undefined };
+}

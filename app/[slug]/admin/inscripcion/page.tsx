@@ -10,6 +10,7 @@ import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 're
 import { useSearchParams, useRouter, useParams } from 'next/navigation';
 import { addRosterPlayers, copyRosterBetweenTeams, deleteRosterPlayer, deleteRosterTeam, getOrCreateRosterTeam, loadRosterPlayerDocuments, openRosterPlayerDocument, reviewRosterPlayerDocument, updateRosterTeamName } from './actions';
 import { promptDialog } from '@/app/components/AppDialog';
+import EditPlayerModal from './EditPlayerModal';
 import { normalizePlayerBirthDate } from '@/app/lib/players/date';
 
 export default function InscripcionPage() {
@@ -37,6 +38,7 @@ export default function InscripcionPage() {
   // Datos específicos del equipo
   const [currentTeam, setCurrentTeam] = useState<any>(null);
   const [players, setPlayers] = useState<any[]>([]);
+  const [editingPlayer, setEditingPlayer] = useState<any>(null);
   const [playerDocuments, setPlayerDocuments] = useState<any[]>([]);
   const [documentPreview, setDocumentPreview] = useState<{ url: string; title: string; isPdf: boolean } | null>(null);
   
@@ -451,6 +453,7 @@ export default function InscripcionPage() {
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900 font-sans relative">
       
+      {editingPlayer && <EditPlayerModal key={editingPlayer.id} slug={slug} player={editingPlayer} documents={playerDocuments} onClose={() => setEditingPlayer(null)} onRefresh={fetchPlayers} />}
       {/* MODALES SOFISTICADOS */}
       {documentPreview && (
         <div
@@ -922,6 +925,7 @@ export default function InscripcionPage() {
                               </div>
                             </td>
                             <td className="p-3 text-right">
+                              <button type="button" onClick={() => setEditingPlayer(p)} title="Editar jugador" aria-label={`Editar jugador ${p.name}`} className="rounded-lg p-2 text-blue-600 hover:bg-blue-50"><Edit2 size={16} /></button>
                               <button onClick={() => setPlayerToDelete({ id: p.id, name: p.name })} className="p-2 text-slate-300 hover:text-red-600 transition-colors opacity-40 group-hover:opacity-100 rounded-lg hover:bg-red-50">
                                 <Trash2 size={16} />
                               </button>
