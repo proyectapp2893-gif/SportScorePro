@@ -1,4 +1,5 @@
 'use server';
+import { loadTeamDisciplinaryBlocks } from '@/app/lib/discipline/team-blocks';
 
 import { randomUUID } from 'crypto';
 import { clearDelegateSession, getDelegateSession, setDelegateSession } from '@/app/lib/auth';
@@ -415,6 +416,11 @@ export async function saveDelegateMatchLineup(slug: string, teamId: string, matc
   if (validPlayers.error) return { success: false, error: 'No se pudo validar la nómina.' };
   const validIds = new Set((validPlayers.data || []).map((player) => player.id));
   if (validIds.size !== new Set(playerIds).size) return { success: false, error: 'La alineación contiene jugadores inválidos.' };
+  try {
+    const blocks = await loadTeamDisciplinaryBlocks(supabase, teamId);
+    const blocked = playerIds.find(id => blocks[id]);
+    if (blocked) return { success: false, error: blocks[blocked] };
+  } catch { return { success: false, error: 'No se pudo verificar la habilitación disciplinaria. Intenta nuevamente.' }; }
   await supabase.from('match_events').delete().eq('match_id', matchId).eq('team_id', teamId).eq('event_type', 'STARTING_LINEUP');
   if (playerIds.length) {
     const { error } = await supabase.from('match_events').insert(playerIds.map((playerId) => ({ match_id: matchId, team_id: teamId, player_id: playerId, event_type: 'STARTING_LINEUP', period: '0' })));

@@ -31,6 +31,24 @@ export async function getFinePaymentProofs(slug: string, tournamentId: string) {
   return { success: true as const, data: data || [] };
 }
 
+export async function getApprovedFinePaymentProofs(slug: string, tournamentId: string, page = 0) {
+  if (!(await hasAdminSession(slug))) return { success: false as const, error: 'Sesión administrativa no válida.' };
+  const clientId = await getClientIdBySlug(slug);
+  if (!clientId) return { success: false as const, error: 'Institución no encontrada.' };
+  if (!Number.isSafeInteger(page) || page < 0) return { success: false as const, error: 'Página inválida.' };
+  const supabase = createPrivilegedSupabaseClient();
+  const { data, error } = await supabase.from('fine_payment_proofs')
+    .select('id, original_filename, mime_type, submitted_at, reviewed_at, players(name,shirt_number), teams(name), match_events!inner(matches!inner(matchdays!inner(categories!inner(tournaments!inner(id,client_id)))))')
+    .eq('match_events.matches.matchdays.categories.tournaments.client_id', clientId)
+    .eq('match_events.matches.matchdays.categories.tournaments.id', tournamentId)
+    .eq('status', 'APPROVED')
+    .order('reviewed_at', { ascending: false, nullsFirst: false }).order('id', { ascending: false })
+    .range(page * 20, page * 20 + 20);
+  if (error) return { success: false as const, error: 'No se pudo cargar el historial de comprobantes.' };
+  const one = <T,>(value: T | T[] | null): T | null => Array.isArray(value) ? value[0] || null : value;
+  return { success: true as const, data: (data || []).slice(0, 20).map(proof => ({ ...proof, teams: one(proof.teams), players: one(proof.players) })), hasMore: (data || []).length > 20 };
+}
+
 export async function approveFinePaymentProof(slug: string, proofId: string) {
   if (!(await hasAdminSession(slug))) return { success: false as const, error: 'Sesión administrativa no válida.' };
   const clientId = await getClientIdBySlug(slug);
@@ -55,10 +73,16 @@ export async function approveFinePaymentProof(slug: string, proofId: string) {
   return { success: true as const };
 }
 
-export async function getFinePaymentProofUrl(slug: string, storagePath: string) {
+export async function getFinePaymentProofUrl(slug: string, proofId: string) {
   if (!(await hasAdminSession(slug))) return { success: false as const, error: 'Sesión administrativa no válida.' };
+  const clientId = await getClientIdBySlug(slug);
+  if (!clientId) return { success: false as const, error: 'Institución no encontrada.' };
   const supabase = createPrivilegedSupabaseClient();
-  const { data, error } = await supabase.storage.from('player-documents').createSignedUrl(storagePath, 300);
+  const { data: proof, error: proofError } = await supabase.from('fine_payment_proofs')
+    .select('storage_path,match_events!inner(matches!inner(matchdays!inner(categories!inner(tournaments!inner(client_id)))))')
+    .eq('id', proofId).eq('match_events.matches.matchdays.categories.tournaments.client_id', clientId).maybeSingle();
+  if (proofError || !proof) return { success: false as const, error: 'Comprobante no encontrado.' };
+  const { data, error } = await supabase.storage.from('player-documents').createSignedUrl(proof.storage_path, 300);
   if (error || !data?.signedUrl) return { success: false as const, error: 'No se pudo abrir el comprobante.' };
   return { success: true as const, data: { url: data.signedUrl } };
 }

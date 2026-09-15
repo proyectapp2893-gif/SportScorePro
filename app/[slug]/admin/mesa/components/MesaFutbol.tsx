@@ -112,6 +112,37 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
     loadMatchData();
   }, [match.id, categoryData, slug]);
 
+  // Refresh payment eligibility while the desk stays open after admin approval.
+  useEffect(() => {
+    if (isDemo) return;
+    let active = true;
+    let pending = false;
+    const refreshEligibility = async () => {
+      if (pending || document.visibilityState !== 'visible') return;
+      pending = true;
+      try {
+        const roster = await getFootballMatchRoster(slug, match.id);
+        if (!active) return;
+        setSuspendedPlayers(roster.suspendedPlayers);
+        const eligibility: Record<string, PlayerEligibility> = {};
+        [...roster.home, ...roster.away].forEach((player: any) => {
+          eligibility[player.id] = evaluatePlayerEligibility({ playerId: player.id, registered: true, teamId: player.team_id, documents: player.player_documents || [], suspended: Boolean(roster.suspendedPlayers[player.id]), suspensionMessage: roster.suspendedPlayers[player.id] });
+        });
+        setPlayerEligibility(eligibility);
+      } catch { /* Keep the last verified state; writes also validate on the server. */ }
+      finally { pending = false; }
+    };
+    const timer = window.setInterval(refreshEligibility, 15000);
+    window.addEventListener('focus', refreshEligibility);
+    document.addEventListener('visibilitychange', refreshEligibility);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshEligibility);
+      document.removeEventListener('visibilitychange', refreshEligibility);
+    };
+  }, [slug, match.id, isDemo]);
+
   const playerAgeAtTournament = (player: any) => {
     if (!player.birth_date) return player.birth_year ? new Date().getFullYear() - Number(player.birth_year) : null;
     const startDate = categoryData?.tournaments?.schedule_dates?.[0] || `${new Date().getFullYear()}-12-31`;

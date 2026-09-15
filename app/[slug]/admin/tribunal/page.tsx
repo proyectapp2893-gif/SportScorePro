@@ -6,6 +6,7 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { Scale, AlertTriangle, ShieldCheck, DollarSign, Search, CheckCircle2, Flame, ArrowLeft, Wallet, Calendar, Clock, Flag, Eye, Settings2, MessageSquare } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
+import ApprovedPaymentProofs from './ApprovedPaymentProofs';
 import { formatCopAmount } from '@/app/lib/formatters';
 import { normalizeDoubleCautions } from '@/app/lib/discipline/double-caution';
 import { approveFinePaymentProof, getFinePaymentProofs, getFinePaymentProofUrl, updateDisciplinaryRecord } from './actions';
@@ -18,6 +19,7 @@ export default function TribunalPage() {
 
   const [loading, setLoading] = useState(true);
   const [fines, setFines] = useState<any[]>([]);
+  const [proofHistoryVersion, setProofHistoryVersion] = useState(0);
   const [paymentProofs, setPaymentProofs] = useState<any[]>([]);
   const [selectedProof, setSelectedProof] = useState<any | null>(null);
   const [selectedProofUrl, setSelectedProofUrl] = useState('');
@@ -93,11 +95,15 @@ export default function TribunalPage() {
     const result = await approveFinePaymentProof(slug, proof.id);
     if (!result.success) return toast.error(result.error, { id: toastId });
     toast.success('Pago validado. Equipo habilitado.', { id: toastId });
+    setSelectedProof(null);
+    setProofHistoryVersion(value => value + 1);
     loadData();
   };
 
-  const handleViewProof = async (path: string) => {
-    const result = await getFinePaymentProofUrl(slug, path);
+  const handleViewProof = async (proof: any) => {
+    setSelectedProof(proof);
+    setSelectedProofUrl('');
+    const result = await getFinePaymentProofUrl(slug, proof.id);
     if (!result.success) return toast.error(result.error);
     setSelectedProofUrl(result.data.url);
   };
@@ -274,9 +280,11 @@ export default function TribunalPage() {
 
           <section className="hidden">
             <div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-600">Comprobantes recibidos</p><h2 className="text-xl font-black uppercase text-slate-900">Validar pagos de equipos</h2></div><span className="rounded-full bg-blue-600 px-3 py-1 text-[10px] font-black uppercase text-white">{paymentProofs.length} pendientes</span></div>
-            {paymentProofs.length === 0 ? <p className="rounded-2xl border border-dashed border-blue-200 bg-white/70 p-4 text-xs font-bold uppercase tracking-wider text-slate-500">No hay comprobantes pendientes. Cuando un delegado cargue un baucher desde el perfil de su jugador, aparecerá aquí para revisarlo.</p> : <div className="grid gap-3 md:grid-cols-2">{paymentProofs.map((proof) => <div key={proof.id} className="flex items-center justify-between gap-3 rounded-2xl border border-blue-100 bg-white p-4"><div className="min-w-0"><p className="truncate text-sm font-black uppercase">#{proof.players?.shirt_number || '-'} {proof.players?.name}</p><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{proof.original_filename}</p></div><div className="flex shrink-0 gap-2"><button type="button" onClick={() => handleViewProof(proof.storage_path)} className="rounded-xl border border-blue-200 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-50">Ver</button><button type="button" onClick={() => handleApproveProof(proof)} className="rounded-xl bg-emerald-600 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white hover:bg-emerald-700">Aceptar</button></div></div>)}</div>}
+            {paymentProofs.length === 0 ? <p className="rounded-2xl border border-dashed border-blue-200 bg-white/70 p-4 text-xs font-bold uppercase tracking-wider text-slate-500">No hay comprobantes pendientes. Cuando un delegado cargue un baucher desde el perfil de su jugador, aparecerá aquí para revisarlo.</p> : <div className="grid gap-3 md:grid-cols-2">{paymentProofs.map((proof) => <div key={proof.id} className="flex items-center justify-between gap-3 rounded-2xl border border-blue-100 bg-white p-4"><div className="min-w-0"><p className="truncate text-sm font-black uppercase">#{proof.players?.shirt_number || '-'} {proof.players?.name}</p><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{proof.original_filename}</p></div><div className="flex shrink-0 gap-2"><button type="button" onClick={() => handleViewProof(proof)} className="rounded-xl border border-blue-200 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-50">Ver</button><button type="button" onClick={() => handleApproveProof(proof)} className="rounded-xl bg-emerald-600 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white hover:bg-emerald-700">Aceptar</button></div></div>)}</div>}
           </section>
           
+          <ApprovedPaymentProofs key={`${tournamentSettings.id}:${proofHistoryVersion}`} slug={slug} tournamentId={tournamentSettings.id} />
+
           {/* BARRA DE BÚSQUEDA Y FILTROS DE FECHA */}
           <div className="p-4 md:p-6 border-b border-slate-200 flex flex-col lg:flex-row items-center justify-between gap-4 bg-slate-50">
             <div className="flex items-center gap-3 bg-white border border-slate-200 px-4 py-3 rounded-xl w-full lg:max-w-sm shadow-sm focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-500/20 transition-all">
@@ -428,7 +436,7 @@ export default function TribunalPage() {
                                  <ShieldCheck size={14}/> Liberado
                               </span>
                            ) : (
-                              (fine.teamBalance?.proof || proofByEvent[fine.id]) ? <button type="button" onClick={async () => { const proof = fine.teamBalance?.proof || proofByEvent[fine.id]; setSelectedProof(proof); setSelectedProofUrl(''); await handleViewProof(proof.storage_path); }} className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-center text-[10px] font-black uppercase tracking-widest transition-all shadow-md active:scale-95"><Eye size={14}/> Ver comprobante</button> : <span className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-4 py-2.5 text-center text-[10px] font-black uppercase tracking-widest text-slate-400"><Clock size={14}/> Sin comprobante</span>
+                              (fine.teamBalance?.proof || proofByEvent[fine.id]) ? <button type="button" onClick={async () => { const proof = fine.teamBalance?.proof || proofByEvent[fine.id]; setSelectedProof(proof); setSelectedProofUrl(''); await handleViewProof(proof); }} className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-center text-[10px] font-black uppercase tracking-widest transition-all shadow-md active:scale-95"><Eye size={14}/> Ver comprobante</button> : <span className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-4 py-2.5 text-center text-[10px] font-black uppercase tracking-widest text-slate-400"><Clock size={14}/> Sin comprobante</span>
                            )}
                            </div>
                         </td>

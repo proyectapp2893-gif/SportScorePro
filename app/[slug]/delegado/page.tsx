@@ -1,3 +1,4 @@
+import { loadTeamDisciplinaryBlocks } from '@/app/lib/discipline/team-blocks';
 import { getDelegateSession } from '@/app/lib/auth';
 import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import DelegatePortalClient from './DelegatePortalClient';
@@ -275,6 +276,11 @@ async function loadDelegatePortalData(slug: string) {
     }
   }
 
+  const disciplinaryBlocksByTeam = Object.fromEntries(await Promise.all(teams.map(async (team: any) => {
+    try { return [team.id, await loadTeamDisciplinaryBlocks(supabase, team.id)]; }
+    catch { return [team.id, null]; }
+  })));
+
   return {
     delegate: {
       id: delegate.id,
@@ -284,6 +290,7 @@ async function loadDelegatePortalData(slug: string) {
     },
     teams,
     playersByTeam,
+    disciplinaryBlocksByTeam,
     staffByTeam,
     eventsByTeam,
     matchesByTeam,
