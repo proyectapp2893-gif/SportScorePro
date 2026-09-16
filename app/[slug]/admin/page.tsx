@@ -348,6 +348,7 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
     { title: 'Preparación', subtitle: 'Base operativa del torneo', modules: [
       { name: 'Delegaciones', description: 'Equipos, nóminas y respaldos.', icon: School, tone: 'teal', action: () => goToTournamentModule('delegaciones') },
       { name: 'Central de Inscripción', description: 'Atletas y documentación.', icon: Users, tone: 'blue', action: () => goToCategoryModule('inscripcion') },
+      { name: 'Participación Regular', description: 'Control de elegibilidad para fase final.', icon: ClipboardList, tone: 'sky', action: () => goToCategoryModule('participaciones') },
       { name: 'Portal de Delegados', description: 'Accesos y cierres de inscripción.', icon: UserCog, tone: 'cyan', action: () => goToTournamentModule('delegados') },
       { name: 'Fixture y Resultados', description: 'Calendarios, fases y jornadas.', icon: CalendarDays, tone: 'emerald', action: () => goToCategoryModule('grupos') },
       { name: 'Estatutos del Torneo', description: 'PDF oficial para los delegados.', icon: FileText, tone: 'indigo', action: () => isDemo ? toast('Disponible para torneos reales.') : goToTournamentModule('estatutos') },

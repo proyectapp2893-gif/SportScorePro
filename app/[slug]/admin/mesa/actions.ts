@@ -5,6 +5,7 @@ import { createPrivilegedSupabaseClient } from '@/app/lib/supabase/server';
 import { logAuditEvent, type AuditActorType } from '@/app/lib/audit';
 import { getClientIdBySlug } from '@/app/lib/tenant';
 import { getDisciplinaryBlocks } from '@/app/lib/discipline/suspension';
+import { validateFinalLineup } from '@/app/lib/competition/player-participation';
 
 type RecordFootballEventInput = {
   slug: string;
@@ -149,7 +150,7 @@ async function requireMatchAccess(slug: string, matchId: string) {
     .from('matches')
     .select(`
       id, status, home_team_id, away_team_id, home_score, away_score,
-      matchdays!inner(round_number, categories!inner(id, tournament_id, tournaments!inner(client_id)))
+      matchdays!inner(round_number, stage_id, competition_stages(stage_type), categories!inner(id, tournament_id, tournaments!inner(client_id)))
     `)
     .eq('id', matchId)
     .eq('matchdays.categories.tournaments.client_id', clientId)
@@ -467,6 +468,12 @@ export async function startLiveMatch(input: StartMatchInput) {
     };
   });
 
+  const stageType = (match as any).matchdays?.competition_stages?.stage_type;
+  const categoryId = (match as any).matchdays?.categories?.id;
+  if (stageType === 'FINALS' && lineupEvents.length) {
+    const validation = await validateFinalLineup(supabase, lineupEvents.map((lineup: any) => lineup.player_id), categoryId);
+    if (validation.blocked.length) throw new Error(`Jugador(es) sin mínimo de ${validation.required} partidos de fase regular.`);
+  }
   const { error } = await supabase.rpc('sportscore_start_live_match', {
     p_match_id: input.matchId,
     p_period: input.period,
@@ -474,6 +481,14 @@ export async function startLiveMatch(input: StartMatchInput) {
     p_lineups: lineupEvents,
   });
   if (error) throw new Error(error.message);
+
+  if (stageType !== 'FINALS' && lineupEvents.length && categoryId) {
+    const { error: participationError } = await supabase.from('player_match_participation').upsert(
+      lineupEvents.map((lineup: any) => ({ player_id: lineup.player_id, team_id: lineup.team_id, match_id: input.matchId, stage_id: (match as any).matchdays?.stage_id || null, source: 'EVENT', status: 'CONFIRMED', created_by: actorType })),
+      { onConflict: 'player_id,match_id' },
+    );
+    if (participationError) throw new Error('El partido inició, pero no se pudo registrar la participación.');
+  }
 
   if (match.status !== 'LIVE') {
     const { error: clockResetError } = await supabase

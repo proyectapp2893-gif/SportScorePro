@@ -407,7 +407,7 @@ export async function saveDelegateMatchLineup(slug: string, teamId: string, matc
   const access = await assertDelegateTeam(slug, teamId);
   if (!access.success) return { success: false, error: access.error };
   const supabase = createServerSupabaseAdminClient();
-  const { data: match } = await supabase.from('matches').select('id, status, home_team_id, away_team_id').eq('id', matchId).maybeSingle();
+  const { data: match } = await supabase.from('matches').select('id, status, home_team_id, away_team_id, matchdays!inner(category_id,stage_id,competition_stages(stage_type))').eq('id', matchId).maybeSingle();
   if (!match || (match.home_team_id !== teamId && match.away_team_id !== teamId)) return { success: false, error: 'El partido no pertenece a este equipo.' };
   if (match.status !== 'SCHEDULED') return { success: false, error: 'La alineación está bloqueada porque el partido ya inició.' };
   const validPlayers = playerIds.length

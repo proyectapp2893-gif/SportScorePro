@@ -1,11 +1,11 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Activity, ArrowLeft, CalendarDays, ExternalLink, Lock, MonitorPlay, Play, ShieldCheck, Trophy, User, UserCheck } from 'lucide-react';
+import { Activity, ArrowLeft, CalendarDays, Check, ExternalLink, Lock, MonitorPlay, Play, ShieldCheck, Trophy, User, UserCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getSportKind } from '@/app/lib/sports/rules';
-import { loginScorekeeper } from './actions';
+import { confirmMatchParticipation, loadMatchParticipationRoster, loginScorekeeper } from './actions';
 import MesaFutbol from '../admin/mesa/components/MesaFutbol';
 import MesaBaloncesto from '../admin/mesa/components/MesaBaloncesto';
 import MesaVoleibol from '../admin/mesa/components/MesaVoleibol';
@@ -39,6 +39,16 @@ function sportName(match: any) {
 
 function matchDateTime(match: any) {
   return `${match.matchdays?.scheduled_date || 'Sin fecha'} / ${match.scheduled_time?.slice(0, 5) || '--:--'}`;
+}
+
+function ParticipationConfirmation({ slug, match }: { slug: string; match: any }) {
+  const [players, setPlayers] = useState<any[]>([]); const [selected, setSelected] = useState<string[]>([]); const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false);
+  const reload = async () => { setLoading(true); const result = await loadMatchParticipationRoster(slug, match.id); if (result.success) { setPlayers(result.data.players); setSelected(result.data.selected); } else toast.error(result.error); setLoading(false); };
+  useEffect(() => { reload(); }, [match.id]);
+  const toggle = (id: string) => setSelected(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
+  const save = async () => { setSaving(true); const result = await confirmMatchParticipation(slug, match.id, selected); if (!result.success) toast.error(result.error); else toast.success('Participación actualizada en el acta.'); setSaving(false); };
+  if (loading) return <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs font-black uppercase tracking-wider text-blue-700">Cargando nómina del acta…</div>;
+  return <section className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Antes de cerrar el acta</p><h2 className="text-base font-black uppercase text-slate-900">Confirma quiénes participaron</h2></div><span className="text-xs font-black text-amber-700">{selected.length} seleccionados</span></div><div className="mt-3 grid max-h-48 gap-2 overflow-y-auto sm:grid-cols-2">{players.map(player => <button type="button" key={player.id} onClick={() => toggle(player.id)} className={`flex items-center gap-2 rounded-xl border p-2 text-left text-xs font-bold ${selected.includes(player.id) ? 'border-emerald-400 bg-emerald-100 text-emerald-800' : 'border-slate-200 bg-white text-slate-700'}`}><span className="w-6 text-center">#{player.shirt_number || '-'}</span><span className="truncate uppercase">{player.name}</span>{selected.includes(player.id) && <Check size={15} className="ml-auto shrink-0" />}</button>)}</div><button type="button" disabled={saving || match.status === 'SCHEDULED'} onClick={save} className="mt-3 rounded-xl bg-amber-600 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-50">{saving ? 'Guardando…' : 'Confirmar participantes'}</button></section>;
 }
 
 export default function PlanilleroPortalClient({ slug, initialData }: { slug: string; initialData: any | null }) {
@@ -86,10 +96,8 @@ export default function PlanilleroPortalClient({ slug, initialData }: { slug: st
       slug,
     };
 
-    if (sportKind === 'basketball') return <MesaBaloncesto {...commonProps} />;
-    if (sportKind === 'volleyball') return <MesaVoleibol {...commonProps} />;
-    if (sportKind === 'baseball') return <MesaSoftbol {...commonProps} />;
-    return <MesaFutbol {...commonProps} />;
+    const mesa = sportKind === 'basketball' ? <MesaBaloncesto {...commonProps} /> : sportKind === 'volleyball' ? <MesaVoleibol {...commonProps} /> : sportKind === 'baseball' ? <MesaSoftbol {...commonProps} /> : <MesaFutbol {...commonProps} />;
+    return <div className="min-h-screen bg-slate-50 p-3 md:p-6"><div className="mx-auto max-w-7xl"><ParticipationConfirmation slug={slug} match={activeMatch} />{mesa}</div></div>;
   };
 
   const handleLogin = async (event: React.FormEvent) => {
