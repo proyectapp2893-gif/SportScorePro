@@ -9,7 +9,7 @@ import Link from 'next/link';
 import ApprovedPaymentProofs from './ApprovedPaymentProofs';
 import { formatCopAmount } from '@/app/lib/formatters';
 import { normalizeDoubleCautions } from '@/app/lib/discipline/double-caution';
-import { approveFinePaymentProof, getFinePaymentProofs, getFinePaymentProofUrl, updateDisciplinaryRecord } from './actions';
+import { approveFinePaymentProof, getFinePaymentProofs, getFinePaymentProofUrl, markTeamFinesPaidExternally, updateDisciplinaryRecord } from './actions';
 
 export default function TribunalPage() {
   const params = useParams();
@@ -138,6 +138,19 @@ export default function TribunalPage() {
       toast.success('Pago registrado correctamente. Jugador habilitado.', { id: toastId });
       loadData(); 
     }
+  };
+
+  const handleExternalPayment = async (fine: any) => {
+    const teamId = fine.team_id || fine.teamBalance?.team_id;
+    const teamName = fine.teamBalance?.teamName || fine.players?.teams?.name || 'este equipo';
+    if (!teamId) return toast.error('No se pudo identificar el equipo.');
+    const note = window.prompt(`Indica el soporte del pago externo de ${teamName}:`, 'Pago confirmado por fuera de la plataforma');
+    if (!note?.trim()) return;
+    const toastId = toast.loading('Registrando pago externo...');
+    const result = await markTeamFinesPaidExternally(slug, tournamentSettings?.id || selectedTournamentId || '', teamId, note);
+    if (!result.success) return toast.error(result.error, { id: toastId });
+    toast.success(`Pago externo registrado. ${result.data.updated} multa(s) actualizada(s).`, { id: toastId });
+    loadData();
   };
 
   const filteredFines = fines.filter(fine => {
@@ -436,7 +449,10 @@ export default function TribunalPage() {
                                  <ShieldCheck size={14}/> Liberado
                               </span>
                            ) : (
-                              (fine.teamBalance?.proof || proofByEvent[fine.id]) ? <button type="button" onClick={async () => { const proof = fine.teamBalance?.proof || proofByEvent[fine.id]; setSelectedProof(proof); setSelectedProofUrl(''); await handleViewProof(proof); }} className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-center text-[10px] font-black uppercase tracking-widest transition-all shadow-md active:scale-95"><Eye size={14}/> Ver comprobante</button> : <span className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-4 py-2.5 text-center text-[10px] font-black uppercase tracking-widest text-slate-400"><Clock size={14}/> Sin comprobante</span>
+                             <>
+                              {(fine.teamBalance?.proof || proofByEvent[fine.id]) ? <button type="button" onClick={async () => { const proof = fine.teamBalance?.proof || proofByEvent[fine.id]; setSelectedProof(proof); setSelectedProofUrl(''); await handleViewProof(proof); }} className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-center text-[10px] font-black uppercase tracking-widest transition-all shadow-md active:scale-95"><Eye size={14}/> Ver comprobante</button> : <span className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-4 py-2.5 text-center text-[10px] font-black uppercase tracking-widest text-slate-400"><Clock size={14}/> Sin comprobante</span>}
+                              <button type="button" onClick={() => handleExternalPayment(fine)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-amber-700 hover:bg-amber-100">Registrar pago externo</button>
+                             </>
                            )}
                            </div>
                         </td>

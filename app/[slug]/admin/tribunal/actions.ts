@@ -73,6 +73,27 @@ export async function approveFinePaymentProof(slug: string, proofId: string) {
   return { success: true as const };
 }
 
+export async function markTeamFinesPaidExternally(slug: string, tournamentId: string, teamId: string, note: string) {
+  if (!(await hasAdminSession(slug))) return { success: false as const, error: 'Sesión administrativa no válida.' };
+  const clientId = await getClientIdBySlug(slug);
+  if (!clientId) return { success: false as const, error: 'Institución no encontrada.' };
+  const safeNote = note.trim();
+  if (safeNote.length < 5) return { success: false as const, error: 'Indica el motivo o soporte del pago externo.' };
+  const supabase = createPrivilegedSupabaseClient();
+  const { data: team } = await supabase.from('teams').select('id,name,categories!inner(tournament_id,tournaments!inner(client_id))').eq('id', teamId).eq('categories.tournament_id', tournamentId).eq('categories.tournaments.client_id', clientId).maybeSingle();
+  if (!team) return { success: false as const, error: 'El equipo no pertenece al torneo seleccionado.' };
+  const { data: matches, error: matchesError } = await supabase.from('matches').select('id,matchdays!inner(categories!inner(tournament_id))').eq('matchdays.categories.tournament_id', tournamentId);
+  if (matchesError) return { success: false as const, error: 'No se pudieron consultar los partidos del torneo.' };
+  const matchIds = (matches || []).map((match: any) => match.id);
+  if (!matchIds.length) return { success: false as const, error: 'El torneo no tiene partidos para actualizar.' };
+  const { data: updated, error } = await supabase.from('match_events').update({ fine_status: 'PAID' }).eq('team_id', teamId).in('match_id', matchIds).in('event_type', ['YELLOW', 'RED']).eq('fine_status', 'UNPAID').select('id');
+  if (error) return { success: false as const, error: 'No se pudieron actualizar las multas.' };
+  await logAuditEvent({ action: 'admin.fines.external_payment', actorType: 'client', actorId: clientId, clientId, targetType: 'team', targetId: teamId, metadata: { slug, tournamentId, teamName: (team as any).name, updatedEvents: updated?.length || 0, note: safeNote, paymentSource: 'EXTERNAL' } });
+  revalidatePath(`/${slug}/admin/tribunal`);
+  revalidatePath(`/${slug}/delegado`);
+  return { success: true as const, data: { updated: updated?.length || 0 } };
+}
+
 export async function getFinePaymentProofUrl(slug: string, proofId: string) {
   if (!(await hasAdminSession(slug))) return { success: false as const, error: 'Sesión administrativa no válida.' };
   const clientId = await getClientIdBySlug(slug);
