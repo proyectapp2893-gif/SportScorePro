@@ -465,13 +465,7 @@ export default function TribunalPage() {
                              <>
                               {(fine.teamBalance?.proof || proofByEvent[fine.id]) ? <button type="button" onClick={async () => { const proof = fine.teamBalance?.proof || proofByEvent[fine.id]; setSelectedProof(proof); setSelectedProofUrl(''); await handleViewProof(proof); }} className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-center text-[10px] font-black uppercase tracking-widest transition-all shadow-md active:scale-95"><Eye size={14}/> Ver comprobante</button> : <span className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-4 py-2.5 text-center text-[10px] font-black uppercase tracking-widest text-slate-400"><Clock size={14}/> Sin comprobante</span>}
                               <button type="button" onClick={() => beginExternalPayment(fine)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-amber-700 hover:bg-amber-100">Registrar pago externo</button>
-                              {externalPaymentTarget?.rowId === fine.id && <div className="mt-2 w-full rounded-2xl border border-amber-200 bg-amber-50 p-3 text-left">
-                                <p className="text-[9px] font-black uppercase tracking-widest text-amber-800">Soporte del pago externo</p>
-                                <p className="mt-1 text-[10px] font-semibold text-amber-700">{externalPaymentTarget?.teamName}</p>
-                                <textarea value={externalPaymentNote} onChange={(event) => setExternalPaymentNote(event.target.value)} rows={2} className="mt-2 w-full rounded-xl border border-amber-200 bg-white p-2 text-xs font-semibold text-slate-800 outline-none focus:border-amber-500" placeholder="Indica el soporte o referencia del pago" />
-                                <div className="mt-2 flex gap-2"><button type="button" onClick={() => setExternalPaymentTarget(null)} disabled={externalPaymentBusy} className="flex-1 rounded-xl bg-white px-2 py-2 text-[9px] font-black uppercase tracking-widest text-slate-500">Cancelar</button><button type="button" onClick={handleExternalPayment} disabled={externalPaymentBusy || externalPaymentNote.trim().length < 5} className="flex-1 rounded-xl bg-amber-600 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-white disabled:opacity-50">{externalPaymentBusy ? 'Guardando…' : 'Confirmar pago'}</button></div>
-                              </div>}
-                             </>
+                              </>
                            )}
                            </div>
                         </td>
@@ -509,6 +503,18 @@ export default function TribunalPage() {
               <div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Comprobante privado</p><h2 className="text-xl font-black uppercase">{selectedProof.players?.name}</h2></div><button type="button" onClick={() => setSelectedProof(null)} className="rounded-xl bg-slate-100 p-2" aria-label="Cerrar"><ArrowLeft size={18}/></button></div>
               {selectedProofUrl ? <iframe src={selectedProofUrl} title="Comprobante de pago" className="h-[55vh] w-full rounded-2xl border border-slate-200" /> : <div className="flex h-40 items-center justify-center text-sm font-bold text-slate-400">Cargando comprobante…</div>}
               <button type="button" onClick={() => handleApproveProof(selectedProof)} className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-emerald-700"><CheckCircle2 size={16} className="mr-2 inline"/> Confirmar pago y habilitar equipo</button>
+            </section>
+          </div>
+        )}
+        {externalPaymentTarget && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/65 p-4" onClick={() => !externalPaymentBusy && setExternalPaymentTarget(null)}>
+            <section role="dialog" aria-modal="true" aria-labelledby="external-payment-title" className="w-full max-w-lg rounded-[2rem] bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+              <div className="flex items-start justify-between gap-4">
+                <div><p className="text-[10px] font-black uppercase tracking-widest text-amber-600">Registro manual</p><h2 id="external-payment-title" className="mt-1 text-xl font-black uppercase text-slate-900">Pago externo</h2><p className="mt-1 text-xs font-bold uppercase text-slate-500">{externalPaymentTarget.teamName}</p></div>
+                <button type="button" onClick={() => setExternalPaymentTarget(null)} disabled={externalPaymentBusy} className="rounded-xl bg-slate-100 px-3 py-2 text-xl leading-none text-slate-500 disabled:opacity-50" aria-label="Cerrar">×</button>
+              </div>
+              <label className="mt-5 block text-[10px] font-black uppercase tracking-widest text-slate-500">Soporte o referencia del pago<textarea value={externalPaymentNote} onChange={(event) => setExternalPaymentNote(event.target.value)} rows={3} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-800 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20" placeholder="Indica el soporte o referencia del pago" /></label>
+              <div className="mt-5 flex gap-3"><button type="button" onClick={() => setExternalPaymentTarget(null)} disabled={externalPaymentBusy} className="flex-1 rounded-xl bg-slate-100 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-600 disabled:opacity-50">Cancelar</button><button type="button" onClick={handleExternalPayment} disabled={externalPaymentBusy || externalPaymentNote.trim().length < 5} className="flex-1 rounded-xl bg-amber-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-amber-600/20 disabled:opacity-50">{externalPaymentBusy ? 'Guardando…' : 'Confirmar pago'}</button></div>
             </section>
           </div>
         )}
