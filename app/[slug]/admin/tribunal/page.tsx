@@ -27,6 +27,9 @@ export default function TribunalPage() {
   const [selectedDisciplinary, setSelectedDisciplinary] = useState<any | null>(null);
   const [disciplinaryComment, setDisciplinaryComment] = useState('');
   const [suspensionMatches, setSuspensionMatches] = useState('');
+  const [externalPaymentTarget, setExternalPaymentTarget] = useState<{ rowId: string; teamId: string; teamName: string } | null>(null);
+  const [externalPaymentNote, setExternalPaymentNote] = useState('Pago confirmado por fuera de la plataforma');
+  const [externalPaymentBusy, setExternalPaymentBusy] = useState(false);
   
   // Estados para los filtros y Pestañas
   const [searchTerm, setSearchTerm] = useState('');
@@ -140,16 +143,26 @@ export default function TribunalPage() {
     }
   };
 
-  const handleExternalPayment = async (fine: any) => {
+  const beginExternalPayment = (fine: any) => {
     const teamId = fine.team_id || fine.teamBalance?.team_id;
     const teamName = fine.teamBalance?.teamName || fine.players?.teams?.name || 'este equipo';
     if (!teamId) return toast.error('No se pudo identificar el equipo.');
-    const note = window.prompt(`Indica el soporte del pago externo de ${teamName}:`, 'Pago confirmado por fuera de la plataforma');
-    if (!note?.trim()) return;
+    setExternalPaymentTarget({ rowId: fine.id, teamId, teamName });
+    setExternalPaymentNote('Pago confirmado por fuera de la plataforma');
+  };
+
+  const handleExternalPayment = async () => {
+    if (!externalPaymentTarget || !externalPaymentNote.trim()) return;
+    setExternalPaymentBusy(true);
     const toastId = toast.loading('Registrando pago externo...');
-    const result = await markTeamFinesPaidExternally(slug, tournamentSettings?.id || selectedTournamentId || '', teamId, note);
-    if (!result.success) return toast.error(result.error, { id: toastId });
+    const result = await markTeamFinesPaidExternally(slug, tournamentSettings?.id || selectedTournamentId || '', externalPaymentTarget.teamId, externalPaymentNote.trim());
+    if (!result.success) {
+      setExternalPaymentBusy(false);
+      return toast.error(result.error, { id: toastId });
+    }
     toast.success(`Pago externo registrado. ${result.data.updated} multa(s) actualizada(s).`, { id: toastId });
+    setExternalPaymentTarget(null);
+    setExternalPaymentBusy(false);
     loadData();
   };
 
@@ -451,7 +464,13 @@ export default function TribunalPage() {
                            ) : (
                              <>
                               {(fine.teamBalance?.proof || proofByEvent[fine.id]) ? <button type="button" onClick={async () => { const proof = fine.teamBalance?.proof || proofByEvent[fine.id]; setSelectedProof(proof); setSelectedProofUrl(''); await handleViewProof(proof); }} className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-center text-[10px] font-black uppercase tracking-widest transition-all shadow-md active:scale-95"><Eye size={14}/> Ver comprobante</button> : <span className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-4 py-2.5 text-center text-[10px] font-black uppercase tracking-widest text-slate-400"><Clock size={14}/> Sin comprobante</span>}
-                              <button type="button" onClick={() => handleExternalPayment(fine)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-amber-700 hover:bg-amber-100">Registrar pago externo</button>
+                              <button type="button" onClick={() => beginExternalPayment(fine)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-amber-700 hover:bg-amber-100">Registrar pago externo</button>
+                              {externalPaymentTarget?.rowId === fine.id && <div className="mt-2 w-full rounded-2xl border border-amber-200 bg-amber-50 p-3 text-left">
+                                <p className="text-[9px] font-black uppercase tracking-widest text-amber-800">Soporte del pago externo</p>
+                                <p className="mt-1 text-[10px] font-semibold text-amber-700">{externalPaymentTarget?.teamName}</p>
+                                <textarea value={externalPaymentNote} onChange={(event) => setExternalPaymentNote(event.target.value)} rows={2} className="mt-2 w-full rounded-xl border border-amber-200 bg-white p-2 text-xs font-semibold text-slate-800 outline-none focus:border-amber-500" placeholder="Indica el soporte o referencia del pago" />
+                                <div className="mt-2 flex gap-2"><button type="button" onClick={() => setExternalPaymentTarget(null)} disabled={externalPaymentBusy} className="flex-1 rounded-xl bg-white px-2 py-2 text-[9px] font-black uppercase tracking-widest text-slate-500">Cancelar</button><button type="button" onClick={handleExternalPayment} disabled={externalPaymentBusy || externalPaymentNote.trim().length < 5} className="flex-1 rounded-xl bg-amber-600 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-white disabled:opacity-50">{externalPaymentBusy ? 'Guardando…' : 'Confirmar pago'}</button></div>
+                              </div>}
                              </>
                            )}
                            </div>
