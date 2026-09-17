@@ -13,7 +13,7 @@ import StartingLineupModal from './modals/StartingLineupModal';
 import WalkoverModal from './modals/WalkoverModal';
 import MatchSummaryModal from './modals/MatchSummaryModal';
 import PenaltyShootout from './PenaltyShootout';
-import { applyFootballWalkover, changeMatchPeriod, finishFootballMatch, getFootballMatchRoster, recordFootballMatchEvent, resetFootballTimer, startLiveMatch, revertLastScoringEvent, removeYellowCardEvent } from '../actions';
+import { applyFootballWalkover, changeMatchPeriod, finishFootballMatch, getFootballMatchRoster, recordFootballMatchEvent, registerMatchParticipants, resetFootballTimer, startLiveMatch, revertLastScoringEvent, removeYellowCardEvent } from '../actions';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
 import { applyDemoWalkover, changeDemoMatchPeriod, finishDemoFootballMatch, getDemoFootballRoster, recordDemoFootballEvent, startDemoFootballMatch, revertDemoLastFootballGoal, removeDemoYellowCard } from '@/app/lib/demo/actions';
 import { evaluatePlayerEligibility, type PlayerEligibility } from '@/app/lib/competition/player-eligibility';
@@ -42,6 +42,8 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   const [showStartingLineupModal, setShowStartingLineupModal] = useState(false);
   const [homeStartingLineup, setHomeStartingLineup] = useState<string[]>([]);
   const [awayStartingLineup, setAwayStartingLineup] = useState<string[]>([]);
+  const [homeParticipants, setHomeParticipants] = useState<string[]>([]);
+  const [awayParticipants, setAwayParticipants] = useState<string[]>([]);
 
   const [showWOModal, setShowWOModal] = useState(false);
   const [showPeriodStartOverlay, setShowPeriodStartOverlay] = useState(false);
@@ -106,6 +108,8 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
          if (startingEvents && startingEvents.length > 0) {
             setHomeStartingLineup(startingEvents.filter(e => e.team_id === match.home_team.id).map(e => e.player_id));
             setAwayStartingLineup(startingEvents.filter(e => e.team_id === match.away_team.id).map(e => e.player_id));
+            setHomeParticipants(startingEvents.filter(e => e.team_id === match.home_team.id).map(e => e.player_id));
+            setAwayParticipants(startingEvents.filter(e => e.team_id === match.away_team.id).map(e => e.player_id));
          }
       }
     }
@@ -434,6 +438,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   const confirmFinishMatch = async () => {
     setShowSummaryModal(false); setLoading(true); const toastId = toast.loading('Cerrando acta...');
     try {
+      if (!isDemo) await registerMatchParticipants({ slug, matchId: match.id, participants: [...homeParticipants.map(playerId => ({ playerId, teamId: match.home_team.id })), ...awayParticipants.map(playerId => ({ playerId, teamId: match.away_team.id }))] });
       if (isDemo) finishDemoFootballMatch(match.id, homeScore, awayScore, currentPeriod); else await finishFootballMatch({
         slug,
         matchId: match.id,
@@ -643,13 +648,13 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
           <button type="button" aria-expanded={showTimeline} aria-controls="match-event-timeline" onClick={() => setShowTimeline((visible) => !visible)} className="ml-auto flex min-h-10 items-center gap-2 rounded-xl border border-white/15 bg-slate-950/90 px-4 py-2 text-[9px] font-black uppercase tracking-widest text-slate-300 shadow-lg transition hover:bg-slate-900 hover:text-white">
             <span>{showTimeline ? 'Ocultar eventos' : 'Últimos eventos'}</span><span className="rounded-full bg-slate-800 px-2 py-0.5 text-[8px] text-slate-400">{liveEvents.length}</span>
           </button>
-          {showTimeline && <section id="match-event-timeline" aria-label="Línea de tiempo del partido" className="mt-2 max-h-28 overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/90 p-3 backdrop-blur-md">
-            <div className="mb-2 flex items-center justify-between text-[9px] font-black uppercase tracking-widest text-slate-400"><span>Últimos eventos</span><span>{liveEvents.length} registrados</span></div>
-            {liveEvents.length === 0 ? <p className="text-[10px] font-semibold text-slate-500">Aún no hay eventos registrados.</p> : <div className="space-y-1">{liveEvents.slice(-6).reverse().map((event: any) => {
+          {showTimeline && <section id="match-event-timeline" aria-label="Línea de tiempo del partido" className="mt-2 max-h-[min(60vh,32rem)] overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/95 p-4 backdrop-blur-md landscape:w-[min(92vw,32rem)]">
+            <div className="mb-3 flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-slate-400"><span>Eventos del partido</span><span>{liveEvents.length} registrados</span></div>
+            {liveEvents.length === 0 ? <p className="text-xs font-semibold text-slate-500">Aún no hay eventos registrados.</p> : <div className="space-y-1.5">{liveEvents.slice().reverse().map((event: any) => {
               const content = <><span className="w-10 shrink-0 text-slate-400">{event.minute_record || '--'}</span><span className="w-5 shrink-0" aria-hidden="true">{event.event_type === 'GOAL' ? '⚽' : event.event_type === 'YELLOW' ? '🟨' : event.event_type === 'RED' ? '🟥' : event.event_type === 'SUB' ? '🔄' : '•'}</span><span className="truncate">{event.players?.name || 'Evento de equipo'} · {event.event_type}</span></>;
               return event.event_type === 'YELLOW'
-                ? <button type="button" key={event.id} onClick={() => setYellowCorrectionEvent(event)} aria-label={`Corregir tarjeta amarilla de ${event.players?.name || 'jugador'}`} className="flex w-full items-center gap-2 rounded-lg text-left text-[10px] font-bold text-white hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400">{content}</button>
-                : <div key={event.id} className="flex items-center gap-2 text-[10px] font-bold text-white">{content}</div>;
+                ? <button type="button" key={event.id} onClick={() => setYellowCorrectionEvent(event)} aria-label={`Corregir tarjeta amarilla de ${event.players?.name || 'jugador'}`} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm font-bold text-white hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400">{content}</button>
+                : <div key={event.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-bold text-white">{content}</div>;
             })}</div>}
           </section>}
         </div>
@@ -679,7 +684,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
         
         {showWOModal && <WalkoverModal match={match} loading={loading} onClose={() => setShowWOModal(false)} onExecuteWO={handleExecuteWO} />}
         
-        {showSummaryModal && <MatchSummaryModal match={match} homeScore={homeScore} awayScore={awayScore} homePenaltyScore={homePenaltyScore} awayPenaltyScore={awayPenaltyScore} currentPeriod={currentPeriod} liveEvents={liveEvents} loading={loading} onClose={() => setShowSummaryModal(false)} onConfirm={confirmFinishMatch} />}
+        {showSummaryModal && <MatchSummaryModal match={match} homeScore={homeScore} awayScore={awayScore} homePenaltyScore={homePenaltyScore} awayPenaltyScore={awayPenaltyScore} currentPeriod={currentPeriod} liveEvents={liveEvents} loading={loading} homeRoster={homeRoster} awayRoster={awayRoster} homeParticipants={homeParticipants} awayParticipants={awayParticipants} toggleParticipant={(team, playerId) => team === 'HOME' ? setHomeParticipants(current => current.includes(playerId) ? current.filter(id => id !== playerId) : [...current, playerId]) : setAwayParticipants(current => current.includes(playerId) ? current.filter(id => id !== playerId) : [...current, playerId])} onClose={() => setShowSummaryModal(false)} onConfirm={confirmFinishMatch} />}
         
         {showPeriodStartOverlay && (
            <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/80 backdrop-blur-md">
