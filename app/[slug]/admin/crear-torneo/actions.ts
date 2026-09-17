@@ -34,7 +34,6 @@ export async function saveTournamentWizard(slug: string, input: SaveTournamentIn
   if (scheduleDates.length === 0) return { success: false, error: 'Configura la fecha inicial del torneo.' };
   const scheduleWeekdays = Array.from(new Set((Array.isArray(input.tournament.schedule_weekdays) ? input.tournament.schedule_weekdays : [6]).map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))).sort((a, b) => a - b);
   if (scheduleWeekdays.length === 0) return { success: false, error: 'Selecciona al menos un día de competencia.' };
-  if (!scheduleWeekdays.includes(new Date(`${scheduleDates[0]}T00:00:00Z`).getUTCDay())) return { success: false, error: 'La fecha inicial debe coincidir con uno de los días seleccionados.' };
   const allowedVenues = new Set(['Cancha 1', 'Cancha 2']);
   const availableVenues = Array.from(new Set((Array.isArray(input.tournament.available_venues) ? input.tournament.available_venues : []).map(String).filter((venue) => allowedVenues.has(venue))));
   if (availableVenues.length === 0) return { success: false, error: 'Selecciona al menos una cancha disponible.' };

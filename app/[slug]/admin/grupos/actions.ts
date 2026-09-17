@@ -114,9 +114,9 @@ export async function reorganizeCategoryFixtureTimes(slug: string, categoryId: s
   const calculatedDates = pendingMatchdays.map((matchday: any) => {
     const scheduleIndex = allMatchdays.findIndex((item: any) => item.id === matchday.id);
     const date = new Date(firstDate);
+    if (scheduleIndex === 0) return date.toISOString().slice(0, 10);
     let remaining = scheduleIndex;
     while (remaining > 0) { date.setUTCDate(date.getUTCDate() + 1); if (weekdays.includes(date.getUTCDay())) remaining -= 1; }
-    while (!weekdays.includes(date.getUTCDay())) date.setUTCDate(date.getUTCDate() + 1);
     return date.toISOString().slice(0, 10);
   });
 
