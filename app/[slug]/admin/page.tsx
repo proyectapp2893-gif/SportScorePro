@@ -6,7 +6,7 @@ import { supabase } from '../../supabase';
 import { Trophy, LogOut, ArrowRight, LayoutDashboard, Users, CalendarDays, Plus, School, MonitorPlay, BarChart3, GitMerge, Settings, Trash2, FileText, X, Download, Activity, Copy, ExternalLink, Scale, Pencil, UserCog, ClipboardList } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AppSelect from '@/app/components/AppSelect';
-import { logoutClientAccess } from './actions';
+import { getAdminTournaments, logoutClientAccess } from './actions';
 import { deleteTournament } from './crear-torneo/actions';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '../../lib/sports/rules';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
@@ -109,10 +109,12 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
 
   async function fetchTournaments() {
     if (!clientInfo?.id) return;
-    const [{ data: tournamentData }, { data: categoryData }] = await Promise.all([
-      supabase.from('tournaments').select('*').eq('client_id', clientInfo.id).order('created_at', { ascending: false }),
-      supabase.from('categories').select('id, name, tournament_id, sports(name), tournaments!inner(client_id)').eq('tournaments.client_id', clientInfo.id),
-    ]);
+    const result = await getAdminTournaments(slug);
+    if (!result.success) {
+      toast.error(result.error);
+      return;
+    }
+    const { tournaments: tournamentData, categories: categoryData } = result;
 
     if (tournamentData) {
       setTournaments(tournamentData);
