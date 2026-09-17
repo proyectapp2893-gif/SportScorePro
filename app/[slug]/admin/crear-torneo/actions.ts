@@ -31,12 +31,14 @@ export async function saveTournamentWizard(slug: string, input: SaveTournamentIn
   if (scheduleTimeSlots.length === 0) return { success: false, error: 'Configura al menos un horario válido para el torneo.' };
   const rawScheduleDates = Array.isArray(input.tournament.schedule_dates) ? input.tournament.schedule_dates : [];
   const scheduleDates = rawScheduleDates.map((value) => String(value).trim()).filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value)).sort();
-  if (scheduleDates.length === 0) return { success: false, error: 'Configura el primer sábado del torneo.' };
-  if (new Date(`${scheduleDates[0]}T00:00:00Z`).getUTCDay() !== 6) return { success: false, error: 'La fecha inicial debe corresponder a un sábado.' };
+  if (scheduleDates.length === 0) return { success: false, error: 'Configura la fecha inicial del torneo.' };
+  const scheduleWeekdays = Array.from(new Set((Array.isArray(input.tournament.schedule_weekdays) ? input.tournament.schedule_weekdays : [6]).map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))).sort((a, b) => a - b);
+  if (scheduleWeekdays.length === 0) return { success: false, error: 'Selecciona al menos un día de competencia.' };
+  if (!scheduleWeekdays.includes(new Date(`${scheduleDates[0]}T00:00:00Z`).getUTCDay())) return { success: false, error: 'La fecha inicial debe coincidir con uno de los días seleccionados.' };
   const allowedVenues = new Set(['Cancha 1', 'Cancha 2']);
   const availableVenues = Array.from(new Set((Array.isArray(input.tournament.available_venues) ? input.tournament.available_venues : []).map(String).filter((venue) => allowedVenues.has(venue))));
   if (availableVenues.length === 0) return { success: false, error: 'Selecciona al menos una cancha disponible.' };
-  const safeTournament: Record<string, unknown> = { ...input.tournament, schedule_time_slots: scheduleTimeSlots, schedule_dates: [scheduleDates[0]], available_venues: availableVenues, fixture_visible_to_delegates: Boolean(input.tournament.fixture_visible_to_delegates), fixture_visible_to_public: Boolean(input.tournament.fixture_visible_to_public) };
+  const safeTournament: Record<string, unknown> = { ...input.tournament, schedule_time_slots: scheduleTimeSlots, schedule_dates: [scheduleDates[0]], schedule_weekdays: scheduleWeekdays, available_venues: availableVenues, fixture_visible_to_delegates: Boolean(input.tournament.fixture_visible_to_delegates), fixture_visible_to_public: Boolean(input.tournament.fixture_visible_to_public) };
 
   const supabase = createServerSupabaseAdminClient();
   if (safeTournament.tournament_format === 'THREE_STAGE_35') {

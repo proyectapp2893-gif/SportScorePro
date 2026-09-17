@@ -76,7 +76,7 @@ export async function reorganizeCategoryFixtureTimes(slug: string, categoryId: s
   const supabase = createServerSupabaseAdminClient();
   const { data: category } = await supabase
     .from('categories')
-    .select('id, tournaments!inner(id, schedule_time_slots, schedule_dates, available_venues)')
+    .select('id, tournaments!inner(id, schedule_time_slots, schedule_dates, schedule_weekdays, available_venues)')
     .eq('id', categoryId)
     .maybeSingle();
   const tournament = Array.isArray(category?.tournaments) ? category.tournaments[0] : category?.tournaments;
@@ -92,8 +92,9 @@ export async function reorganizeCategoryFixtureTimes(slug: string, categoryId: s
     .map((value: unknown) => String(value).trim())
     .filter((value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)) as string[];
   if (dates.length === 0) return { success: false, error: 'Configura primero los días disponibles del torneo.' };
-  const firstSaturday = new Date(`${dates[0]}T00:00:00Z`);
-  if (firstSaturday.getUTCDay() !== 6) return { success: false, error: 'La fecha inicial configurada debe ser sábado.' };
+  const firstDate = new Date(`${dates[0]}T00:00:00Z`);
+  const weekdays = Array.from(new Set((Array.isArray(tournament?.schedule_weekdays) ? tournament.schedule_weekdays : [6]).map(Number).filter((day: number) => Number.isInteger(day) && day >= 0 && day <= 6))).sort((a, b) => a - b);
+  if (weekdays.length === 0) return { success: false, error: 'Configura al menos un día de competencia.' };
 
   const { data: matches, error } = await supabase
     .from('matches')
@@ -112,8 +113,10 @@ export async function reorganizeCategoryFixtureTimes(slug: string, categoryId: s
   const pendingMatchdays = allMatchdays.filter((matchday: any) => !lockedMatchdayIds.has(matchday.id));
   const calculatedDates = pendingMatchdays.map((matchday: any) => {
     const scheduleIndex = allMatchdays.findIndex((item: any) => item.id === matchday.id);
-    const date = new Date(firstSaturday);
-    date.setUTCDate(firstSaturday.getUTCDate() + (scheduleIndex * 7));
+    const date = new Date(firstDate);
+    let remaining = scheduleIndex;
+    while (remaining > 0) { date.setUTCDate(date.getUTCDate() + 1); if (weekdays.includes(date.getUTCDay())) remaining -= 1; }
+    while (!weekdays.includes(date.getUTCDay())) date.setUTCDate(date.getUTCDate() + 1);
     return date.toISOString().slice(0, 10);
   });
 

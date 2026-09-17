@@ -51,6 +51,7 @@ export default function CrearTorneoPage() {
   const [fpRedFine, setFpRedFine] = useState<number | ''>(0);
   const [scheduleTimeSlots, setScheduleTimeSlots] = useState<string[]>(['08:00', '10:00', '12:00']);
   const [scheduleDates, setScheduleDates] = useState<string[]>(['']);
+  const [scheduleWeekdays, setScheduleWeekdays] = useState<number[]>([6]);
   const [availableVenues, setAvailableVenues] = useState<string[]>(['Cancha 1', 'Cancha 2']);
   const [fixtureVisibleToDelegates, setFixtureVisibleToDelegates] = useState(false);
   const [fixtureVisibleToPublic, setFixtureVisibleToPublic] = useState(false);
@@ -131,6 +132,7 @@ export default function CrearTorneoPage() {
       setFpRedFine(tournament.fine_red_amount || 0);
       setScheduleTimeSlots(Array.isArray(tournament.schedule_time_slots) && tournament.schedule_time_slots.length > 0 ? tournament.schedule_time_slots : ['08:00', '10:00', '12:00']);
       setScheduleDates(Array.isArray(tournament.schedule_dates) && tournament.schedule_dates.length > 0 ? tournament.schedule_dates : ['']);
+      setScheduleWeekdays(Array.isArray(tournament.schedule_weekdays) && tournament.schedule_weekdays.length > 0 ? tournament.schedule_weekdays : [6]);
       setAvailableVenues(Array.isArray(tournament.available_venues) && tournament.available_venues.length > 0 ? tournament.available_venues : ['Cancha 1', 'Cancha 2']);
       setFixtureVisibleToDelegates(Boolean(tournament.fixture_visible_to_delegates));
       setFixtureVisibleToPublic(Boolean(tournament.fixture_visible_to_public));
@@ -377,6 +379,7 @@ export default function CrearTorneoPage() {
         fine_red_amount: Number(fpRedFine) || 0,
         schedule_time_slots: Array.from(new Set(scheduleTimeSlots.filter(Boolean))).sort(),
         schedule_dates: scheduleDates.filter(Boolean).sort(),
+        schedule_weekdays: scheduleWeekdays,
         available_venues: availableVenues,
         fixture_visible_to_delegates: fixtureVisibleToDelegates,
         fixture_visible_to_public: fixtureVisibleToPublic,
@@ -618,14 +621,18 @@ export default function CrearTorneoPage() {
                   <div className="mt-6 border-t border-blue-100 pt-6">
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                       <div>
-                        <label className="flex items-center gap-2 text-sm font-black uppercase tracking-widest text-blue-800"><CalendarDays size={18} /> Primer sábado del torneo</label>
-                        <p className="mt-1 text-[10px] font-bold uppercase leading-relaxed tracking-wider text-slate-500">Las jornadas siguientes se calcularán automáticamente cada siete días.</p>
+                        <label className="flex items-center gap-2 text-sm font-black uppercase tracking-widest text-blue-800"><CalendarDays size={18} /> Días de competencia</label>
+                        <p className="mt-1 text-[10px] font-bold uppercase leading-relaxed tracking-wider text-slate-500">Elige uno o varios días. Las jornadas se asignarán en esos días, en orden.</p>
                       </div>
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-7">
+                      {[['Lunes',1],['Martes',2],['Miércoles',3],['Jueves',4],['Viernes',5],['Sábado',6],['Domingo',0]].map(([label, value]) => <label key={String(value)} className={`flex cursor-pointer items-center justify-center rounded-xl border px-2 py-3 text-[10px] font-black uppercase tracking-wider ${scheduleWeekdays.includes(Number(value)) ? 'border-blue-400 bg-blue-100 text-blue-800' : 'border-slate-200 bg-white text-slate-400'}`}><input type="checkbox" checked={scheduleWeekdays.includes(Number(value))} onChange={(event) => setScheduleWeekdays((current) => event.target.checked ? [...new Set([...current, Number(value)])] : current.filter((day) => day !== Number(value)))} className="mr-2 h-4 w-4" />{label}</label>)}
                     </div>
                     <div className="mt-5 max-w-sm rounded-xl border border-blue-100 bg-white p-2">
                       <input type="date" value={scheduleDates[0] || ''} onChange={(event) => setScheduleDates([event.target.value])} className="w-full bg-transparent px-3 py-2 text-sm font-black text-slate-800 outline-none" />
                     </div>
-                    {!scheduleDates[0] && <p className="mt-4 rounded-xl border border-dashed border-blue-200 bg-white p-4 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Selecciona el primer sábado de competencia</p>}
+                    {!scheduleDates[0] && <p className="mt-4 rounded-xl border border-dashed border-blue-200 bg-white p-4 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Selecciona la fecha inicial del torneo</p>}
+                    {scheduleWeekdays.length === 0 && <p className="mt-3 rounded-xl border border-dashed border-amber-200 bg-amber-50 p-3 text-center text-[10px] font-black uppercase tracking-widest text-amber-700">Selecciona al menos un día de competencia</p>}
                   </div>
                   <div className="mt-6 grid gap-4 border-t border-blue-100 pt-6 md:grid-cols-3">
                     <div className="rounded-2xl border border-blue-100 bg-white p-4">
