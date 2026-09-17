@@ -3,7 +3,7 @@
 import { hasAdminSession } from '@/app/lib/auth';
 import { logAuditEvent } from '@/app/lib/audit';
 import { getMatchScoreForStandings, getResultPoints, getSportRules, compareTeamsForStandings } from '@/app/lib/sports/rules';
-import { generateGroupStage, generatePlacementFinals, generateRoundRobin, seedTwoGroups, type GeneratedRound } from '@/app/lib/tournaments/three-stage';
+import { generateFinalAndThirdPlace, generateGroupStage, generatePlacementFinals, generateRoundRobin, generateSemifinals, seedTwoGroups, type GeneratedRound } from '@/app/lib/tournaments/three-stage';
 import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import { categoryBelongsToClientSlug, getClientIdBySlug } from '@/app/lib/tenant';
 
@@ -76,7 +76,71 @@ export async function getThreeStageStatus(slug: string, categoryId: string): Pro
   const standings = active?.stage_type === 'GROUPS'
     ? { A: await rankStage(auth.supabase, active.id, 'A'), B: await rankStage(auth.supabase, active.id, 'B') }
     : active ? { GENERAL: await rankStage(auth.supabase, active.id) } : {};
-  return { success: true, data: { enabled: (category as any)?.tournaments?.tournament_format === 'THREE_STAGE_35', stages: stages || [], standings } };
+  const format = (category as any)?.tournaments?.tournament_format;
+  return { success: true, data: { enabled: format === 'THREE_STAGE_35' || format === 'ROUND_ROBIN_2LEG_SEMIFINALS', format, stages: stages || [], standings } };
+}
+
+export async function startRoundRobinSemifinalsTournament(slug: string, categoryId: string): Promise<StageResult> {
+  const auth = await authorize(slug, categoryId); if (!auth) return { success: false, error: 'Acceso no autorizado.' };
+  const { data: category } = await auth.supabase.from('categories').select('id, tournaments!inner(tournament_format)').eq('id', categoryId).single();
+  if ((category as any)?.tournaments?.tournament_format !== 'ROUND_ROBIN_2LEG_SEMIFINALS') return { success: false, error: 'La categoría no usa este formato.' };
+  const { data: teams } = await auth.supabase.from('teams').select('id').eq('category_id', categoryId).order('name');
+  if (!teams || teams.length < 4) return { success: false, error: 'Este formato requiere al menos 4 equipos.' };
+  const { count } = await auth.supabase.from('competition_stages').select('id', { count: 'exact', head: true }).eq('category_id', categoryId);
+  if (count) return { success: false, error: 'Las fases ya fueron inicializadas.' };
+  const { data: stage, error } = await auth.supabase.from('competition_stages').insert({ category_id: categoryId, stage_number: 1, name: 'Fase regular · Todos contra todos (ida y vuelta)', stage_type: 'LEAGUE', status: 'ACTIVE', legs: 2 }).select('id').single();
+  if (error || !stage) return { success: false, error: 'No se pudo crear la fase regular.' };
+  await auth.supabase.from('stage_team_entries').insert(teams.map((team, index) => ({ stage_id: stage.id, team_id: team.id, seed: index + 1 })));
+  try { await insertStageFixture(auth.supabase, categoryId, stage.id, generateRoundRobin(teams, 2), 0); } catch (error) { return { success: false, error: error instanceof Error ? error.message : 'No se pudo generar la fase regular.' }; }
+  await logAuditEvent({ action: 'admin.stage.start', actorType: 'client', clientId: auth.clientId, targetType: 'category', targetId: categoryId, metadata: { slug, format: 'ROUND_ROBIN_2LEG_SEMIFINALS', stage: 1 } });
+  return { success: true, data: undefined };
+}
+
+export async function advanceRoundRobinSemifinalsTournament(slug: string, categoryId: string): Promise<StageResult> {
+  const auth = await authorize(slug, categoryId); if (!auth) return { success: false, error: 'Acceso no autorizado.' };
+  const { data: category } = await auth.supabase.from('categories').select('id, tournaments!inner(tournament_format)').eq('id', categoryId).single();
+  if ((category as any)?.tournaments?.tournament_format !== 'ROUND_ROBIN_2LEG_SEMIFINALS') return { success: false, error: 'La categoría no usa este formato.' };
+  const { data: active } = await auth.supabase.from('competition_stages').select('id, stage_number').eq('category_id', categoryId).eq('status', 'ACTIVE').maybeSingle();
+  if (!active) return { success: false, error: 'No hay una fase activa.' };
+  if (!(await ensureStageComplete(auth.supabase, active.id))) return { success: false, error: 'Todos los partidos de la fase deben estar finalizados.' };
+  if (active.stage_number === 1) {
+    const ranked = await rankStage(auth.supabase, active.id);
+    if (ranked.length < 4) return { success: false, error: 'No fue posible resolver los cuatro clasificados.' };
+    const qualified = ranked.slice(0, 4);
+    const { data: next, error } = await auth.supabase.from('competition_stages').insert({ category_id: categoryId, stage_number: 2, name: 'Semifinales · 1 vs 4 y 2 vs 3', stage_type: 'FINALS', status: 'ACTIVE', legs: 1 }).select('id').single();
+    if (error || !next) return { success: false, error: 'No se pudo crear las semifinales.' };
+    await auth.supabase.from('stage_team_entries').insert(qualified.map((team, index) => ({ stage_id: next.id, team_id: team.id, seed: index + 1, qualified_from_position: index + 1 })));
+    await insertStageFixture(auth.supabase, categoryId, next.id, generateSemifinals(qualified.map((team) => team.id)), 100);
+  } else if (active.stage_number === 2) {
+    const { data: matches } = await auth.supabase.from('matches').select('home_team_id, away_team_id, home_score, away_score, home_sets, away_sets, match_type, matchdays!inner(stage_id), home_team:teams!home_team_id(categories(sports(name)))').eq('matchdays.stage_id', active.id).eq('status', 'FINISHED');
+    if (!matches || matches.length !== 2) return { success: false, error: 'Se requieren las dos semifinales finalizadas.' };
+    const winners: string[] = []; const losers: string[] = [];
+    for (const match of matches) {
+      const rules = getSportRules((match as any)?.home_team?.categories?.sports?.name); const score = getMatchScoreForStandings(match, rules);
+      if (score.home === score.away) return { success: false, error: 'Las semifinales deben tener un ganador definido.' };
+      if (score.home > score.away) { winners.push(match.home_team_id); losers.push(match.away_team_id); } else { winners.push(match.away_team_id); losers.push(match.home_team_id); }
+    }
+    const { data: next, error } = await auth.supabase.from('competition_stages').insert({ category_id: categoryId, stage_number: 3, name: 'Final y partido por el tercer puesto', stage_type: 'FINALS', status: 'ACTIVE', legs: 1 }).select('id').single();
+    if (error || !next) return { success: false, error: 'No se pudo crear la fase final.' };
+    await auth.supabase.from('stage_team_entries').insert([...winners, ...losers].map((teamId) => ({ stage_id: next.id, team_id: teamId })));
+    await insertStageFixture(auth.supabase, categoryId, next.id, generateFinalAndThirdPlace(winners[0], losers[0], winners[1], losers[1]), 200);
+  } else {
+    const { data: finalMatches } = await auth.supabase.from('matches').select('home_team_id, away_team_id, home_score, away_score, home_sets, away_sets, match_type, matchdays!inner(stage_id), home_team:teams!home_team_id(categories(sports(name)))').eq('matchdays.stage_id', active.id).eq('status', 'FINISHED');
+    if (!finalMatches || finalMatches.length !== 2) return { success: false, error: 'Se requieren final y tercer puesto finalizados.' };
+    for (const match of finalMatches) {
+      const rules = getSportRules((match as any)?.home_team?.categories?.sports?.name); const score = getMatchScoreForStandings(match, rules);
+      if (score.home === score.away) return { success: false, error: 'Los partidos finales deben tener un ganador definido.' };
+      const winner = score.home > score.away ? match.home_team_id : match.away_team_id; const loser = score.home > score.away ? match.away_team_id : match.home_team_id;
+      const base = match.match_type === 'FINAL' ? 1 : 3;
+      await auth.supabase.from('stage_team_entries').update({ final_position: base }).eq('stage_id', active.id).eq('team_id', winner);
+      await auth.supabase.from('stage_team_entries').update({ final_position: base + 1 }).eq('stage_id', active.id).eq('team_id', loser);
+    }
+    await auth.supabase.from('competition_stages').update({ status: 'COMPLETED', completed_at: new Date().toISOString() }).eq('id', active.id);
+    return { success: true, data: undefined };
+  }
+  await auth.supabase.from('competition_stages').update({ status: 'COMPLETED', completed_at: new Date().toISOString() }).eq('id', active.id);
+  await logAuditEvent({ action: 'admin.stage.advance', actorType: 'client', clientId: auth.clientId, targetType: 'category', targetId: categoryId, metadata: { slug, format: 'ROUND_ROBIN_2LEG_SEMIFINALS', fromStage: active.stage_number } });
+  return { success: true, data: undefined };
 }
 
 export async function startThreeStageTournament(slug: string, categoryId: string): Promise<StageResult> {

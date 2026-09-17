@@ -555,6 +555,10 @@ export default function CrearTorneoPage() {
                       <div className="w-12 h-12 rounded-2xl bg-purple-100 text-purple-600 flex items-center justify-center"><Crown size={24}/></div>
                       <div><h5 className="font-black uppercase text-sm text-slate-900 mb-1">Formato Loyola</h5><p className="text-xs text-slate-500 font-medium">Fase regular + Playoffs. Desempate primario por Fair Play. Empates a penales.</p></div>
                     </button>
+                    <button onClick={() => setTournamentFormat('ROUND_ROBIN_2LEG_SEMIFINALS')} className={`text-left p-6 rounded-3xl border-2 transition-all flex flex-col gap-4 ${tournamentFormat === 'ROUND_ROBIN_2LEG_SEMIFINALS' ? 'border-blue-600 bg-blue-50 shadow-md' : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-lg'}`}>
+                      <div className="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center"><GitMerge size={24}/></div>
+                      <div><h5 className="font-black uppercase text-sm text-slate-900 mb-1">Liga a dos vueltas · Semifinales</h5><p className="text-xs text-slate-500 font-medium">Todos contra todos ida y vuelta. El último queda eliminado; 1.º–4.º juegan semifinales, final y tercer puesto.</p></div>
+                    </button>
                     <button onClick={() => setTournamentFormat('CUSTOM')} className={`text-left p-6 rounded-3xl border-2 transition-all flex flex-col gap-4 ${tournamentFormat === 'CUSTOM' ? 'border-blue-600 bg-blue-50 shadow-md' : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-lg'}`}>
                       <div className="w-12 h-12 rounded-2xl bg-slate-200 text-slate-600 flex items-center justify-center"><Settings size={24}/></div>
                       <div><h5 className="font-black uppercase text-sm text-slate-900 mb-1">Libre (Custom)</h5><p className="text-xs text-slate-500 font-medium">Constructor manual. Activa o desactiva grupos y llaves a medida.</p></div>

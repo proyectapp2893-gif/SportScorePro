@@ -1,5 +1,5 @@
 export type FixtureTeam = { id: string; seed?: number; groupName?: 'A' | 'B' };
-export type GeneratedMatch = { homeTeamId: string; awayTeamId: string; leg: number; groupName?: string; matchType?: 'LEAGUE' | 'GROUP' | 'GOLD_FINAL' | 'SILVER_FINAL' };
+export type GeneratedMatch = { homeTeamId: string; awayTeamId: string; leg: number; groupName?: string; matchType?: 'LEAGUE' | 'GROUP' | 'GOLD_FINAL' | 'SILVER_FINAL' | 'SEMIFINAL' | 'FINAL' | 'THIRD_PLACE' };
 export type GeneratedRound = { roundNumber: number; matches: GeneratedMatch[] };
 
 function rotate<T>(teams: Array<T | null>) {
@@ -58,5 +58,20 @@ export function generatePlacementFinals(groupA: string[], groupB: string[]): Gen
   return [{ roundNumber: 1, matches: [
     { homeTeamId: groupA[0], awayTeamId: groupB[0], leg: 1, matchType: 'GOLD_FINAL' },
     { homeTeamId: groupA[1], awayTeamId: groupB[1], leg: 1, matchType: 'SILVER_FINAL' },
+  ] }];
+}
+
+export function generateSemifinals(rankedTeamIds: string[]): GeneratedRound[] {
+  if (rankedTeamIds.length < 4) throw new Error('Se requieren cuatro equipos para las semifinales.');
+  return [{ roundNumber: 1, matches: [
+    { homeTeamId: rankedTeamIds[0], awayTeamId: rankedTeamIds[3], leg: 1, matchType: 'SEMIFINAL' },
+    { homeTeamId: rankedTeamIds[1], awayTeamId: rankedTeamIds[2], leg: 1, matchType: 'SEMIFINAL' },
+  ] }];
+}
+
+export function generateFinalAndThirdPlace(winnerOne: string, loserOne: string, winnerTwo: string, loserTwo: string): GeneratedRound[] {
+  return [{ roundNumber: 1, matches: [
+    { homeTeamId: winnerOne, awayTeamId: winnerTwo, leg: 1, matchType: 'FINAL' },
+    { homeTeamId: loserOne, awayTeamId: loserTwo, leg: 1, matchType: 'THIRD_PLACE' },
   ] }];
 }

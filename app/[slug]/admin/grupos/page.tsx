@@ -10,7 +10,7 @@ import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 're
 import { createCategoryFixture, deleteCategoryFixture, randomizeCategoryGroups, reorganizeCategoryFixtureTimes, updateFixtureMatch, updateTeamGroup, updateTournamentFixtureVisibility, updateTournamentPublicFixtureVisibility } from './actions';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '../../../lib/sports/rules';
 import AppSelect from '@/app/components/AppSelect';
-import { advanceThreeStageTournament, getThreeStageStatus, startThreeStageTournament } from './stage-actions';
+import { advanceRoundRobinSemifinalsTournament, advanceThreeStageTournament, getThreeStageStatus, startRoundRobinSemifinalsTournament, startThreeStageTournament } from './stage-actions';
 import { findTeamsMissingFromEveryRegularRound, generateBalancedRoundRobin, inferMissingTeamByes } from '@/app/lib/tournaments/byes';
 import AppPortal from '@/app/components/AppPortal';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
@@ -87,7 +87,7 @@ function FixtureContent() {
         setClientId(client.id);
         const categoriesQuery = () => supabase
           .from('categories')
-          .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates, fixture_visible_to_public), sports(name)')
+          .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates, fixture_visible_to_public, tournament_format), sports(name)')
           .eq('tournaments.client_id', client.id)
           .order('name');
         let { data: catData, error: categoriesError } = await categoriesQuery();
@@ -98,7 +98,7 @@ function FixtureContent() {
         if (categoriesError && /fixture_visible_to_public|column .* does not exist/i.test(categoriesError.message || '')) {
           const legacy = await supabase
             .from('categories')
-            .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates), sports(name)')
+            .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates, tournament_format), sports(name)')
             .eq('tournaments.client_id', client.id)
             .order('name');
           catData = (legacy.data || []).map((category: any) => ({
@@ -445,6 +445,9 @@ function FixtureContent() {
   };
 
   const handleAutoGenerateFixture = async (selectedFirstByes?: Record<string, string>) => {
+    if (selectedTournament?.tournament_format === 'ROUND_ROBIN_2LEG_SEMIFINALS') {
+      return toast.error('Este formato se inicia y avanza desde el panel de fases.');
+    }
     if (teams.length < 2) return toast.error('Se necesitan al menos 2 delegaciones para generar un fixture.');
 
     const groupedTeams = teams.reduce((groups: Record<string, any[]>, team) => {
@@ -1126,20 +1129,20 @@ function FixtureContent() {
               <section className="rounded-[2rem] border border-blue-200 bg-gradient-to-br from-blue-600 to-blue-800 p-5 text-white shadow-xl sm:p-7">
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
                   <div>
-                    <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-200">Formato Máster 35+</p>
-                    <h2 className="mt-1 text-2xl font-black uppercase tracking-tight">Liga · Grupos · Finales</h2>
-                    <p className="mt-2 max-w-2xl text-xs font-bold text-blue-100">8 equipos. Fase 1 todos contra todos; Fase 2 grupos A/B a ida y vuelta; Final Oro entre líderes y Final Plata entre segundos.</p>
+                    <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-200">{stageStatus.format === 'ROUND_ROBIN_2LEG_SEMIFINALS' ? 'Liga a dos vueltas' : 'Formato Máster 35+'}</p>
+                    <h2 className="mt-1 text-2xl font-black uppercase tracking-tight">{stageStatus.format === 'ROUND_ROBIN_2LEG_SEMIFINALS' ? 'Semifinales · Final · Tercer puesto' : 'Liga · Grupos · Finales'}</h2>
+                    <p className="mt-2 max-w-2xl text-xs font-bold text-blue-100">{stageStatus.format === 'ROUND_ROBIN_2LEG_SEMIFINALS' ? 'Todos contra todos ida y vuelta. El último queda eliminado; los cuatro primeros avanzan a semifinales 1.º–4.º y 2.º–3.º.' : '8 equipos. Fase 1 todos contra todos; Fase 2 grupos A/B a ida y vuelta; Final Oro entre líderes y Final Plata entre segundos.'}</p>
                   </div>
                   {stageStatus.stages.length === 0 ? (
-                    <button disabled={loading || teams.length !== 8} onClick={() => runStageAction(startThreeStageTournament(slug, selectedCategory), 'Fase 1 generada')} className="rounded-xl bg-white px-5 py-3 text-xs font-black uppercase tracking-widest text-blue-700 disabled:opacity-50">Iniciar fase 1</button>
+                    <button disabled={loading || (stageStatus.format === 'THREE_STAGE_35' ? teams.length !== 8 : teams.length < 4)} onClick={() => runStageAction(stageStatus.format === 'ROUND_ROBIN_2LEG_SEMIFINALS' ? startRoundRobinSemifinalsTournament(slug, selectedCategory) : startThreeStageTournament(slug, selectedCategory), 'Fase 1 generada')} className="rounded-xl bg-white px-5 py-3 text-xs font-black uppercase tracking-widest text-blue-700 disabled:opacity-50">Iniciar fase 1</button>
                   ) : stageStatus.stages.some((stage: any) => stage.status === 'ACTIVE') ? (
-                    <button disabled={loading} onClick={() => runStageAction(advanceThreeStageTournament(slug, selectedCategory), 'Fase cerrada y siguiente fase generada')} className="rounded-xl bg-emerald-400 px-5 py-3 text-xs font-black uppercase tracking-widest text-emerald-950 disabled:opacity-50">Cerrar fase y avanzar</button>
+                    <button disabled={loading} onClick={() => runStageAction(stageStatus.format === 'ROUND_ROBIN_2LEG_SEMIFINALS' ? advanceRoundRobinSemifinalsTournament(slug, selectedCategory) : advanceThreeStageTournament(slug, selectedCategory), 'Fase cerrada y siguiente fase generada')} className="rounded-xl bg-emerald-400 px-5 py-3 text-xs font-black uppercase tracking-widest text-emerald-950 disabled:opacity-50">Cerrar fase y avanzar</button>
                   ) : <span className="rounded-full bg-white/15 px-4 py-2 text-[10px] font-black uppercase tracking-widest">Competencia finalizada</span>}
                 </div>
                 <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
                   {[1, 2, 3].map((number) => {
                     const stage = stageStatus.stages.find((item: any) => item.stage_number === number);
-                    return <div key={number} className={`rounded-xl border p-3 ${stage?.status === 'ACTIVE' ? 'border-white bg-white text-blue-800' : 'border-white/20 bg-white/10'}`}><p className="text-[9px] font-black uppercase tracking-widest opacity-70">Fase {number}</p><p className="mt-1 text-xs font-black uppercase">{stage?.name || (number === 1 ? 'Todos vs todos' : number === 2 ? 'Grupos ida y vuelta' : 'Finales Oro y Plata')}</p><p className="mt-1 text-[9px] font-black uppercase opacity-60">{stage?.status === 'COMPLETED' ? 'Finalizada' : stage?.status === 'ACTIVE' ? 'En curso' : 'Pendiente'}</p></div>;
+                    return <div key={number} className={`rounded-xl border p-3 ${stage?.status === 'ACTIVE' ? 'border-white bg-white text-blue-800' : 'border-white/20 bg-white/10'}`}><p className="text-[9px] font-black uppercase tracking-widest opacity-70">Fase {number}</p><p className="mt-1 text-xs font-black uppercase">{stage?.name || (stageStatus.format === 'ROUND_ROBIN_2LEG_SEMIFINALS' ? (number === 1 ? 'Liga ida y vuelta' : number === 2 ? 'Semifinales' : 'Final y tercer puesto') : (number === 1 ? 'Todos vs todos' : number === 2 ? 'Grupos ida y vuelta' : 'Finales Oro y Plata'))}</p><p className="mt-1 text-[9px] font-black uppercase opacity-60">{stage?.status === 'COMPLETED' ? 'Finalizada' : stage?.status === 'ACTIVE' ? 'En curso' : 'Pendiente'}</p></div>;
                   })}
                 </div>
                 {Object.entries(stageStatus.standings || {}).map(([group, rows]) => (
@@ -1150,7 +1153,7 @@ function FixtureContent() {
                     </div>
                   </div>
                 ))}
-                {teams.length !== 8 && stageStatus.stages.length === 0 && <p className="mt-3 text-[10px] font-black uppercase tracking-widest text-amber-200">Debes registrar exactamente 8 equipos. Actualmente hay {teams.length}.</p>}
+                {stageStatus.stages.length === 0 && ((stageStatus.format === 'THREE_STAGE_35' && teams.length !== 8) || (stageStatus.format === 'ROUND_ROBIN_2LEG_SEMIFINALS' && teams.length < 4)) && <p className="mt-3 text-[10px] font-black uppercase tracking-widest text-amber-200">{stageStatus.format === 'THREE_STAGE_35' ? `Debes registrar exactamente 8 equipos. Actualmente hay ${teams.length}.` : `Debes registrar al menos 4 equipos. Actualmente hay ${teams.length}.`}</p>}
               </section>
             )}
             
