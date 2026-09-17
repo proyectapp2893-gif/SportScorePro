@@ -120,13 +120,17 @@ type FinishCourtMatchInput = {
 
 export async function registerMatchParticipants(input: { slug: string; matchId: string; participants: Array<{ playerId: string; teamId: string }> }) {
   const { clientId, match } = await requireMatchAccess(input.slug, input.matchId);
-  const valid = input.participants.filter((item) => item.playerId && (item.teamId === match.home_team_id || item.teamId === match.away_team_id));
+  const valid = [...new Map(input.participants
+    .filter((item) => item.playerId && (item.teamId === match.home_team_id || item.teamId === match.away_team_id))
+    .map((item) => [item.playerId, item])).values()];
   if (valid.length === 0) return { success: true as const };
   const db = createPrivilegedSupabaseClient();
   const { data: rows } = await db.from('matches').select('matchdays!inner(stage_id, categories!inner(tournament_id))').eq('id', input.matchId).maybeSingle();
   const stageId = (rows as any)?.matchdays?.stage_id || null;
-  const { error } = await db.from('player_match_participation').upsert(valid.map((item) => ({ player_id: item.playerId, team_id: item.teamId, match_id: input.matchId, stage_id: stageId, source: 'PLANILLERO', status: 'CONFIRMED', created_by: clientId, updated_at: new Date().toISOString() })), { onConflict: 'player_id,match_id' });
-  if (error) throw new Error('No se pudieron registrar los participantes del partido.');
+  // EVENT is accepted by both the current and legacy production schemas.
+  // The participant origin is still recorded in the comment for auditability.
+  const { error } = await db.from('player_match_participation').upsert(valid.map((item) => ({ player_id: item.playerId, team_id: item.teamId, match_id: input.matchId, stage_id: stageId, source: 'EVENT', status: 'CONFIRMED', comment: 'Confirmado desde la mesa al cerrar el acta.', created_by: clientId, updated_at: new Date().toISOString() })), { onConflict: 'player_id,match_id' });
+  if (error) return { success: false as const, error: 'No se pudieron guardar los participantes. Verifica la migración de participaciones.' };
   return { success: true as const };
 }
 

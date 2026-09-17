@@ -436,9 +436,12 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   const handleRequestFinish = () => { if (!isMatchLive) return; if(isRunning) toggleTimer(); setShowSummaryModal(true); };
 
   const confirmFinishMatch = async () => {
-    setShowSummaryModal(false); setLoading(true); const toastId = toast.loading('Cerrando acta...');
+    setLoading(true); const toastId = toast.loading('Cerrando acta...');
     try {
-      if (!isDemo) await registerMatchParticipants({ slug, matchId: match.id, participants: [...homeParticipants.map(playerId => ({ playerId, teamId: match.home_team.id })), ...awayParticipants.map(playerId => ({ playerId, teamId: match.away_team.id }))] });
+      if (!isDemo) {
+        const participantsResult = await registerMatchParticipants({ slug, matchId: match.id, participants: [...homeParticipants.map(playerId => ({ playerId, teamId: match.home_team.id })), ...awayParticipants.map(playerId => ({ playerId, teamId: match.away_team.id }))] });
+        if (!participantsResult.success) throw new Error(participantsResult.error);
+      }
       if (isDemo) finishDemoFootballMatch(match.id, homeScore, awayScore, currentPeriod); else await finishFootballMatch({
         slug,
         matchId: match.id,
@@ -449,8 +452,8 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
         awayPenaltyScore: currentPeriod === 'PEN' ? awayPenaltyScore : null,
       });
       
-      toast.success('Acta Guardada', { id: toastId }); onMatchUpdate(); onClose();
-    } catch (error: any) { toast.error(error.message || 'Error', { id: toastId }); }
+      toast.success('Acta Guardada', { id: toastId }); setShowSummaryModal(false); onMatchUpdate(); onClose();
+    } catch (error: any) { toast.error(error.message || 'No se pudo cerrar el acta. La selección se conserva.', { id: toastId }); }
     setLoading(false);
   };
 
