@@ -74,11 +74,15 @@ export async function reorganizeCategoryFixtureTimes(slug: string, categoryId: s
   if (!(await categoryBelongsToClientSlug(categoryId, slug))) return { success: false, error: 'La categoría no pertenece a este cliente.' };
 
   const supabase = createServerSupabaseAdminClient();
-  const { data: category } = await supabase
+  let { data: category, error: categoryError } = await supabase
     .from('categories')
     .select('id, tournaments!inner(id, schedule_time_slots, schedule_dates, schedule_weekdays, available_venues)')
     .eq('id', categoryId)
     .maybeSingle();
+  if (categoryError && /schedule_weekdays|column .* does not exist/i.test(categoryError.message || '')) {
+    ({ data: category, error: categoryError } = await supabase.from('categories').select('id, tournaments!inner(id, schedule_time_slots, schedule_dates, available_venues)').eq('id', categoryId).maybeSingle());
+  }
+  if (categoryError || !category) return { success: false, error: 'No se pudo cargar la configuración del torneo.' };
   const tournament = Array.isArray(category?.tournaments) ? category.tournaments[0] : category?.tournaments;
   const slots = Array.from(new Set((Array.isArray(tournament?.schedule_time_slots) ? tournament.schedule_time_slots : [])
     .map((value: unknown) => String(value).trim())

@@ -47,7 +47,10 @@ export async function saveTournamentWizard(slug: string, input: SaveTournamentIn
   let tournamentId = input.editingTournamentId || null;
   const legacyTournamentPayload = { ...safeTournament };
   delete legacyTournamentPayload.sport_modality;
+  const legacySchedulePayload = { ...legacyTournamentPayload };
+  delete legacySchedulePayload.schedule_weekdays;
   const isMissingSportModalityColumn = (error: { code?: string; message?: string } | null | undefined) => Boolean(error && error.code === '42703' && /sport_modality/i.test(error.message || ''));
+  const isMissingScheduleWeekdaysColumn = (error: { code?: string; message?: string } | null | undefined) => Boolean(error && error.code === '42703' && /schedule_weekdays/i.test(error.message || ''));
 
   if (tournamentId) {
     const { data: existingTournament } = await supabase
@@ -64,6 +67,9 @@ export async function saveTournamentWizard(slug: string, input: SaveTournamentIn
     if (isMissingSportModalityColumn(error)) {
       ({ error } = await supabase.from('tournaments').update(legacyTournamentPayload).eq('id', tournamentId));
     }
+    if (isMissingScheduleWeekdaysColumn(error)) {
+      ({ error } = await supabase.from('tournaments').update(legacySchedulePayload).eq('id', tournamentId));
+    }
     if (error) return { success: false, error: 'No se pudo actualizar el torneo. Los datos existentes no fueron modificados.' };
   } else {
     let { data: newTournament, error } = await supabase
@@ -75,6 +81,13 @@ export async function saveTournamentWizard(slug: string, input: SaveTournamentIn
       ({ data: newTournament, error } = await supabase
         .from('tournaments')
         .insert([{ ...legacyTournamentPayload, client_id: clientId }])
+        .select('id')
+        .single());
+    }
+    if (isMissingScheduleWeekdaysColumn(error)) {
+      ({ data: newTournament, error } = await supabase
+        .from('tournaments')
+        .insert([{ ...legacySchedulePayload, client_id: clientId }])
         .select('id')
         .single());
     }
