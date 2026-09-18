@@ -40,8 +40,12 @@ export function getNextUnpublishedRound(availableRounds:number[],publishedNumber
 export async function getAvailableBulletinRounds(db:any,tournamentId:string,asOfDate?:string|null):Promise<number[]> {
   const {data:categoryData}=await db.from('categories').select('id').eq('tournament_id',tournamentId);
   const categoryIds=(categoryData||[]).map((category:any)=>category.id); if(!categoryIds.length)return [];
-  const {data:days}=await db.from('matchdays').select('round_number,scheduled_date,matches!inner(status)').in('category_id',categoryIds);
-  const eligibleDays=(days||[]).map((day:any)=>({...day,matches:(day.matches||[]).filter((match:any)=>match.status!=='BYE')})).filter((day:any)=>Number(day.round_number)>0&&(!asOfDate||day.scheduled_date<=asOfDate)&&Array.isArray(day.matches)&&day.matches.length>0);
+  const {data:days}=await db.from('matchdays').select('id,round_number,scheduled_date').in('category_id',categoryIds);
+  const dayIds=(days||[]).map((day:any)=>day.id);
+  const {data:matches}=dayIds.length?await db.from('matches').select('matchday_id,status').in('matchday_id',dayIds):{data:[]};
+  const matchesByDay=new Map<string,any[]>();
+  (matches||[]).forEach((match:any)=>matchesByDay.set(match.matchday_id,[...(matchesByDay.get(match.matchday_id)||[]),match]));
+  const eligibleDays=(days||[]).map((day:any)=>({...day,matches:(matchesByDay.get(day.id)||[]).filter((match:any)=>match.status!=='BYE')})).filter((day:any)=>Number(day.round_number)>0&&(!asOfDate||day.scheduled_date<=asOfDate)&&day.matches.length>0);
   const matchesByRound=new Map<number,any[]>();
   eligibleDays.forEach((day:any)=>{const round=Number(day.round_number);matchesByRound.set(round,[...(matchesByRound.get(round)||[]),...day.matches]);});
   return Array.from(matchesByRound.entries()).filter(([,matches])=>matches.some((match:any)=>match.status==='FINISHED')&&matches.every((match:any)=>match.status==='FINISHED')).map(([round])=>round).sort((a,b)=>a-b);
