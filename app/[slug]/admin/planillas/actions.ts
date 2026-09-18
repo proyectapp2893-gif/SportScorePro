@@ -3,19 +3,21 @@
 import { hasAdminSession } from '@/app/lib/auth';
 import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import { categoryBelongsToClientSlug } from '@/app/lib/tenant';
+import { normalizeAsOfDate } from '@/app/lib/date-filter';
 
-export async function loadMatchSheets(slug: string, categoryId: string) {
+export async function loadMatchSheets(slug: string, categoryId: string, asOfDate?: string | null) {
   if (!(await hasAdminSession(slug))) return { success: false as const, error: 'Sesión de administrador no válida.' };
   if (!(await categoryBelongsToClientSlug(categoryId, slug))) return { success: false as const, error: 'La categoría no pertenece a esta organización.' };
   const supabase = createServerSupabaseAdminClient();
-  const [{ data: category }, { data: matches, error }] = await Promise.all([
-    supabase.from('categories').select('id, name, gender, sports(name), tournaments(name)').eq('id', categoryId).maybeSingle(),
-    supabase.from('matches').select(`
+  let matchesQuery = supabase.from('matches').select(`
       id, status, scheduled_time, venue, home_score, away_score,
       matchdays!inner(round_number, scheduled_date, category_id),
       home_team:teams!home_team_id(id, name, schools(name, logo_url)),
       away_team:teams!away_team_id(id, name, schools(name, logo_url))
-    `).eq('matchdays.category_id', categoryId).not('away_team_id', 'is', null),
+    `).eq('matchdays.category_id', categoryId).not('away_team_id', 'is', null);
+  const [{ data: category }, { data: matches, error }] = await Promise.all([
+    supabase.from('categories').select('id, name, gender, sports(name), tournaments(name)').eq('id', categoryId).maybeSingle(),
+    asOfDate && normalizeAsOfDate(asOfDate) ? matchesQuery.lte('matchdays.scheduled_date', normalizeAsOfDate(asOfDate) as string) : matchesQuery,
   ]);
   if (error) return { success: false as const, error: 'No se pudieron cargar los partidos y sus nóminas.' };
   const teamIds = Array.from(new Set((matches || []).flatMap((match: any) => [match.home_team?.id, match.away_team?.id]).filter(Boolean)));

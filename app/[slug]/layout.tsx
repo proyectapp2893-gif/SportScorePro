@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import DemoNavigation from '@/app/lib/demo/DemoNavigation';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
+import AsOfDateFilter from '@/app/components/AsOfDateFilter';
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -20,6 +21,7 @@ export default function SlugLayout({
   return (
     <div className="min-h-screen bg-[#020617] text-white">
       <DemoNavigation />
+      <AsOfDateFilter />
       {children}
     </div>
   );

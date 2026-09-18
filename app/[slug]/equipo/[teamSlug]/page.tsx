@@ -6,6 +6,7 @@ import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, g
 import { toTeamSlug } from '@/app/lib/team-slug';
 import PublicQrCard from '@/app/components/PublicQrCard';
 import { inferMissingTeamByes } from '@/app/lib/tournaments/byes';
+import { normalizeAsOfDate, withMatchdayCutoff, withNestedMatchdayCutoff } from '@/app/lib/date-filter';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,8 +32,10 @@ function MatchCard({ match, selectedTeamId }: { match: any; selectedTeamId: stri
   </article>;
 }
 
-export default async function PublicTeamPage({ params }: { params: Promise<{ slug: string; teamSlug: string }> }) {
+export default async function PublicTeamPage({ params, searchParams }: { params: Promise<{ slug: string; teamSlug: string }>; searchParams: Promise<{ hasta?: string }> }) {
   const { slug, teamSlug } = await params;
+  const { hasta } = await searchParams;
+  const asOfDate = normalizeAsOfDate(hasta);
   const supabase = createServerSupabaseAdminClient();
   const { data: teams } = await supabase.from('teams').select('id, name, category_id, schools(name, logo_url), categories!inner(id, name, sports(name), tournaments!inner(id, name, client_id, fixture_visible_to_delegates, fixture_visible_to_public, clients!inner(slug, is_active)))').eq('categories.tournaments.clients.slug', slug).eq('categories.tournaments.clients.is_active', true);
   const team: any = (teams || []).find((item: any) => toTeamSlug(item.name) === teamSlug);
@@ -41,10 +44,14 @@ export default async function PublicTeamPage({ params }: { params: Promise<{ slu
   const category = team.categories as any;
   const fixtureVisible = Boolean(category?.tournaments?.fixture_visible_to_public);
   const sportRules = getSportRules(category?.sports?.name);
+  let matchesQuery = supabase.from('matches').select('id, status, home_score, away_score, home_sets, away_sets, home_team_id, away_team_id, scheduled_time, home_team:teams!home_team_id(id, name, schools(name, logo_url)), away_team:teams!away_team_id(id, name, schools(name, logo_url)), matchdays!inner(scheduled_date, round_number, category_id)').eq('matchdays.category_id', team.category_id).order('matchdays(scheduled_date)', { ascending: true });
+  matchesQuery = withMatchdayCutoff(matchesQuery, asOfDate);
+  let eventsQuery = supabase.from('match_events').select('id, team_id, player_id, event_type, players(name, shirt_number), matches!inner(status, matchdays!inner(category_id, scheduled_date))').eq('team_id', team.id).eq('matches.matchdays.category_id', team.category_id).in('event_type', ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3', 'YELLOW', 'RED']);
+  eventsQuery = withNestedMatchdayCutoff(eventsQuery, asOfDate);
   const [{ data: categoryTeams }, { data: matches }, { data: events }] = await Promise.all([
     supabase.from('teams').select('id, name, schools(name, logo_url)').eq('category_id', team.category_id),
-    supabase.from('matches').select('id, status, home_score, away_score, home_sets, away_sets, home_team_id, away_team_id, scheduled_time, home_team:teams!home_team_id(id, name, schools(name, logo_url)), away_team:teams!away_team_id(id, name, schools(name, logo_url)), matchdays!inner(scheduled_date, round_number, category_id)').eq('matchdays.category_id', team.category_id).order('matchdays(scheduled_date)', { ascending: true }),
-    supabase.from('match_events').select('id, team_id, player_id, event_type, players(name, shirt_number), matches!inner(status, matchdays!inner(category_id))').eq('team_id', team.id).eq('matches.matchdays.category_id', team.category_id).in('event_type', ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3', 'YELLOW', 'RED']),
+    matchesQuery,
+    eventsQuery,
   ]);
 
   const standingsById: Record<string, any> = {};

@@ -9,6 +9,7 @@ import Link from 'next/link';
 import ApprovedPaymentProofs from './ApprovedPaymentProofs';
 import { formatCopAmount } from '@/app/lib/formatters';
 import { normalizeDoubleCautions } from '@/app/lib/discipline/double-caution';
+import { normalizeAsOfDate } from '@/app/lib/date-filter';
 import { approveFinePaymentProof, getFinePaymentProofs, getFinePaymentProofUrl, markTeamFinesPaidExternally, updateDisciplinaryRecord } from './actions';
 
 export default function TribunalPage() {
@@ -16,6 +17,7 @@ export default function TribunalPage() {
   const searchParams = useSearchParams();
   const slug = params?.slug as string;
   const selectedTournamentId = searchParams.get('tournament');
+  const asOfDate = normalizeAsOfDate(searchParams.get('hasta'));
 
   const [loading, setLoading] = useState(true);
   const [fines, setFines] = useState<any[]>([]);
@@ -41,7 +43,7 @@ export default function TribunalPage() {
 
   useEffect(() => {
     if (slug) loadData();
-  }, [slug, selectedTournamentId]);
+  }, [slug, selectedTournamentId, asOfDate]);
 
   async function loadData() {
     setLoading(true);
@@ -68,7 +70,7 @@ export default function TribunalPage() {
             id, event_type, fine_status, created_at, minute_record, period, disciplinary_comment, suspension_matches,
             match_id, player_id, team_id, match_second,
             players!inner(name, shirt_number, teams(name, schools(logo_url))),
-            matches!inner(matchdays!inner(round_number, categories!inner(tournaments!inner(id, client_id))))
+            matches!inner(matchdays!inner(round_number, scheduled_date, categories!inner(tournaments!inner(id, client_id))))
           `)
           .eq('matches.matchdays.categories.tournaments.client_id', clientData.id)
           .eq('matches.matchdays.categories.tournaments.id', trns.id)
@@ -79,12 +81,12 @@ export default function TribunalPage() {
         let compatibleEvents = eventsData;
         if (error) {
           // Compatibilidad mientras la migración disciplinaria aún no se aplica.
-          const fallback = await supabase.from('match_events').select(`id, event_type, fine_status, created_at, minute_record, period, match_id, player_id, team_id, match_second, players!inner(name, shirt_number, teams(name, schools(logo_url))), matches!inner(matchdays!inner(round_number, categories!inner(tournaments!inner(id, client_id))))`).eq('matches.matchdays.categories.tournaments.client_id', clientData.id).eq('matches.matchdays.categories.tournaments.id', trns.id).in('event_type', ['YELLOW', 'RED']).neq('fine_status', 'NONE').order('created_at', { ascending: false });
+          const fallback = await supabase.from('match_events').select(`id, event_type, fine_status, created_at, minute_record, period, match_id, player_id, team_id, match_second, players!inner(name, shirt_number, teams(name, schools(logo_url))), matches!inner(matchdays!inner(round_number, scheduled_date, categories!inner(tournaments!inner(id, client_id))))`).eq('matches.matchdays.categories.tournaments.client_id', clientData.id).eq('matches.matchdays.categories.tournaments.id', trns.id).in('event_type', ['YELLOW', 'RED']).neq('fine_status', 'NONE').order('created_at', { ascending: false });
           compatibleEvents = fallback.data as any;
           if (fallback.error) toast.error(`Error BD: ${fallback.error.message}`);
         }
 
-        if (compatibleEvents) setFines(normalizeDoubleCautions(compatibleEvents as any));
+        if (compatibleEvents) setFines(normalizeDoubleCautions((compatibleEvents as any).filter((event: any) => !asOfDate || event.matches?.matchdays?.scheduled_date <= asOfDate)));
 
         const proofsResult = await getFinePaymentProofs(slug, trns.id);
         if (proofsResult.success) setPaymentProofs(proofsResult.data);

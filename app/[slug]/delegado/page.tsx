@@ -6,6 +6,7 @@ import { inferMissingTeamByes } from '@/app/lib/tournaments/byes';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
 import DemoDelegatePortal from './DemoDelegatePortal';
 import { buildBulletinSnapshot, hydrateDynamicBulletinFields } from '@/app/lib/tournaments/bulletin';
+import { nextDate, normalizeAsOfDate } from '@/app/lib/date-filter';
 
 async function loadTeamAccess(supabase: ReturnType<typeof createServerSupabaseAdminClient>, delegateId: string) {
   const fullQuery = await supabase
@@ -43,7 +44,7 @@ async function loadTeamAccess(supabase: ReturnType<typeof createServerSupabaseAd
   return { rows: fallbackQuery.data || [], schemaReady: false };
 }
 
-async function loadDelegatePortalData(slug: string) {
+async function loadDelegatePortalData(slug: string, asOfDate: string | null) {
   const delegateId = await getDelegateSession(slug);
   if (!delegateId) return null;
 
@@ -115,9 +116,10 @@ async function loadDelegatePortalData(slug: string) {
       }
     }));
     const { data: bulletins } = await supabase.from('tournament_bulletins').select('id,tournament_id,bulletin_number,confirmed_at,snapshot').in('tournament_id', tournamentIds).order('bulletin_number', { ascending: false });
-    const liveSnapshots = new Map(await Promise.all(tournamentIds.map(async (tournamentId) => [tournamentId, await buildBulletinSnapshot(supabase, tournamentId)] as const)));
+    const liveSnapshots = new Map(await Promise.all(tournamentIds.map(async (tournamentId) => [tournamentId, await buildBulletinSnapshot(supabase, tournamentId, asOfDate)] as const)));
     tournamentIds.forEach((tournamentId) => {
-      const tournamentBulletins = (bulletins || []).filter((bulletin: any) => bulletin.tournament_id === tournamentId);
+      const bulletinCutoff = asOfDate ? `${nextDate(asOfDate)}T00:00:00-05:00` : null;
+      const tournamentBulletins = (bulletins || []).filter((bulletin: any) => bulletin.tournament_id === tournamentId && (!bulletinCutoff || new Date(bulletin.confirmed_at).getTime() < new Date(bulletinCutoff).getTime()));
       const currentNumber = Number(tournamentBulletins[0]?.bulletin_number || 0);
       bulletinsByTournament[tournamentId] = tournamentBulletins.map((bulletin: any) => ({ ...bulletin, snapshot: hydrateDynamicBulletinFields(bulletin.snapshot, liveSnapshots.get(tournamentId) || { categories: [] }, currentNumber) }));
     });
@@ -148,17 +150,17 @@ async function loadDelegatePortalData(slug: string) {
 
     const eventsQuery = await supabase
       .from('match_events')
-      .select('id, match_id, team_id, player_id, event_type, period, minute_record, fine_amount, fine_status, players(name, shirt_number), teams(name, schools(name, logo_url)), matches(status, matchdays(round_number))')
+      .select('id, match_id, team_id, player_id, event_type, period, minute_record, fine_amount, fine_status, players(name, shirt_number), teams(name, schools(name, logo_url)), matches(status, matchdays(round_number, scheduled_date))')
       .in('team_id', teamIds);
 
     const events = eventsQuery.error
       ? (await supabase
         .from('match_events')
-        .select('id, match_id, team_id, player_id, event_type, period, minute_record, fine_status, players(name, shirt_number), teams(name, schools(name, logo_url)), matches(status, matchdays(round_number))')
+        .select('id, match_id, team_id, player_id, event_type, period, minute_record, fine_status, players(name, shirt_number), teams(name, schools(name, logo_url)), matches(status, matchdays(round_number, scheduled_date))')
         .in('team_id', teamIds)).data
       : eventsQuery.data;
 
-    (events || []).forEach((event: any) => {
+    (events || []).filter((event: any) => !asOfDate || event.matches?.matchdays?.scheduled_date <= asOfDate).forEach((event: any) => {
       if (!eventsByTeam[event.team_id]) eventsByTeam[event.team_id] = [];
       eventsByTeam[event.team_id].push(event);
       // Mantener los eventos del equipo también disponibles por partido. Esto
@@ -170,7 +172,7 @@ async function loadDelegatePortalData(slug: string) {
       }
     });
 
-    const { data: matches } = await supabase
+    const { data: loadedMatches } = await supabase
       .from('matches')
       .select(`
         id, status, home_score, away_score, home_sets, away_sets, scheduled_time,
@@ -183,7 +185,8 @@ async function loadDelegatePortalData(slug: string) {
       .or(`home_team_id.in.(${teamIds.join(',')}),away_team_id.in.(${teamIds.join(',')})`)
       .order('matchdays(scheduled_date)', { ascending: true });
 
-    (matches || []).forEach((match: any) => {
+    const matches = (loadedMatches || []).filter((match: any) => !asOfDate || match.matchdays?.scheduled_date <= asOfDate);
+    matches.forEach((match: any) => {
       [match.home_team?.id, match.away_team?.id].forEach((teamId) => {
         if (!teamId || !teamIds.includes(teamId)) return;
         if (!matchesByTeam[teamId]) matchesByTeam[teamId] = [];
@@ -229,7 +232,7 @@ async function loadDelegatePortalData(slug: string) {
   }
 
   if (categoryIds.length > 0) {
-    const { data: categoryMatches } = await supabase
+    const { data: loadedCategoryMatches } = await supabase
       .from('matches')
       .select(`
         id, status, home_score, away_score, home_sets, away_sets, scheduled_time,
@@ -241,6 +244,8 @@ async function loadDelegatePortalData(slug: string) {
       `)
       .in('matchdays.category_id', categoryIds)
       .order('matchdays(scheduled_date)', { ascending: true });
+
+    const categoryMatches = (loadedCategoryMatches || []).filter((match: any) => !asOfDate || match.matchdays?.scheduled_date <= asOfDate);
 
     // El calendario visible al delegado incluye todos los equipos de la
     // categoría. Cargamos también sus eventos para que el historial de cada
@@ -302,9 +307,11 @@ async function loadDelegatePortalData(slug: string) {
   };
 }
 
-export default async function DelegatePortalPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function DelegatePortalPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ hasta?: string }> }) {
   const { slug } = await params;
+  const { hasta } = await searchParams;
+  const asOfDate = normalizeAsOfDate(hasta);
   if (slug === DEMO_SLUG) return <DemoDelegatePortal slug={slug} />;
-  const initialData = await loadDelegatePortalData(slug);
+  const initialData = await loadDelegatePortalData(slug, asOfDate);
   return <DelegatePortalClient slug={slug} initialData={initialData} />;
 }

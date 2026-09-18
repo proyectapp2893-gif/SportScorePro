@@ -32,12 +32,13 @@ export function stampSuspensionOrigins(snapshot:BulletinSnapshot,bulletinNumber:
   };
 }
 
-export async function buildBulletinSnapshot(db:any, tournamentId:string):Promise<BulletinSnapshot> {
+export async function buildBulletinSnapshot(db:any, tournamentId:string, asOfDate?:string|null):Promise<BulletinSnapshot> {
   const {data:tournament}=await db.from('tournaments').select('fair_play_enabled,fp_starting_points,fp_yellow_deduction,fp_red_deduction,fine_yellow_amount,fine_red_amount').eq('id',tournamentId).maybeSingle();
   const { data: categoryData } = await db.from('categories').select('id,name,sports(name)').eq('tournament_id', tournamentId);
   const categories=categoryData||[];
   const categoryIds=categories.map((c:any)=>c.id); if(!categoryIds.length)return {categories:[]};
-  const [{data:teamData},{data:dayData}]=await Promise.all([db.from('teams').select('id,name,category_id,fair_play_points').in('category_id',categoryIds),db.from('matchdays').select('id,category_id,round_number').in('category_id',categoryIds)]);
+  let daysQuery=db.from('matchdays').select('id,category_id,round_number,scheduled_date').in('category_id',categoryIds); if(asOfDate)daysQuery=daysQuery.lte('scheduled_date',asOfDate);
+  const [{data:teamData},{data:dayData}]=await Promise.all([db.from('teams').select('id,name,category_id,fair_play_points').in('category_id',categoryIds),daysQuery]);
   const teams=teamData||[], days=dayData||[];
   const dayIds=days.map((d:any)=>d.id); const {data:matchData}=dayIds.length?await db.from('matches').select('id,matchday_id,status,home_score,away_score,home_sets,away_sets,home_team_id,away_team_id').in('matchday_id',dayIds):{data:[]};
   const matches=matchData||[];

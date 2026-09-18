@@ -13,7 +13,7 @@ async function adminDb(slug: string) {
   return clientId ? { db: createPrivilegedSupabaseClient(), clientId } : null;
 }
 
-export async function loadParticipationData(slug: string, categoryId: string) {
+export async function loadParticipationData(slug: string, categoryId: string, asOfDate?: string | null) {
   const access = await adminDb(slug);
   if (!access) return fail('Sesión administrativa no válida.') as any;
   const { db, clientId } = access;
@@ -23,13 +23,15 @@ export async function loadParticipationData(slug: string, categoryId: string) {
     db.from('teams').select('id,name,players(id,name,shirt_number)').eq('category_id', categoryId).order('name'),
     db.from('matches').select('id,status,scheduled_time,home_team_id,away_team_id,matchdays!inner(id,scheduled_date,round_number,stage_id,competition_stages(stage_type,name))').eq('matchdays.category_id', categoryId).order('matchdays(scheduled_date)', { ascending: true }),
   ]);
+  const filteredMatches = (matches || []).filter((match: any) => !asOfDate || match.matchdays?.scheduled_date <= asOfDate);
+  const visibleMatchIds = new Set(filteredMatches.map((match: any) => match.id));
   const teamIds = (teams || []).map((team:any) => team.id);
   const [{ data: records }, { data: eventRecords }, { data: playerEvents }] = await Promise.all([
     teamIds.length ? db.from('player_match_participation').select('id,player_id,team_id,match_id,source,status,comment,created_at').in('team_id', teamIds) : Promise.resolve({ data: [] }),
-    teamIds.length ? db.from('match_events').select('id,player_id,team_id,match_id,event_type,matches!inner(matchdays!inner(category_id,competition_stages(stage_type)))').in('team_id', teamIds).eq('matches.matchdays.category_id', categoryId).in('event_type', ['STARTING_LINEUP', 'SUB_IN']) : Promise.resolve({ data: [] }),
+    teamIds.length ? db.from('match_events').select('id,player_id,team_id,match_id,event_type,matches!inner(matchdays!inner(category_id,scheduled_date,competition_stages(stage_type)))').in('team_id', teamIds).eq('matches.matchdays.category_id', categoryId).in('event_type', ['STARTING_LINEUP', 'SUB_IN']) : Promise.resolve({ data: [] }),
     teamIds.length ? db.from('match_events').select('id,player_id,team_id,match_id,event_type,period,minute_record,created_at,fine_status,disciplinary_comment,matches!inner(home_team_id,away_team_id,matchdays!inner(category_id,scheduled_date,round_number,competition_stages(stage_type)),home_team:teams!home_team_id(name),away_team:teams!away_team_id(name))').in('team_id', teamIds).eq('matches.matchdays.category_id', categoryId).order('created_at', { ascending: true }) : Promise.resolve({ data: [] }),
   ]);
-  return { success: true as const, data: { category, teams: teams || [], matches: matches || [], records: records || [], eventRecords: (eventRecords || []).filter((record:any) => record.matches?.matchdays?.competition_stages?.stage_type !== 'FINALS'), playerEvents: playerEvents || [] } };
+  return { success: true as const, data: { category, teams: teams || [], matches: filteredMatches, records: (records || []).filter((record: any) => visibleMatchIds.has(record.match_id)), eventRecords: (eventRecords || []).filter((record:any) => record.matches?.matchdays?.competition_stages?.stage_type !== 'FINALS' && (!asOfDate || record.matches?.matchdays?.scheduled_date <= asOfDate)), playerEvents: (playerEvents || []).filter((event: any) => !asOfDate || event.matches?.matchdays?.scheduled_date <= asOfDate) } };
 }
 
 export async function saveManualParticipation(slug: string, input: { categoryId: string; playerId: string; teamId: string; matchId: string; comment: string }) {

@@ -8,14 +8,14 @@ import { supabase } from '../../../supabase';
 import { loadParticipationData, saveManualParticipation, voidParticipation } from './actions';
 import { REQUIRED_REGULAR_PARTICIPATIONS } from '@/app/lib/competition/participation';
 
-export default function ParticipationAdmin({ slug, initialCategoryId }: { slug: string; initialCategoryId: string }) {
+export default function ParticipationAdmin({ slug, initialCategoryId, asOfDate }: { slug: string; initialCategoryId: string; asOfDate?: string | null }) {
   const [categories, setCategories] = useState<any[]>([]); const [categoryId, setCategoryId] = useState(initialCategoryId); const [data, setData] = useState<any>(null); const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ teamId: '', playerId: '', matchId: '', comment: '' });
   const [search, setSearch] = useState(''); const [filterTeamId, setFilterTeamId] = useState(''); const [filterDate, setFilterDate] = useState('');
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   useEffect(() => { supabase.from('categories').select('id,name,tournaments!inner(client_id)').order('name').then(({ data }: { data: any[] | null }) => { setCategories(data || []); if (!categoryId && data?.[0]) setCategoryId(data[0].id); }); }, []);
-  const reload = async () => { if (!categoryId) return; setBusy(true); const result = await loadParticipationData(slug, categoryId); if (!result.success) toast.error(result.error); else setData(result.data); setBusy(false); };
-  useEffect(() => { reload(); }, [categoryId]);
+  const reload = async () => { if (!categoryId) return; setBusy(true); const result = await loadParticipationData(slug, categoryId, asOfDate); if (!result.success) toast.error(result.error); else setData(result.data); setBusy(false); };
+  useEffect(() => { reload(); }, [categoryId, asOfDate]);
   const counts = useMemo(() => { const map = new Map<string, Set<string>>(); for (const record of [...(data?.records || []), ...(data?.eventRecords || [])]) if (record.status !== 'VOIDED') { const set = map.get(record.player_id) || new Set(); set.add(record.match_id); map.set(record.player_id, set); } return map; }, [data]);
   const team = data?.teams?.find((item: any) => item.id === form.teamId);
   const selectedTeamPlayers = team?.players || [];

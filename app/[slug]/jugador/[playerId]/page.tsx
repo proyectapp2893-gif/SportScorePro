@@ -4,11 +4,14 @@ import { Award, BarChart3, Shield, Shirt, Square, Trophy } from 'lucide-react';
 import PublicQrCard from '@/app/components/PublicQrCard';
 import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import { toTeamSlug } from '@/app/lib/team-slug';
+import { normalizeAsOfDate, withNestedMatchdayCutoff } from '@/app/lib/date-filter';
 
 export const dynamic = 'force-dynamic';
 
-export default async function PublicPlayerPage({ params }: { params: Promise<{ slug: string; playerId: string }> }) {
+export default async function PublicPlayerPage({ params, searchParams }: { params: Promise<{ slug: string; playerId: string }>; searchParams: Promise<{ hasta?: string }> }) {
   const { slug, playerId } = await params;
+  const { hasta } = await searchParams;
+  const asOfDate = normalizeAsOfDate(hasta);
   const supabase = createServerSupabaseAdminClient();
   const { data: player } = await supabase
     .from('players')
@@ -22,12 +25,14 @@ export default async function PublicPlayerPage({ params }: { params: Promise<{ s
   const team: any = player.teams;
   const category: any = team.categories;
   if (category?.tournaments?.fixture_visible_to_public !== true) notFound();
-  const { data: events } = await supabase
+  let eventsQuery = supabase
     .from('match_events')
-    .select('event_type, matches!inner(status, matchdays!inner(category_id))')
+    .select('event_type, matches!inner(status, matchdays!inner(category_id, scheduled_date))')
     .eq('player_id', player.id)
     .eq('matches.matchdays.category_id', category.id)
     .in('matches.status', ['LIVE', 'FINISHED']);
+  eventsQuery = withNestedMatchdayCutoff(eventsQuery, asOfDate);
+  const { data: events } = await eventsQuery;
 
   const totals = (events || []).reduce((result: Record<string, number>, event: any) => {
     result[event.event_type] = (result[event.event_type] || 0) + 1;

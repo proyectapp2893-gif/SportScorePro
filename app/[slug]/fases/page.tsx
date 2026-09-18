@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, CalendarDays, GitBranch, Shield, Trophy } from 'lucide-react';
 import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
+import { normalizeAsOfDate, withMatchdayCutoff } from '@/app/lib/date-filter';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,8 +10,10 @@ function Logo({ team }: { team: any }) {
   return <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5">{team?.schools?.logo_url ? <img src={team.schools.logo_url} alt={`Logo de ${team.name}`} className="max-h-full max-w-full object-contain" /> : <Shield size={20} className="text-slate-300" />}</div>;
 }
 
-export default async function PublicStagesPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function PublicStagesPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ hasta?: string }> }) {
   const { slug } = await params;
+  const { hasta } = await searchParams;
+  const asOfDate = normalizeAsOfDate(hasta);
   const supabase = createServerSupabaseAdminClient();
   const { data: stages } = await supabase
     .from('competition_stages')
@@ -22,11 +25,13 @@ export default async function PublicStagesPage({ params }: { params: Promise<{ s
 
   const visibleStages = stages.filter((stage: any) => stage.categories?.tournaments?.is_active);
   const stageIds = visibleStages.map((stage: any) => stage.id);
-  const { data: matches } = stageIds.length ? await supabase
+  let matchesQuery = stageIds.length ? supabase
     .from('matches')
     .select('id, status, home_score, away_score, home_sets, away_sets, match_type, group_name, leg, scheduled_time, home_team:teams!home_team_id(id, name, schools(logo_url)), away_team:teams!away_team_id(id, name, schools(logo_url)), matchdays!inner(stage_id, round_number, scheduled_date)')
     .in('matchdays.stage_id', stageIds)
-    .order('matchdays(round_number)') : { data: [] };
+    .order('matchdays(round_number)') : null;
+  if (matchesQuery && asOfDate) matchesQuery = withMatchdayCutoff(matchesQuery, asOfDate);
+  const { data: matches } = matchesQuery ? await matchesQuery : { data: [] };
 
   const tournament: any = (visibleStages[0] as any)?.categories?.tournaments;
   if (tournament?.fixture_visible_to_public !== true) return <main className="min-h-screen bg-slate-50 p-8 text-center"><div className="mx-auto max-w-xl rounded-[2rem] border border-indigo-100 bg-indigo-50 p-10"><Trophy className="mx-auto text-indigo-400" size={34} /><h1 className="mt-4 text-xl font-black uppercase text-indigo-800">Competencia aún no publicada</h1><p className="mt-2 text-sm font-semibold text-indigo-500">Las fases y finales estarán disponibles próximamente.</p></div></main>;

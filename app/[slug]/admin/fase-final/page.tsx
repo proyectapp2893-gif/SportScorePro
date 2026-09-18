@@ -8,6 +8,7 @@ import Link from 'next/link';
 import { useSearchParams, useRouter, useParams } from 'next/navigation';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 'react-icons/fa';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '../../../lib/sports/rules';
+import { normalizeAsOfDate } from '@/app/lib/date-filter';
 
 function FaseFinalContent() {
   const searchParams = useSearchParams();
@@ -15,6 +16,7 @@ function FaseFinalContent() {
   const params = useParams();
   const slug = params.slug as string; 
   const urlCategory = searchParams.get('cat'); 
+  const asOfDate = normalizeAsOfDate(searchParams.get('hasta'));
 
   const [categories, setCategories] = useState<any[]>([]);
   const [clientId, setClientId] = useState<string | null>(null);
@@ -61,7 +63,7 @@ function FaseFinalContent() {
     } else {
       setTeams([]);
     }
-  }, [selectedCategory]);
+  }, [selectedCategory, asOfDate]);
 
   // CARGAR EQUIPOS Y ORDENARLOS COMO EN LA TABLA DE POSICIONES
   async function loadTeamsAndCalculatePositions() {
@@ -78,16 +80,18 @@ function FaseFinalContent() {
         teamStats[team.id] = { ...team, played: 0, won: 0, drawn: 0, lost: 0, goals_for: 0, goals_against: 0, points: 0 };
       });
 
-      const { data: finishedMatches } = await supabase
+      let finishedMatchesQuery = supabase
         .from('matches')
         .select(`
           home_score, away_score, home_sets, away_sets, status,
           home_team:teams!home_team_id(id),
           away_team:teams!away_team_id(id),
-          matchdays!inner(category_id)
+          matchdays!inner(category_id, scheduled_date)
         `)
         .eq('matchdays.category_id', selectedCategory)
         .eq('status', 'FINISHED');
+      if (asOfDate) finishedMatchesQuery = finishedMatchesQuery.lte('matchdays.scheduled_date', asOfDate);
+      const { data: finishedMatches } = await finishedMatchesQuery;
 
       (finishedMatches || []).forEach((match: any) => {
         const homeId = match.home_team?.id;

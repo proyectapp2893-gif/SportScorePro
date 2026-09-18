@@ -19,6 +19,7 @@ import {
   isSetBasedSport,
 } from '../../lib/sports/rules';
 import { inferMissingTeamByes } from '@/app/lib/tournaments/byes';
+import { normalizeAsOfDate } from '@/app/lib/date-filter';
 
 const marqueeStyles = `
   @keyframes marquee {
@@ -47,6 +48,7 @@ export default function ResultadosPublicos() {
   const searchParams = useSearchParams();
   const slug = params?.slug as string;
   const requestedTournamentId = searchParams.get('tournament');
+  const asOfDate = normalizeAsOfDate(searchParams.get('hasta'));
 
   const [loading, setLoading] = useState(true);
   const [clientInfo, setClientInfo] = useState<any>(null);
@@ -146,7 +148,7 @@ export default function ResultadosPublicos() {
       fetchCategoryData(selectedCategory);
       setMatchFilter('ALL'); 
     }
-  }, [selectedCategory]);
+  }, [selectedCategory, asOfDate]);
 
   // Keep the public scoreboard in sync while a match is being operated in Mesa.
   // The match row is the source of truth for the score; no optimistic values are
@@ -195,7 +197,7 @@ export default function ResultadosPublicos() {
     const isPublicStatMatch = (match: any) => match.status === 'LIVE' || match.status === 'FINISHED';
 
     // 1. Obtener Partidos
-    const { data: matchesData } = await supabase
+    let matchesQuery = supabase
       .from('matches')
       .select(`
         id, status, home_score, away_score, home_sets, away_sets, scheduled_time, current_period, venue,
@@ -204,6 +206,8 @@ export default function ResultadosPublicos() {
         matchdays!inner(round_number, scheduled_date)
       `)
       .eq('matchdays.category_id', categoryId);
+    if (asOfDate) matchesQuery = matchesQuery.lte('matchdays.scheduled_date', asOfDate);
+    const { data: matchesData } = await matchesQuery;
 
     if (matchesData) {
       const statusPriority: Record<string, number> = { 'LIVE': 1, 'SCHEDULED': 2, 'FINISHED': 3 };
@@ -240,11 +244,13 @@ export default function ResultadosPublicos() {
       });
 
       if (isFairPlayActive) {
-        const { data: cardEvents } = await supabase
+        let cardEventsQuery = supabase
           .from('match_events')
           .select('team_id, event_type, matches!inner(status, matchdays!inner(category_id, scheduled_date))')
           .eq('matches.matchdays.category_id', categoryId)
           .in('event_type', ['YELLOW', 'RED']);
+        if (asOfDate) cardEventsQuery = cardEventsQuery.lte('matches.matchdays.scheduled_date', asOfDate);
+        const { data: cardEvents } = await cardEventsQuery;
 
         (cardEvents || []).forEach((event: any) => {
           const eventMatch = event.matches;
@@ -325,11 +331,13 @@ export default function ResultadosPublicos() {
       .eq('teams.category_id', categoryId);
     
     if (playersData) {
-      const { data: scoringEvents } = await supabase
+      let scoringEventsQuery = supabase
         .from('match_events')
         .select('player_id, event_type, matches!inner(status, matchdays!inner(category_id, scheduled_date))')
         .eq('matches.matchdays.category_id', categoryId)
         .in('event_type', ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3']);
+      if (asOfDate) scoringEventsQuery = scoringEventsQuery.lte('matches.matchdays.scheduled_date', asOfDate);
+      const { data: scoringEvents } = await scoringEventsQuery;
 
       const scoringByPlayer: Record<string, number> = {};
       (scoringEvents || []).forEach((event: any) => {
@@ -360,7 +368,7 @@ export default function ResultadosPublicos() {
     if (view === 'TOURNAMENT' && selectedCategory) {
       fetchCategoryData(selectedCategory);
     }
-  }, [activeTab]);
+  }, [activeTab, asOfDate]);
 
   useEffect(() => {
     const refreshVisibleResults = () => {
@@ -376,7 +384,7 @@ export default function ResultadosPublicos() {
       window.removeEventListener('focus', refreshVisibleResults);
       document.removeEventListener('visibilitychange', refreshVisibleResults);
     };
-  }, [view, selectedCategory]);
+  }, [view, selectedCategory, asOfDate]);
 
   useEffect(() => {
     if (view !== 'TOURNAMENT' || !selectedCategory) return;
@@ -389,7 +397,7 @@ export default function ResultadosPublicos() {
     }, refreshEveryMs);
 
     return () => window.clearInterval(intervalId);
-  }, [view, selectedCategory, liveMatches.length]);
+  }, [view, selectedCategory, liveMatches.length, asOfDate]);
 
   const handleOpenMatchDetails = async (match: any) => {
     if (match.status !== 'FINISHED') return; 
