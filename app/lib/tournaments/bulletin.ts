@@ -32,12 +32,27 @@ export function stampSuspensionOrigins(snapshot:BulletinSnapshot,bulletinNumber:
   };
 }
 
-export async function buildBulletinSnapshot(db:any, tournamentId:string, asOfDate?:string|null):Promise<BulletinSnapshot> {
+export function getNextUnpublishedRound(availableRounds:number[],publishedNumbers:number[]):number|null {
+  const published=new Set(publishedNumbers.map(Number));
+  return [...new Set(availableRounds.map(Number))].filter(Number.isFinite).sort((a,b)=>a-b).find(round=>!published.has(round))??null;
+}
+
+export async function getAvailableBulletinRounds(db:any,tournamentId:string,asOfDate?:string|null):Promise<number[]> {
+  const {data:categoryData}=await db.from('categories').select('id').eq('tournament_id',tournamentId);
+  const categoryIds=(categoryData||[]).map((category:any)=>category.id); if(!categoryIds.length)return [];
+  const {data:days}=await db.from('matchdays').select('round_number,scheduled_date,matches!inner(status)').in('category_id',categoryIds);
+  const eligibleDays=(days||[]).map((day:any)=>({...day,matches:(day.matches||[]).filter((match:any)=>match.status!=='BYE')})).filter((day:any)=>Number(day.round_number)>0&&(!asOfDate||day.scheduled_date<=asOfDate)&&Array.isArray(day.matches)&&day.matches.length>0);
+  const matchesByRound=new Map<number,any[]>();
+  eligibleDays.forEach((day:any)=>{const round=Number(day.round_number);matchesByRound.set(round,[...(matchesByRound.get(round)||[]),...day.matches]);});
+  return Array.from(matchesByRound.entries()).filter(([,matches])=>matches.some((match:any)=>match.status==='FINISHED')&&matches.every((match:any)=>match.status==='FINISHED')).map(([round])=>round).sort((a,b)=>a-b);
+}
+
+export async function buildBulletinSnapshot(db:any, tournamentId:string, asOfDate?:string|null,targetRound?:number|null):Promise<BulletinSnapshot> {
   const {data:tournament}=await db.from('tournaments').select('fair_play_enabled,fp_starting_points,fp_yellow_deduction,fp_red_deduction,fine_yellow_amount,fine_red_amount').eq('id',tournamentId).maybeSingle();
   const { data: categoryData } = await db.from('categories').select('id,name,sports(name)').eq('tournament_id', tournamentId);
   const categories=categoryData||[];
   const categoryIds=categories.map((c:any)=>c.id); if(!categoryIds.length)return {categories:[]};
-  let daysQuery=db.from('matchdays').select('id,category_id,round_number,scheduled_date').in('category_id',categoryIds); if(asOfDate)daysQuery=daysQuery.lte('scheduled_date',asOfDate);
+  let daysQuery=db.from('matchdays').select('id,category_id,round_number,scheduled_date').in('category_id',categoryIds); if(asOfDate)daysQuery=daysQuery.lte('scheduled_date',asOfDate); if(targetRound)daysQuery=daysQuery.lte('round_number',targetRound);
   const [{data:teamData},{data:dayData}]=await Promise.all([db.from('teams').select('id,name,category_id,fair_play_points').in('category_id',categoryIds),daysQuery]);
   const teams=teamData||[], days=dayData||[];
   const dayIds=days.map((d:any)=>d.id); const {data:matchData}=dayIds.length?await db.from('matches').select('id,matchday_id,status,home_score,away_score,home_sets,away_sets,home_team_id,away_team_id').in('matchday_id',dayIds):{data:[]};
@@ -49,7 +64,7 @@ export async function buildBulletinSnapshot(db:any, tournamentId:string, asOfDat
   return {categories:categories.map((category:any)=>{
     const categoryTeams=teams.filter((t:any)=>t.category_id===category.id), ids=new Set(categoryTeams.map((t:any)=>t.id));
     const categoryMatches=matches.filter((m:any)=>dayById.get(m.matchday_id)?.category_id===category.id), finished=categoryMatches.filter((m:any)=>m.status==='FINISHED');
-    const round=Math.max(0,...finished.map((m:any)=>Number(dayById.get(m.matchday_id)?.round_number||0))); const rules=getSportRules(category.sports?.name);
+    const round=targetRound??Math.max(0,...finished.map((m:any)=>Number(dayById.get(m.matchday_id)?.round_number||0))); const rules=getSportRules(category.sports?.name);
     const rows=new Map<string,any>(categoryTeams.map((t:any)=>[t.id,{id:t.id,name:t.name,fair_play_points:t.fair_play_points??Number(tournament?.fp_starting_points||0),played:0,won:0,drawn:0,lost:0,goals_for:0,goals_against:0,points:0}]));
     finished.forEach((m:any)=>{const h:any=rows.get(m.home_team_id),a:any=rows.get(m.away_team_id);if(!h||!a)return;const s=getMatchScoreForStandings(m,rules),p=getResultPoints(s.home,s.away,rules);h.played++;a.played++;h.points+=p.home;a.points+=p.away;if(s.countsForScoreColumns){h.goals_for+=s.home;h.goals_against+=s.away;a.goals_for+=s.away;a.goals_against+=s.home}if(s.home>s.away){h.won++;a.lost++}else if(s.away>s.home){a.won++;h.lost++}else{h.drawn++;a.drawn++}});
     const categoryEvents=events.filter((e:any)=>ids.has(e.team_id));

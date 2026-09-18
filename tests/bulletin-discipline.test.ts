@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
-import { stampSuspensionOrigins, hydrateDynamicBulletinFields, type BulletinSnapshot } from '../app/lib/tournaments/bulletin';
+import { getNextUnpublishedRound, stampSuspensionOrigins, hydrateDynamicBulletinFields, type BulletinSnapshot } from '../app/lib/tournaments/bulletin';
+
+describe('automatic bulletin numbering', () => {
+  it('returns the first completed round that has not been published', () => {
+    expect(getNextUnpublishedRound([1, 2, 3], [1])).toBe(2);
+    expect(getNextUnpublishedRound([1, 2, 3], [1, 2])).toBe(3);
+    expect(getNextUnpublishedRound([1, 3], [1])).toBe(3);
+    expect(getNextUnpublishedRound([1, 2], [1, 2])).toBeNull();
+  });
+});
 
 describe('published bulletin discipline', () => {
   it('removes superseded cards by event ID even after the live round advances', () => {
