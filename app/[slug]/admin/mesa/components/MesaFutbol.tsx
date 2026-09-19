@@ -466,40 +466,36 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   const handlePrintMatchSheet = async () => {
     if (homeRoster.length === 0 && awayRoster.length === 0) return toast.error('No hay jugadores cargados para crear la planilla.');
     const { jsPDF } = await import('jspdf');
-    const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-    pdf.setFillColor(7, 15, 36); pdf.rect(0, 0, 297, 28, 'F');
-    pdf.setTextColor(255, 255, 255); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(16); pdf.text('PLANILLA MANUAL DE PARTIDO', 12, 12);
-    pdf.setFontSize(9); pdf.text(`${String(match.home_team?.name || '').toUpperCase()}  VS  ${String(match.away_team?.name || '').toUpperCase()}`, 12, 21);
-    pdf.setTextColor(71, 85, 105); pdf.setFontSize(8);
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageWidth = 210; const margin = 10; const tableWidth = pageWidth - margin * 2;
+    pdf.setFillColor(7, 15, 36); pdf.rect(0, 0, pageWidth, 27, 'F');
+    pdf.setTextColor(255, 255, 255); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(14); pdf.text('PLANILLA MANUAL DE PARTIDO', margin, 10);
+    pdf.setFontSize(9); pdf.text(`${String(match.home_team?.name || 'LOCAL').toUpperCase()}  VS  ${String(match.away_team?.name || 'VISITANTE').toUpperCase()}`, pageWidth - margin, 10, { align: 'right' });
+    pdf.setFontSize(8); pdf.text(`${String(match.home_team?.name || '').toUpperCase()}  VS  ${String(match.away_team?.name || '').toUpperCase()}`, margin, 19);
     const date = match.matchdays?.scheduled_date || 'Fecha pendiente';
     const time = match.scheduled_time?.slice(0, 5) || '--:--';
-    pdf.text(`${date} · ${time} · ${String(match.venue || 'Cancha pendiente').toUpperCase()} · Jornada ${match.matchdays?.round_number || '-'}`, 285, 20, { align: 'right' });
+    pdf.setTextColor(148, 163, 184); pdf.setFontSize(6.5);
+    pdf.text(`${date} · ${time} · ${String(match.venue || 'Cancha pendiente').toUpperCase()} · Jornada ${match.matchdays?.round_number || '-'}`, pageWidth - margin, 22, { align: 'right' });
 
-    const drawRoster = (title: string, roster: any[], x: number) => {
-      const widths = [10, 16, 65, 13, 13, 13, 15];
-      const headers = ['#', 'Dorsal', 'Jugador', 'Gol', 'TA', 'TR', 'Min.'];
-      const rowCount = Math.max(roster.length, 16);
-      const rowHeight = Math.min(7, 137 / rowCount);
-      let y = 36;
-      pdf.setFillColor(219, 234, 254); pdf.roundedRect(x, y, 137, 9, 2, 2, 'F');
-      pdf.setTextColor(29, 78, 216); pdf.setFontSize(8); pdf.setFont('helvetica', 'bold'); pdf.text(title.toUpperCase(), x + 4, y + 6);
-      y += 11;
-      pdf.setFillColor(241, 245, 249); pdf.rect(x, y, 137, 8, 'F');
-      let columnX = x;
-      headers.forEach((header, index) => { pdf.setTextColor(71, 85, 105); pdf.setFontSize(6); pdf.text(header, columnX + 2, y + 5); columnX += widths[index]; });
-      y += 8;
-      roster.forEach((player, index) => {
-        pdf.setDrawColor(203, 213, 225); pdf.rect(x, y, 137, rowHeight);
-        const values = [String(index + 1), String(player.shirt_number || '-'), String(player.name || '').toUpperCase(), '', '', '', ''];
-        let valueX = x;
-        values.forEach((value, valueIndex) => { pdf.setTextColor(15, 23, 42); pdf.setFontSize(Math.min(6.5, rowHeight)); pdf.text(pdf.splitTextToSize(value, widths[valueIndex] - 3).slice(0, 1), valueX + 2, y + Math.min(4.8, rowHeight - 1)); valueX += widths[valueIndex]; if (valueIndex < widths.length - 1) { pdf.line(valueX, y, valueX, y + rowHeight); } });
-        y += rowHeight;
-      });
-      for (let index = roster.length; index < rowCount; index += 1) { pdf.setDrawColor(226, 232, 240); pdf.rect(x, y, 137, rowHeight); y += rowHeight; }
+    const drawRoster = (title: string, roster: any[], startY: number) => {
+      const widths = [9, 15, 70, 14, 14, 14, 54]; const headers = ['#', 'Dorsal', 'Jugador inscrito', 'G', 'TA', 'TR', 'Observaciones'];
+      const rowCount = Math.max(roster.length, 14); const rowHeight = Math.min(5.8, 84 / rowCount); let y = startY;
+      pdf.setFillColor(219, 234, 254); pdf.rect(margin, y, tableWidth, 8, 'F');
+      pdf.setTextColor(29, 78, 216); pdf.setFontSize(8); pdf.setFont('helvetica', 'bold'); pdf.text(`${title.toUpperCase()} · ${roster.length} JUGADORES`, margin + 3, y + 5.3); y += 8;
+      pdf.setFillColor(241, 245, 249); pdf.rect(margin, y, tableWidth, 8, 'F'); let columnX = margin;
+      headers.forEach((header, index) => { pdf.setTextColor(71, 85, 105); pdf.setFontSize(index >= 3 && index <= 5 ? 5.5 : 6); pdf.text(header, columnX + 1.5, y + 5.2); columnX += widths[index]; if (index < widths.length - 1) pdf.line(columnX, y, columnX, y + 8); }); y += 8;
+      for (let index = 0; index < rowCount; index += 1) {
+        const player = roster[index];
+        if (index % 2 === 1) { pdf.setFillColor(248, 250, 252); pdf.rect(margin, y, tableWidth, rowHeight, 'F'); }
+        pdf.setDrawColor(203, 213, 225); pdf.rect(margin, y, tableWidth, rowHeight);
+        const values = player ? [String(index + 1), String(player.shirt_number || '-'), String(player.name || '').toUpperCase(), '', '', '', ''] : ['', '', '', '', '', '', ''];
+        let valueX = margin;
+        values.forEach((value, valueIndex) => { pdf.setTextColor(15, 23, 42); pdf.setFont('helvetica', valueIndex === 2 ? 'bold' : 'normal'); pdf.setFontSize(Math.min(7.4, Math.max(5.4, rowHeight + 1.1))); if (value) pdf.text(pdf.splitTextToSize(value, widths[valueIndex] - 3).slice(0, 1), valueX + 1.5, y + Math.min(4, rowHeight - 0.8)); valueX += widths[valueIndex]; if (valueIndex < widths.length - 1) pdf.line(valueX, y, valueX, y + rowHeight); }); y += rowHeight;
+      }
+      return y;
     };
-    drawRoster(match.home_team?.name || 'Local', homeRoster, 10);
-    drawRoster(match.away_team?.name || 'Visitante', awayRoster, 150);
-    pdf.setTextColor(71, 85, 105); pdf.setFontSize(7); pdf.text('Marcador final: LOCAL ______  VISITANTE ______     Árbitro: ______________________________     Firma mesa: ______________________________', 12, 198);
+    const homeEnd = drawRoster(match.home_team?.name || 'Local', homeRoster, 32); const awayEnd = drawRoster(match.away_team?.name || 'Visitante', awayRoster, homeEnd + 8);
+    pdf.setTextColor(71, 85, 105); pdf.setFontSize(7); pdf.text('Marcador final: LOCAL ______  VISITANTE ______', margin, Math.min(286, awayEnd + 9)); pdf.text('Árbitro: ____________________     Firma mesa: ____________________', pageWidth - margin, Math.min(286, awayEnd + 9), { align: 'right' });
     pdf.autoPrint();
     const url = URL.createObjectURL(pdf.output('blob'));
     const opened = window.open(url, '_blank', 'noopener,noreferrer');
