@@ -205,6 +205,15 @@ export function removeDemoYellowCard(matchId: string, eventId: string) {
   return { success: true, removedEventIds: [...removeIds], removedGeneratedRed: Boolean(generatedRed) };
 }
 
+export function removeDemoRedCard(matchId: string, eventId: string) {
+  const db = loadDemoDatabase();
+  const event = db.match_events.find((item: any) => item.id === eventId && item.match_id === matchId);
+  if (!event || event.event_type !== 'RED') return { success: false, error: 'No se encontró la tarjeta roja seleccionada.' };
+  db.match_events = db.match_events.filter((item: any) => item.id !== eventId);
+  saveDemoDatabase(db);
+  return { success: true, removedEventId: eventId };
+}
+
 export function changeDemoMatchPeriod(matchId: string, period: string) { const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === matchId); if (match) match.current_period = period; saveDemoDatabase(db); return { success: true }; }
 export function finishDemoFootballMatch(matchId: string, homeScore: number, awayScore: number, currentPeriod: string) { const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === matchId); if (match) Object.assign(match, { status: 'FINISHED', home_score: homeScore, away_score: awayScore, current_period: currentPeriod, is_timer_running: false, timer_start_time: null, match_phase: 'FINISHED' }); saveDemoDatabase(db); return { success: true }; }
 export function applyDemoWalkover(matchId: string, absentTeamId: string) { const db = loadDemoDatabase(); const match = db.matches.find((item) => item.id === matchId); if (match) Object.assign(match, { status: 'FINISHED', home_score: absentTeamId === match.home_team_id ? 0 : 3, away_score: absentTeamId === match.away_team_id ? 0 : 3, is_timer_running: false }); saveDemoDatabase(db); return { success: true }; }

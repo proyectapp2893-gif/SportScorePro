@@ -14,7 +14,7 @@ export default function ApprovedPaymentProofs({ slug, tournamentId }: { slug: st
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [fileErrors, setFileErrors] = useState<Record<string, string>>({});
@@ -44,7 +44,9 @@ export default function ApprovedPaymentProofs({ slug, tournamentId }: { slug: st
     <button type="button" onClick={() => setExpanded(value => !value)} aria-expanded={expanded} className="mb-4 flex w-full items-center gap-3 text-left"><CheckCircle2 className="shrink-0 text-emerald-600" /><span className="flex-1"><span id="approved-proofs-title" className="block text-xl font-black text-slate-900">Comprobantes aprobados</span><span className="block text-xs text-slate-500">Historial del torneo seleccionado, del más reciente al más antiguo.</span></span><ChevronDown className={`text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`} /></button>
     {expanded && (loading ? <p role="status" className="py-4 text-sm text-slate-500">Cargando historial…</p> : error ? <div role="alert"><p className="text-sm text-red-700">{error}</p><button type="button" onClick={() => setRetry(value => value + 1)} className="mt-2 rounded-xl border px-4 py-2 text-sm font-bold">Reintentar</button></div> : proofs.length === 0 ? <p className="rounded-2xl border border-dashed border-emerald-200 p-4 text-sm text-slate-500">No hay comprobantes aprobados en esta página.</p> : <div className="grid gap-3 md:grid-cols-2">{proofs.map(proof => <article key={proof.id} className="rounded-2xl border border-emerald-100 bg-white p-4">
       <p className="text-sm font-black uppercase">{proof.teams?.name || 'Equipo sin nombre'}</p>
-      <p className="mt-1 text-sm text-slate-600">#{proof.players?.shirt_number ?? '—'} {proof.players?.name || 'Jugador sin nombre'}</p>
+      <p className="mt-1 text-sm text-slate-600">{proof.proof_scope === 'TEAM' ? 'Comprobante global del equipo' : `#${proof.players?.shirt_number ?? '—'} ${proof.players?.name || 'Jugador sin nombre'}`}</p>
+      <p className="mt-1 text-[10px] font-black uppercase tracking-wider text-slate-500">Enviado por: {proof.sender_name} · {proof.sender_role}</p>
+      <p className="mt-1 text-[10px] font-black uppercase tracking-wider text-violet-600">{proof.coverage_type === 'PARTIAL' ? 'Pago global parcial' : 'Pago aplicado completo'} · {proof.approved_amount ? new Intl.NumberFormat('es-CO').format(Number(proof.approved_amount)) : '—'} COP · {proof.fine_payment_proof_allocations?.length || 0} sanción(es) cubierta(s)</p>
       <p className="mt-2 break-all text-xs text-slate-500">{proof.original_filename}</p>
       <p className="mt-2 text-xs text-slate-600">Enviado: {date(proof.submitted_at)}</p>
       <p className="mt-1 text-xs font-bold text-emerald-700">Aprobado: {date(proof.reviewed_at)}</p>

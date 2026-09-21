@@ -6,7 +6,7 @@ import { inferMissingTeamByes } from '@/app/lib/tournaments/byes';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
 import DemoDelegatePortal from './DemoDelegatePortal';
 import { buildBulletinSnapshot, hydrateDynamicBulletinFields } from '@/app/lib/tournaments/bulletin';
-import { nextDate, normalizeAsOfDate } from '@/app/lib/date-filter';
+import { nextDate } from '@/app/lib/date-filter';
 
 async function loadTeamAccess(supabase: ReturnType<typeof createServerSupabaseAdminClient>, delegateId: string) {
   const fullQuery = await supabase
@@ -307,11 +307,9 @@ async function loadDelegatePortalData(slug: string, asOfDate: string | null) {
   };
 }
 
-export default async function DelegatePortalPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ hasta?: string }> }) {
+export default async function DelegatePortalPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const { hasta } = await searchParams;
-  const asOfDate = normalizeAsOfDate(hasta);
   if (slug === DEMO_SLUG) return <DemoDelegatePortal slug={slug} />;
-  const initialData = await loadDelegatePortalData(slug, asOfDate);
+  const initialData = await loadDelegatePortalData(slug, null);
   return <DelegatePortalClient slug={slug} initialData={initialData} />;
 }

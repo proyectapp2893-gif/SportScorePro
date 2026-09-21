@@ -13,9 +13,16 @@ export default function AsOfDateFilter({ alwaysShow = false }: { alwaysShow?: bo
   const selectedDate = normalizeAsOfDate(searchParams.get(AS_OF_DATE_PARAM));
   const storageKey = routeParams.slug ? `sportscore-as-of-date-${routeParams.slug}` : '';
   const isOperationalRoute = pathname.includes('/admin/mesa') || pathname.includes('/planillero') || (!alwaysShow && pathname.includes('/admin/boletines')) || pathname.startsWith('/tv');
+  const isDateFilteredRoute = pathname.endsWith('/admin')
+    || pathname.includes('/admin/estadisticas')
+    || pathname.includes('/admin/fase-final')
+    || pathname.includes('/admin/planillas')
+    || pathname.includes('/admin/participaciones')
+    || pathname.includes('/admin/tribunal')
+    || pathname.includes('/admin/boletines');
 
   useEffect(() => {
-    if (!storageKey) return;
+    if (!storageKey || !isDateFilteredRoute) return;
     const storedDate = normalizeAsOfDate(window.localStorage.getItem(storageKey));
     if (selectedDate) {
       window.localStorage.setItem(storageKey, selectedDate);
@@ -24,7 +31,7 @@ export default function AsOfDateFilter({ alwaysShow = false }: { alwaysShow?: bo
       params.set(AS_OF_DATE_PARAM, storedDate);
       router.replace(`${pathname}?${params.toString()}`);
     }
-  }, [pathname, router, searchParams, selectedDate, storageKey]);
+  }, [isDateFilteredRoute, pathname, router, searchParams, selectedDate, storageKey]);
 
   function changeDate(value: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -46,7 +53,7 @@ export default function AsOfDateFilter({ alwaysShow = false }: { alwaysShow?: bo
     router.push(query ? `${pathname}?${query}` : pathname);
   }
 
-  if (isOperationalRoute) return null;
+  if (isOperationalRoute || !isDateFilteredRoute) return null;
   return <div className="sticky top-0 z-[480] border-b border-blue-900/60 bg-slate-900 px-3 py-2 text-white shadow-lg sm:px-6">
     <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2 sm:gap-3">
       <CalendarClock size={16} className="text-cyan-300" />

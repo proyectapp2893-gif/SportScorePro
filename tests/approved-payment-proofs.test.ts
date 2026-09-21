@@ -29,8 +29,8 @@ describe('approved receipt history', () => {
     const { query } = database({ data: Array.from({ length: 21 }, (_, id) => ({ id })), error: null });
     const result = await getApprovedFinePaymentProofs('tenant', 'tournament', 2);
     expect(query.eq).toHaveBeenCalledWith('status', 'APPROVED');
-    expect(query.eq).toHaveBeenCalledWith('match_events.matches.matchdays.categories.tournaments.client_id', 'tenant-id');
-    expect(query.eq).toHaveBeenCalledWith('match_events.matches.matchdays.categories.tournaments.id', 'tournament');
+    expect(query.eq).toHaveBeenCalledWith('tournament_id', 'tournament');
+    expect(query.eq).toHaveBeenCalledWith('teams.categories.tournaments.client_id', 'tenant-id');
     expect(query.range).toHaveBeenCalledWith(40, 60);
     expect(result.success && result.hasMore).toBe(true);
     expect(result.success && result.data).toHaveLength(20);
@@ -46,7 +46,7 @@ describe('approved receipt history', () => {
   it('does not sign a missing or foreign receipt', async () => {
     const { query, signed } = database({ data: null, error: null });
     expect((await getFinePaymentProofUrl('tenant', 'foreign-proof')).success).toBe(false);
-    expect(query.eq).toHaveBeenCalledWith('match_events.matches.matchdays.categories.tournaments.client_id', 'tenant-id');
+    expect(query.eq).toHaveBeenCalledWith('teams.categories.tournaments.client_id', 'tenant-id');
     expect(signed).not.toHaveBeenCalled();
   });
   it('signs only the storage path retrieved from the authorized receipt', async () => {

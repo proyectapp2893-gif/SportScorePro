@@ -7,6 +7,15 @@ export type BulletinSanction = {
   startBulletinNumber?: number;
 };
 
+/**
+ * A caution recorded in the open match must not make the same player
+ * ineligible for a later goal or substitution in that match. Red cards and
+ * sanctions from previous matches still participate in live eligibility.
+ */
+export function filterLiveEligibilityEvents<T extends { match_id?: string | null; event_type?: string | null }>(events: T[], currentMatchId: string): T[] {
+  return events.filter((event) => !(event.match_id === currentMatchId && event.event_type === 'YELLOW'));
+}
+
 /** Only confirmed bulletin numbers count; previews must never unlock a roster. */
 export function remainingSuspension(sanction: BulletinSanction, bulletinNumber: number): number {
   const total = Number(sanction.originalMatches ?? sanction.matches ?? 0);

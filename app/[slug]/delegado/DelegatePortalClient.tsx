@@ -8,7 +8,7 @@ import * as XLSX from 'xlsx';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '@/app/lib/sports/rules';
 import { toTeamSlug } from '@/app/lib/team-slug';
 import { DEFAULT_ROSTER_LOCKED_MESSAGE } from '@/app/lib/registration';
-import { addDelegatePlayers, changeDelegatePassword, copyTeamRosterFromTournament, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, saveDelegateTeamStaff, saveDelegateMatchLineup, updateDelegatePlayer, uploadDelegateSchoolLogo, uploadPlayerIdentityDocument, uploadPlayerFinePaymentProof } from './actions';
+import { addDelegatePlayers, changeDelegatePassword, copyTeamRosterFromTournament, deleteDelegatePlayer, getPlayerIdentityDocumentUrl, loginDelegate, logoutDelegate, saveDelegateTeamStaff, saveDelegateMatchLineup, updateDelegatePlayer, uploadDelegateSchoolLogo, uploadFinePaymentProof, uploadPlayerIdentityDocument } from './actions';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
 import { addDemoDocument, addDemoPlayers, deleteDemoPlayer, saveDemoStaff, updateDemoPlayer } from '@/app/lib/demo/actions';
 import { confirmDialog } from '@/app/components/AppDialog';
@@ -302,6 +302,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const [selectedHistoryMatch, setSelectedHistoryMatch] = useState<any | null>(null);
   const [selectedStatDetail, setSelectedStatDetail] = useState<'GOALS' | 'YELLOW' | 'RED' | 'DEBT' | null>(null);
   const [selectedFineEvent, setSelectedFineEvent] = useState<any | null>(null);
+  const [selectedProofPlayerIds, setSelectedProofPlayerIds] = useState<string[]>([]);
   const [lineupMatch, setLineupMatch] = useState<any | null>(null);
   const [lineupSelection, setLineupSelection] = useState<string[]>([]);
   const [lineupFormation, setLineupFormation] = useState('3-3-2');
@@ -392,6 +393,8 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     setShowRegistrationModule(false);
     setRosterEditMode(false);
     setEditingPlayer(null);
+    setSelectedFineEvent(null);
+    setSelectedProofPlayerIds([]);
     setStaffForm({
       headCoach: teamStaff.find((member: any) => member.role === 'HEAD_COACH')?.full_name || '',
       assistantCoach: teamStaff.find((member: any) => member.role === 'ASSISTANT_COACH')?.full_name || '',
@@ -504,6 +507,21 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   );
   const teamDebtEvents = cardEvents.filter((event: any) => event.fine_status !== 'PAID');
   const teamDebtTotal = teamDebtEvents.reduce((sum: number, event: any) => sum + eventFineAmount(event), 0);
+  const debtPlayers = Object.values(teamDebtEvents.reduce((groups: Record<string, any>, event: any) => {
+    if (!event.player_id) return groups;
+    if (!groups[event.player_id]) {
+      groups[event.player_id] = {
+        playerId: event.player_id,
+        name: event.players?.name || 'Jugador sin asignar',
+        shirtNumber: event.players?.shirt_number,
+        events: [],
+        total: 0,
+      };
+    }
+    groups[event.player_id].events.push(event);
+    groups[event.player_id].total += eventFineAmount(event);
+    return groups;
+  }, {}));
   const statDetailEvents = selectedStatDetail === 'GOALS'
     ? events.filter((event: any) => ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3'].includes(event.event_type))
     : selectedStatDetail === 'DEBT'
@@ -979,14 +997,19 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
     setLoading(false);
   };
 
-  const handleFineProofUpload = async (file?: File) => {
-    if (!selectedTeam || !selectedFineEvent || !file) return;
+  const handleFineProofUpload = async (file: File | undefined, scope: 'PLAYER' | 'TEAM', targetEvent: any | null = selectedFineEvent) => {
+    if (!selectedTeam || !file || (scope === 'PLAYER' && !targetEvent?.player_id) || (scope === 'TEAM' && teamDebtEvents.length === 0)) return;
     setLoading(true);
     const result = isDemo
       ? { success: true as const, data: undefined }
-      : await uploadPlayerFinePaymentProof(slug, selectedTeam.id, selectedFineEvent.player_id, selectedFineEvent.id, file);
+      : await uploadFinePaymentProof(slug, selectedTeam.id, scope, scope === 'PLAYER' ? targetEvent.player_id : null, file);
     if (!result.success) toast.error(result.error || 'No se pudo enviar el comprobante');
-    else { toast.success(isDemo ? 'Comprobante simulado enviado' : 'Comprobante enviado para validación'); setSelectedFineEvent(null); if (!isDemo) window.location.reload(); }
+    else {
+      toast.success(isDemo ? 'Comprobante simulado enviado' : 'Comprobante enviado para validación');
+      setSelectedFineEvent(null);
+      if (scope === 'PLAYER' && targetEvent?.player_id) setSelectedProofPlayerIds((ids) => ids.filter((id) => id !== targetEvent.player_id));
+      if (!isDemo) window.location.reload();
+    }
     setLoading(false);
   };
 
@@ -1634,10 +1657,10 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 <button type="button" onClick={() => setSelectedFineEvent(null)} className="rounded-xl bg-white/10 p-2.5 text-white" aria-label="Cerrar perfil"><X size={18} /></button>
               </header>
               <div className="space-y-4 p-6">
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4"><p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Saldo disciplinario del equipo</p><p className="mt-1 text-2xl font-black text-slate-900">{formatCopAmount(selectedFineEvent.teamDebtTotal || eventFineAmount(selectedFineEvent))}</p><p className="mt-1 text-xs font-bold uppercase text-amber-800">Pago único · {selectedFineEvent.teamDebtEvents?.length || 1} sanciones pendientes</p></div>
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4"><p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Saldo disciplinario del equipo</p><p className="mt-1 text-2xl font-black text-slate-900">{formatCopAmount(selectedFineEvent.teamDebtTotal || eventFineAmount(selectedFineEvent))}</p><p className="mt-1 text-xs font-bold uppercase text-amber-800">{selectedFineEvent.teamDebtEvents?.length ? `${selectedFineEvent.teamDebtEvents.length} sanciones pendientes` : 'Saldo pendiente del jugador'}</p></div>
                 {selectedFineEvent.disciplinary_comment && <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Comentario del Tribunal</p><p className="mt-1 text-sm font-semibold text-slate-700">{selectedFineEvent.disciplinary_comment}</p></div>}
                 {selectedFineEvent.suspension_matches && <div className="rounded-2xl border border-red-200 bg-red-50 p-4"><p className="text-[10px] font-black uppercase tracking-widest text-red-600">Suspensión aplicada</p><p className="mt-1 text-sm font-black uppercase text-red-700">{selectedFineEvent.suspension_matches} {selectedFineEvent.suspension_matches === 1 ? 'jornada' : 'jornadas'}</p></div>}
-                {selectedFineEvent.fine_status !== 'PAID' && <><a href={DISCIPLINARY_PAYMENT_URL} target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-xs font-black uppercase tracking-widest text-emerald-700 hover:bg-emerald-100"><ExternalLink size={16} /> Link de pago</a><label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-center text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-blue-200 hover:bg-blue-700"> <Upload size={16} /> Subir comprobante<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" disabled={loading} onChange={(event) => handleFineProofUpload(event.target.files?.[0])} /></label></>}
+                {selectedFineEvent.fine_status !== 'PAID' && <><a href={DISCIPLINARY_PAYMENT_URL} target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-xs font-black uppercase tracking-widest text-emerald-700 hover:bg-emerald-100"><ExternalLink size={16} /> Link de pago</a><div className="grid gap-2 sm:grid-cols-2"><label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-center text-[10px] font-black uppercase tracking-widest text-white shadow-lg shadow-blue-200 hover:bg-blue-700"> <Upload size={16} /> Comprobante del jugador<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" disabled={loading} onChange={(event) => handleFineProofUpload(event.target.files?.[0], 'PLAYER')} /></label>{selectedFineEvent.teamDebtEvents?.length ? <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-center text-[10px] font-black uppercase tracking-widest text-white shadow-lg shadow-violet-200 hover:bg-violet-700"> <Upload size={16} /> Comprobante global<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" disabled={loading} onChange={(event) => handleFineProofUpload(event.target.files?.[0], 'TEAM')} /></label> : null}</div></>}
                 <p className="text-center text-[10px] font-bold uppercase tracking-wider text-slate-400">El comprobante será revisado por la administración. La habilitación solo ocurre después de su aprobación.</p>
               </div>
             </section>
@@ -1751,6 +1774,58 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 <div className="mt-4 divide-y divide-slate-100">
                   {cardEvents.map((event: any) => <button type="button" key={event.id} onClick={() => setSelectedFineEvent(event)} className="flex w-full items-center justify-between gap-3 py-3 text-left transition-colors hover:bg-amber-50"><div className="flex min-w-0 items-center gap-3"><Square size={18} className={event.event_type === 'RED' ? 'fill-red-600 text-red-600' : 'fill-yellow-400 text-yellow-400'} /><div className="min-w-0"><p className="truncate text-xs font-black uppercase">{event.players?.name || 'Jugador sin asignar'}</p><p className="text-[9px] font-bold uppercase text-slate-400">{eventLabel(event.event_type)} · vs. {eventOpponent(event)}{event.matches?.matchdays?.round_number ? ` · Jornada ${event.matches.matchdays.round_number}` : ''} · {event.fine_status === 'PAID' ? 'Pagada' : 'Pendiente'}</p>{event.disciplinary_comment && <p className="mt-1 truncate text-[9px] font-semibold text-slate-500">Motivo: {event.disciplinary_comment}</p>}{event.suspension_matches && <p className="text-[9px] font-black uppercase text-red-600">Suspensión: {event.suspension_matches} {event.suspension_matches === 1 ? 'jornada' : 'jornadas'}</p>}</div></div><span className="shrink-0 text-xs font-black">{formatCopAmount(eventFineAmount(event))}</span></button>)}
                   {cardEvents.length === 0 && <p className="py-8 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">Sin tarjetas ni sanciones</p>}
+                </div>
+                <div className="mt-5 space-y-4 border-t border-amber-200/70 pt-5">
+                  <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-[9px] font-black uppercase tracking-[0.18em] text-violet-600">Saldo pendiente del equipo</p>
+                        <p className="mt-1 text-2xl font-black text-slate-950">{formatCopAmount(teamDebtTotal)}</p>
+                        <p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-violet-700">
+                          {teamDebtEvents.length > 0 ? `${teamDebtEvents.length} sanciones · ${debtPlayers.length} jugadores` : 'No hay sanciones pendientes'}
+                        </p>
+                      </div>
+                      <label className={`flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-xl px-4 py-3 text-center text-[10px] font-black uppercase tracking-widest text-white shadow-lg transition-colors ${teamDebtEvents.length && !loading ? 'bg-violet-600 shadow-violet-200 hover:bg-violet-700' : 'cursor-not-allowed bg-slate-300 shadow-none'}`}>
+                        <Upload size={16} />
+                        {loading ? 'Enviando…' : 'Comprobante global del equipo'}
+                        <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" disabled={loading || teamDebtEvents.length === 0} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void handleFineProofUpload(file, 'TEAM', teamDebtEvents[0] || null); }} />
+                      </label>
+                    </div>
+                    <p className="mt-3 text-[9px] font-semibold leading-relaxed text-violet-800">Este comprobante se asociará al equipo y podrá cubrir todas las sanciones pendientes después de la revisión del Tribunal.</p>
+                  </div>
+
+                  <div className="rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
+                    <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                      <div>
+                        <p className="text-[9px] font-black uppercase tracking-[0.18em] text-blue-600">Comprobantes individuales</p>
+                        <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">Selecciona un jugador y carga su comprobante</p>
+                      </div>
+                      {selectedProofPlayerIds.length > 0 && <span className="text-[9px] font-black uppercase tracking-wider text-blue-700">{selectedProofPlayerIds.length} seleccionado{selectedProofPlayerIds.length === 1 ? '' : 's'}</span>}
+                    </div>
+                    <div className="space-y-2">
+                      {debtPlayers.map((player: any) => {
+                        const selected = selectedProofPlayerIds.includes(player.playerId);
+                        return (
+                          <div key={player.playerId} className={`rounded-xl border p-3 transition-colors ${selected ? 'border-blue-400 bg-white shadow-sm' : 'border-blue-100 bg-white/70'}`}>
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <label className="flex min-w-0 cursor-pointer items-center gap-3">
+                                <input type="checkbox" checked={selected} onChange={() => setSelectedProofPlayerIds((ids) => selected ? ids.filter((id) => id !== player.playerId) : [...ids, player.playerId])} className="h-4 w-4 accent-blue-600" />
+                                <span className="min-w-0">
+                                  <span className="block truncate text-xs font-black uppercase text-slate-900">#{player.shirtNumber || '-'} {player.name}</span>
+                                  <span className="mt-1 block text-[9px] font-bold uppercase tracking-wider text-slate-400">{player.events.length} {player.events.length === 1 ? 'sanción' : 'sanciones'} · {formatCopAmount(player.total)}</span>
+                                </span>
+                              </label>
+                              {selected && <label className={`flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-lg px-3 py-2 text-center text-[9px] font-black uppercase tracking-wider text-white transition-colors ${loading ? 'cursor-not-allowed bg-slate-300' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                                <Upload size={14} /> Cargar comprobante
+                                <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" disabled={loading} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void handleFineProofUpload(file, 'PLAYER', player.events[0]); }} />
+                              </label>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {debtPlayers.length === 0 && <p className="rounded-xl border border-dashed border-blue-200 bg-white/70 px-4 py-5 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">No hay jugadores con saldo pendiente</p>}
+                    </div>
+                  </div>
                 </div>
               </div>
             </section>}

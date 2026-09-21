@@ -2,10 +2,11 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../../../../supabase';
-import { ArrowLeft, CheckCircle2, Play, Pause, RotateCcw, Minus, Plus, School, CalendarDays, X, Flame, AlertTriangle, Radio, RefreshCcw, Hand, Timer, ArrowRight, BellRing } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Play, Pause, RotateCcw, Minus, Plus, School, CalendarDays, X, Flame, AlertTriangle, Radio, RefreshCcw, Hand, Timer, ArrowRight, BellRing, LoaderCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { FaBasketballBall } from 'react-icons/fa';
 import { useCountdownMatchTimer } from '../hooks/useCountdownMatchTimer';
+import { useActionGuard } from '../hooks/useActionGuard';
 import { finishCourtMatch, recordGenericMatchEvent, startLiveMatch } from '../actions';
 import { evaluatePlayerEligibility } from '@/app/lib/competition/player-eligibility';
 
@@ -28,6 +29,8 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
   const [liveEvents, setLiveEvents] = useState<any[]>([]);
 
   const [loading, setLoading] = useState(false);
+  const eventGuard = useActionGuard();
+  const startGuard = useActionGuard();
   const [showFinishConfirm, setShowFinishConfirm] = useState(false);
   const [showPeriodConfirm, setShowPeriodConfirm] = useState<{ isOpen: boolean; targetPeriod: string }>({ isOpen: false, targetPeriod: '' });
   const [showResetTimerConfirm, setShowResetTimerConfirm] = useState(false);
@@ -35,7 +38,7 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
 
   const [scoringAction, setScoringAction] = useState<{ team: 'HOME' | 'AWAY', type: 'SCORE' | 'FOUL' | 'SUB', points: number } | null>(null);
   const [subOutPlayer, setSubOutPlayer] = useState<string | null>(null);
-  const playerEligibility = (player: any) => evaluatePlayerEligibility({ playerId: player.id, registered: true, teamId: player.team_id, documents: player.player_documents || [], suspended: liveEvents.some((event) => event.player_id === player.id && event.event_type === 'RED'), unpaidFine: liveEvents.some((event) => event.player_id === player.id && event.fine_status === 'UNPAID') });
+  const playerEligibility = (player: any) => evaluatePlayerEligibility({ playerId: player.id, registered: true, teamId: player.team_id, documents: player.player_documents || [], suspended: liveEvents.some((event) => event.player_id === player.id && event.event_type === 'RED') });
 
   const {
     timerSeconds,
@@ -103,17 +106,24 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
 
   const executeTimeout = async (team: 'HOME' | 'AWAY', teamName: string) => {
     if (!isMatchLive) return toast.error('El partido no está en vivo.');
-    await pauseTimer();
-    
-    setTimeoutOverlay({ active: true, seconds: 60, team: teamName });
-    recordGenericMatchEvent({
-      slug,
-      matchId: match.id,
-      teamId: team === 'HOME' ? match.home_team.id : match.away_team.id,
-      eventType: 'TIMEOUT',
-      period: currentPeriod,
-      minuteRecord: Math.floor(timerSeconds / 60),
-    }).catch(console.error);
+    if (!eventGuard.tryStart()) return;
+    try {
+      await pauseTimer();
+      setTimeoutOverlay({ active: true, seconds: 60, team: teamName });
+      await recordGenericMatchEvent({
+        slug,
+        matchId: match.id,
+        teamId: team === 'HOME' ? match.home_team.id : match.away_team.id,
+        eventType: 'TIMEOUT',
+        period: currentPeriod,
+        minuteRecord: Math.floor(timerSeconds / 60),
+      });
+    } catch (error) {
+      setTimeoutOverlay({ active: false, seconds: 0, team: '' });
+      toast.error(error instanceof Error ? error.message : 'No se pudo registrar el tiempo fuera.');
+    } finally {
+      eventGuard.stop();
+    }
   };
 
   const resumeFromTimeout = async () => {
@@ -129,6 +139,8 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
   };
 
   const handleTurnMatchLive = async () => {
+    if (!startGuard.tryStart()) return;
+    setLoading(true);
     const toastId = toast.loading('Iniciando transmisión...');
     try {
       await startLiveMatch({ slug, matchId: match.id, period: 'Q1', resetScores: true });
@@ -143,6 +155,9 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
       toast.success('¡Salto Inicial! Todo listo.', { id: toastId, icon: '🏀' });
     } catch (err: any) {
       toast.error(`Error al iniciar: ${err.message}`, { id: toastId });
+    } finally {
+      setLoading(false);
+      startGuard.stop();
     }
   };
 
@@ -164,6 +179,7 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
 
   const handleRefereeAction = (team: 'HOME' | 'AWAY', type: 'SCORE' | 'FOUL' | 'SUB', points: number = 0) => {
     if (!isMatchLive) return toast.error('Inicie transmisión primero.');
+    if (eventGuard.busy) return;
     if (points < 0) {
       executeActionRecord(team, type, points); 
       return;
@@ -173,7 +189,9 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
   };
 
   const executeActionRecord = async (team: 'HOME' | 'AWAY', type: 'SCORE' | 'FOUL' | 'SUB', points: number, playerId?: string) => {
-    if (playerId || type === 'SCORE' || type === 'FOUL') {
+    if (!eventGuard.tryStart()) return;
+    try {
+      if (playerId || type === 'SCORE' || type === 'FOUL') {
       let eventType = 'FOUL';
       if (type === 'SCORE') {
         if (points === 1) eventType = 'BASKET_1';
@@ -242,8 +260,13 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
           }
         }
       }
+      }
+      if (type !== 'SUB') setScoringAction(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudo registrar el evento.');
+    } finally {
+      eventGuard.stop();
     }
-    if (type !== 'SUB') setScoringAction(null);
   };
 
   const handleFinishMatchClick = () => {
@@ -292,6 +315,11 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
 
   return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col overflow-hidden text-slate-900 font-sans animate-in slide-in-from-right duration-300">
+      {(eventGuard.busy || startGuard.busy) && (
+        <div className="pointer-events-none fixed right-4 top-4 z-[10000] flex items-center gap-2 rounded-xl bg-slate-950/95 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white shadow-2xl">
+          <LoaderCircle size={16} className="animate-spin text-orange-400" /> {startGuard.busy ? 'Iniciando partido...' : 'Registrando evento...'}
+        </div>
+      )}
       
       {/* OVERLAY TIEMPO FUERA */}
       {timeoutOverlay.active && (
@@ -398,10 +426,10 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
                   <button 
                     key={player.id} 
                     onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points, player.id)}
-                    disabled={isIneligible || (isFouledOut && scoringAction.type !== 'SUB')}
+                    disabled={eventGuard.busy || isIneligible || (isFouledOut && scoringAction.type !== 'SUB')}
                     className={`p-6 rounded-[1.5rem] border transition-all flex flex-col items-center group relative shadow-sm
                       ${isFouledOut ? 'bg-red-50 border-red-200 opacity-50' : 'bg-white border-slate-200 hover:border-blue-400 hover:bg-blue-50'}
-                      ${isOut ? 'ring-4 ring-red-400 scale-95' : ''}
+                      ${isOut ? 'ring-4 ring-red-400 scale-95' : ''} active:scale-95 disabled:cursor-wait disabled:opacity-60
                     `}
                   >
                     {playerFouls > 0 && (
@@ -421,8 +449,9 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
             {scoringAction.type !== 'SUB' && (
               <div className="mt-6 flex justify-center gap-4 pt-6 border-t border-slate-100 shrink-0">
                 <button 
-                  onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points)} 
-                  className="px-8 py-4 bg-slate-100 text-slate-600 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-slate-200 border border-slate-200 transition-colors"
+                  onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points)}
+                  disabled={eventGuard.busy}
+                  className="px-8 py-4 bg-slate-100 text-slate-600 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-slate-200 active:scale-95 border border-slate-200 transition-all disabled:cursor-wait disabled:opacity-60"
                 >
                   Saltar ({scoringAction.type === 'FOUL' ? 'Falta de Equipo' : 'Canasta Anónima'})
                 </button>
@@ -526,7 +555,7 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
         {/* BOTÓN INICIAR PARTIDO - CORRECCIÓN (zIndex alto para evitar bloqueos) */}
         {!isMatchLive && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/30 backdrop-blur-[2px]">
-            <button onClick={handleTurnMatchLive} className="flex flex-col items-center justify-center gap-2 w-40 h-40 md:w-56 md:h-56 bg-red-600 rounded-full text-white shadow-[0_0_60px_rgba(220,38,38,0.6)] hover:bg-red-500 hover:scale-105 active:scale-95 transition-all border-4 border-white animate-pulse">
+            <button onClick={handleTurnMatchLive} disabled={loading || startGuard.busy} className="flex flex-col items-center justify-center gap-2 w-40 h-40 md:w-56 md:h-56 bg-red-600 rounded-full text-white shadow-[0_0_60px_rgba(220,38,38,0.6)] hover:bg-red-500 hover:scale-105 active:scale-95 transition-all border-4 border-white animate-pulse disabled:cursor-wait disabled:opacity-60">
               <Radio size={48} className="md:w-16 md:h-16" />
               <span className="font-black uppercase tracking-[0.2em] text-[10px] md:text-sm text-center px-4 leading-tight">Iniciar Partido</span>
             </button>
@@ -564,13 +593,13 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
           </div>
 
           <div className="flex gap-1.5 md:gap-2 mb-2 md:mb-4 bg-white/80 backdrop-blur-md p-1.5 md:p-2 rounded-[1rem] md:rounded-2xl shadow-xl border border-white z-10 shrink-0">
-            <button onClick={() => handleRefereeAction('HOME', 'FOUL')} disabled={!isMatchLive} className="px-2 md:px-3 md:w-20 h-8 md:h-12 bg-white border border-slate-200 rounded-lg md:rounded-xl shadow-sm hover:bg-orange-50 text-orange-500 font-black text-[8px] md:text-[10px] uppercase tracking-widest gap-1 flex items-center justify-center disabled:pointer-events-none">
+            <button onClick={() => handleRefereeAction('HOME', 'FOUL')} disabled={!isMatchLive || eventGuard.busy} className="px-2 md:px-3 md:w-20 h-8 md:h-12 bg-white border border-slate-200 rounded-lg md:rounded-xl shadow-sm hover:bg-orange-50 active:scale-95 transition-all text-orange-500 font-black text-[8px] md:text-[10px] uppercase tracking-widest gap-1 flex items-center justify-center disabled:pointer-events-none disabled:cursor-wait">
               <Hand size={14}/> <span className="hidden md:inline">Falta</span>
             </button>
-            <button onClick={() => executeTimeout('HOME', match.home_team.name)} disabled={!isMatchLive || timeoutOverlay.active} className="px-2 md:px-4 h-8 md:h-12 bg-white border border-slate-200 rounded-lg md:rounded-xl shadow-sm hover:bg-amber-50 text-amber-600 font-black text-[8px] md:text-[10px] uppercase tracking-widest gap-1 flex items-center justify-center disabled:pointer-events-none">
+            <button onClick={() => executeTimeout('HOME', match.home_team.name)} disabled={!isMatchLive || timeoutOverlay.active || eventGuard.busy} className="px-2 md:px-4 h-8 md:h-12 bg-white border border-slate-200 rounded-lg md:rounded-xl shadow-sm hover:bg-amber-50 active:scale-95 transition-all text-amber-600 font-black text-[8px] md:text-[10px] uppercase tracking-widest gap-1 flex items-center justify-center disabled:pointer-events-none disabled:cursor-wait">
               <Timer size={14}/> <span className="hidden md:inline">T. Fuera</span>
             </button>
-            <button onClick={() => handleRefereeAction('HOME', 'SUB')} disabled={!isMatchLive} className="w-10 h-8 md:w-14 md:h-12 bg-slate-900 border border-slate-800 rounded-lg md:rounded-xl shadow-sm hover:bg-slate-800 text-white flex items-center justify-center disabled:pointer-events-none">
+            <button onClick={() => handleRefereeAction('HOME', 'SUB')} disabled={!isMatchLive || eventGuard.busy} className="w-10 h-8 md:w-14 md:h-12 bg-slate-900 border border-slate-800 rounded-lg md:rounded-xl shadow-sm hover:bg-slate-800 active:scale-95 transition-all text-white flex items-center justify-center disabled:pointer-events-none disabled:cursor-wait">
               <RefreshCcw size={16} />
             </button>
           </div>
@@ -580,14 +609,14 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
           </span>
           
           <div className="flex flex-wrap items-center justify-center gap-2 md:gap-3 z-10 bg-white/60 backdrop-blur-md p-2 md:p-3 rounded-3xl md:rounded-[2rem] border border-white shadow-xl shrink-0 mt-auto mb-2">
-            <button disabled={!isMatchLive} onClick={() => handleRefereeAction('HOME', 'SCORE', -1)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-white rounded-xl md:rounded-2xl flex items-center justify-center text-red-500 border-2 border-slate-100 shadow-md active:scale-95 transition-all disabled:pointer-events-none"><Minus size={24} /></button>
-            <button disabled={!isMatchLive} onClick={() => handleRefereeAction('HOME', 'SCORE', 1)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-orange-500 rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-xl shadow-orange-300 border border-orange-400 disabled:pointer-events-none">
+            <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('HOME', 'SCORE', -1)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-white rounded-xl md:rounded-2xl flex items-center justify-center text-red-500 border-2 border-slate-100 shadow-md active:scale-95 transition-all disabled:pointer-events-none disabled:cursor-wait"><Minus size={24} /></button>
+            <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('HOME', 'SCORE', 1)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-orange-500 rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-xl shadow-orange-300 border border-orange-400 disabled:pointer-events-none disabled:cursor-wait">
               <span className="font-black text-xl md:text-3xl leading-none">+1</span><span className="text-[7px] md:text-[9px] font-black uppercase opacity-80 mt-1 hidden sm:block">Libre</span>
             </button>
-            <button disabled={!isMatchLive} onClick={() => handleRefereeAction('HOME', 'SCORE', 2)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-orange-600 rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-xl shadow-orange-300 border border-orange-500 disabled:pointer-events-none">
+            <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('HOME', 'SCORE', 2)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-orange-600 rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-xl shadow-orange-300 border border-orange-500 disabled:pointer-events-none disabled:cursor-wait">
               <span className="font-black text-xl md:text-3xl leading-none">+2</span><span className="text-[7px] md:text-[9px] font-black uppercase opacity-80 mt-1 hidden sm:block">Doble</span>
             </button>
-            <button disabled={!isMatchLive} onClick={() => handleRefereeAction('HOME', 'SCORE', 3)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-orange-700 rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-xl shadow-orange-300 border border-orange-600 disabled:pointer-events-none">
+            <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('HOME', 'SCORE', 3)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-orange-700 rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-xl shadow-orange-300 border border-orange-600 disabled:pointer-events-none disabled:cursor-wait">
               <span className="font-black text-xl md:text-3xl leading-none">+3</span><span className="text-[7px] md:text-[9px] font-black uppercase opacity-80 mt-1 hidden sm:block">Triple</span>
             </button>
           </div>
@@ -618,13 +647,13 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
           </div>
 
           <div className="flex gap-1.5 md:gap-2 mb-2 md:mb-4 bg-white/80 backdrop-blur-md p-1.5 md:p-2 rounded-[1rem] md:rounded-2xl shadow-xl border border-white z-10 mt-2 shrink-0">
-            <button onClick={() => handleRefereeAction('AWAY', 'FOUL')} disabled={!isMatchLive} className="px-2 md:px-3 md:w-20 h-8 md:h-12 bg-white border border-slate-200 rounded-lg md:rounded-xl shadow-sm hover:bg-orange-50 text-orange-500 font-black text-[8px] md:text-[10px] uppercase tracking-widest gap-1 flex items-center justify-center disabled:pointer-events-none">
+            <button onClick={() => handleRefereeAction('AWAY', 'FOUL')} disabled={!isMatchLive || eventGuard.busy} className="px-2 md:px-3 md:w-20 h-8 md:h-12 bg-white border border-slate-200 rounded-lg md:rounded-xl shadow-sm hover:bg-orange-50 active:scale-95 transition-all text-orange-500 font-black text-[8px] md:text-[10px] uppercase tracking-widest gap-1 flex items-center justify-center disabled:pointer-events-none disabled:cursor-wait">
               <Hand size={14}/> <span className="hidden md:inline">Falta</span>
             </button>
-            <button onClick={() => executeTimeout('AWAY', match.away_team.name)} disabled={!isMatchLive || timeoutOverlay.active} className="px-2 md:px-4 h-8 md:h-12 bg-white border border-slate-200 rounded-lg md:rounded-xl shadow-sm hover:bg-amber-50 text-amber-600 font-black text-[8px] md:text-[10px] uppercase tracking-widest gap-1 flex items-center justify-center disabled:pointer-events-none">
+            <button onClick={() => executeTimeout('AWAY', match.away_team.name)} disabled={!isMatchLive || timeoutOverlay.active || eventGuard.busy} className="px-2 md:px-4 h-8 md:h-12 bg-white border border-slate-200 rounded-lg md:rounded-xl shadow-sm hover:bg-amber-50 active:scale-95 transition-all text-amber-600 font-black text-[8px] md:text-[10px] uppercase tracking-widest gap-1 flex items-center justify-center disabled:pointer-events-none disabled:cursor-wait">
               <Timer size={14}/> <span className="hidden md:inline">T. Fuera</span>
             </button>
-            <button onClick={() => handleRefereeAction('AWAY', 'SUB')} disabled={!isMatchLive} className="w-10 h-8 md:w-14 md:h-12 bg-slate-900 border border-slate-800 rounded-lg md:rounded-xl shadow-sm hover:bg-slate-800 text-white flex items-center justify-center disabled:pointer-events-none">
+            <button onClick={() => handleRefereeAction('AWAY', 'SUB')} disabled={!isMatchLive || eventGuard.busy} className="w-10 h-8 md:w-14 md:h-12 bg-slate-900 border border-slate-800 rounded-lg md:rounded-xl shadow-sm hover:bg-slate-800 active:scale-95 transition-all text-white flex items-center justify-center disabled:pointer-events-none disabled:cursor-wait">
               <RefreshCcw size={16} />
             </button>
           </div>
@@ -634,14 +663,14 @@ export default function MesaBaloncesto({ match, categoryData, slug, onClose, onM
           </span>
           
           <div className="flex flex-wrap items-center justify-center gap-2 md:gap-3 z-10 bg-white/60 backdrop-blur-md p-2 md:p-3 rounded-3xl md:rounded-[2rem] border border-white shadow-xl shrink-0 mt-auto mb-2">
-            <button disabled={!isMatchLive} onClick={() => handleRefereeAction('AWAY', 'SCORE', -1)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-white rounded-xl md:rounded-2xl flex items-center justify-center text-red-500 border-2 border-slate-100 shadow-md active:scale-95 transition-all disabled:pointer-events-none"><Minus size={24} /></button>
-            <button disabled={!isMatchLive} onClick={() => handleRefereeAction('AWAY', 'SCORE', 1)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-orange-500 rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-xl shadow-orange-300 border border-orange-400 disabled:pointer-events-none">
+            <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('AWAY', 'SCORE', -1)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-white rounded-xl md:rounded-2xl flex items-center justify-center text-red-500 border-2 border-slate-100 shadow-md active:scale-95 transition-all disabled:pointer-events-none disabled:cursor-wait"><Minus size={24} /></button>
+            <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('AWAY', 'SCORE', 1)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-orange-500 rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-xl shadow-orange-300 border border-orange-400 disabled:pointer-events-none disabled:cursor-wait">
               <span className="font-black text-xl md:text-3xl leading-none">+1</span><span className="text-[7px] md:text-[9px] font-black uppercase opacity-80 mt-1 hidden sm:block">Libre</span>
             </button>
-            <button disabled={!isMatchLive} onClick={() => handleRefereeAction('AWAY', 'SCORE', 2)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-orange-600 rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-xl shadow-orange-300 border border-orange-500 disabled:pointer-events-none">
+            <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('AWAY', 'SCORE', 2)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-orange-600 rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-xl shadow-orange-300 border border-orange-500 disabled:pointer-events-none disabled:cursor-wait">
               <span className="font-black text-xl md:text-3xl leading-none">+2</span><span className="text-[7px] md:text-[9px] font-black uppercase opacity-80 mt-1 hidden sm:block">Doble</span>
             </button>
-            <button disabled={!isMatchLive} onClick={() => handleRefereeAction('AWAY', 'SCORE', 3)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-orange-700 rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-xl shadow-orange-300 border border-orange-600 disabled:pointer-events-none">
+            <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('AWAY', 'SCORE', 3)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-20 md:w-20 bg-orange-700 rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-xl shadow-orange-300 border border-orange-600 disabled:pointer-events-none disabled:cursor-wait">
               <span className="font-black text-xl md:text-3xl leading-none">+3</span><span className="text-[7px] md:text-[9px] font-black uppercase opacity-80 mt-1 hidden sm:block">Triple</span>
             </button>
           </div>

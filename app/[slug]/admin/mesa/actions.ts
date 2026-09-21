@@ -4,7 +4,7 @@ import { getScorekeeperSession, hasAdminSession } from '@/app/lib/auth';
 import { createPrivilegedSupabaseClient } from '@/app/lib/supabase/server';
 import { logAuditEvent, type AuditActorType } from '@/app/lib/audit';
 import { getClientIdBySlug } from '@/app/lib/tenant';
-import { getDisciplinaryBlocks } from '@/app/lib/discipline/suspension';
+import { filterLiveEligibilityEvents, getDisciplinaryBlocks } from '@/app/lib/discipline/suspension';
 import { validateFinalLineup } from '@/app/lib/competition/player-participation';
 
 type RecordFootballEventInput = {
@@ -95,6 +95,12 @@ type RevertScoringEventInput = {
 };
 
 type RemoveYellowCardInput = {
+  slug: string;
+  matchId: string;
+  eventId: string;
+};
+
+type RemoveRedCardInput = {
   slug: string;
   matchId: string;
   eventId: string;
@@ -227,7 +233,11 @@ export async function getFootballMatchRoster(slug: string, matchId: string) {
     }
     const latest = bulletinResult.data;
     const sanctions = latest?.snapshot?.categories?.find((item:any) => item.id === category.id)?.sanctions || [];
-    suspendedPlayers = getDisciplinaryBlocks(eventsResult.data || [], sanctions, Number(latest?.bulletin_number || 0));
+    // A yellow card created in this same match is a record of the match, not
+    // a suspension that should prevent the player from scoring later in it.
+    // Previous unpaid fines and red cards remain blocking conditions.
+    const eligibilityEvents = filterLiveEligibilityEvents(eventsResult.data || [], matchId);
+    suspendedPlayers = getDisciplinaryBlocks(eligibilityEvents, sanctions, Number(latest?.bulletin_number || 0));
   }
 
   return {
@@ -705,6 +715,60 @@ export async function removeYellowCardEvent(input: RemoveYellowCardInput) {
     metadata: { slug: input.slug, matchId: input.matchId, removedEventIds: eventIds, removedProofs: (proofs || []).length, removedGeneratedRed: Boolean(generatedRed) },
   });
   return { success: true, removedEventIds: eventIds, removedGeneratedRed: Boolean(generatedRed) };
+}
+
+/** Removes a mistaken direct or generated red-card event from the match timeline. */
+export async function removeRedCardEvent(input: RemoveRedCardInput) {
+  const { clientId, match, actorType } = await requireMatchAccess(input.slug, input.matchId);
+  const supabase = createPrivilegedSupabaseClient();
+  const { data: event, error: eventError } = await supabase
+    .from('match_events')
+    .select('id, event_type, player_id, team_id, created_at')
+    .eq('id', input.eventId)
+    .eq('match_id', input.matchId)
+    .maybeSingle();
+  if (eventError || !event) throw new Error('No se encontró la tarjeta seleccionada.');
+  if (event.event_type !== 'RED') throw new Error('Solo se pueden corregir tarjetas rojas desde este flujo.');
+  assertMatchTeam(event.team_id, match);
+
+  const { data: tournament, error: tournamentError } = await supabase
+    .from('matches')
+    .select('matchdays!inner(categories!inner(tournaments!inner(fair_play_enabled, fp_red_deduction)))')
+    .eq('id', input.matchId)
+    .maybeSingle();
+  if (tournamentError) throw new Error('No se pudo verificar la configuración de fair play.');
+  const settings = (tournament as any)?.matchdays?.categories?.tournaments;
+  const penalty = settings?.fair_play_enabled === false ? 0 : Number(settings?.fp_red_deduction || 300);
+
+  const { data: proofs } = await supabase
+    .from('fine_payment_proofs')
+    .select('id, storage_path')
+    .eq('match_event_id', event.id);
+  for (const proof of proofs || []) {
+    const { error: storageError } = await supabase.storage.from('player-documents').remove([proof.storage_path]);
+    if (storageError) throw new Error('No se pudo eliminar el comprobante asociado; no se borró la tarjeta.');
+  }
+
+  const { error: deleteError } = await supabase.from('match_events').delete().eq('id', event.id).eq('match_id', input.matchId);
+  if (deleteError) throw new Error('No se pudo eliminar la tarjeta roja.');
+
+  if (penalty > 0) {
+    const { data: team } = await supabase.from('teams').select('id, fair_play_points').eq('id', event.team_id).maybeSingle();
+    if (team) {
+      const { error: teamError } = await supabase.from('teams').update({ fair_play_points: Number(team.fair_play_points || 0) + penalty }).eq('id', team.id);
+      if (teamError) throw new Error('La tarjeta fue eliminada, pero no se pudo restaurar el puntaje de fair play.');
+    }
+  }
+
+  await logAuditEvent({
+    action: 'admin.match.red_card_delete',
+    actorType,
+    clientId,
+    targetType: 'match_event',
+    targetId: event.id,
+    metadata: { slug: input.slug, matchId: input.matchId, playerId: event.player_id, removedProofs: (proofs || []).length },
+  });
+  return { success: true, removedEventId: event.id };
 }
 
 export async function closeVolleyballSet(input: CloseSetInput) {

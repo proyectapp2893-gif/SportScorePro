@@ -78,7 +78,7 @@ export default function ResultadosPublicos() {
 
   useEffect(() => {
     if (slug) loadInitialData();
-  }, [slug]);
+  }, [slug, requestedTournamentId]);
 
   async function loadInitialData() {
     setLoading(true);
@@ -99,12 +99,20 @@ export default function ResultadosPublicos() {
         .order('created_at', { ascending: false });
 
       if (trns) {
-        setTournaments(trns);
-        const requestedTournament = requestedTournamentId
+        // El portal público representa un solo torneo por visita. Si el enlace
+        // viene desde el panel usamos el torneo indicado; en un enlace genérico
+        // mostramos el torneo activo más reciente como contexto actual.
+        const currentTournament = requestedTournamentId
           ? trns.find((tournament: any) => tournament.id === requestedTournamentId)
-          : null;
-        if (requestedTournament) {
-          await selectTournament(requestedTournament);
+          : trns.find((tournament: any) => tournament.is_active) || trns[0];
+
+        if (currentTournament) {
+          setTournaments([currentTournament]);
+          await selectTournament(currentTournament);
+        } else {
+          setTournaments([]);
+          setActiveTournament(null);
+          setView('WELCOME');
         }
       }
     }

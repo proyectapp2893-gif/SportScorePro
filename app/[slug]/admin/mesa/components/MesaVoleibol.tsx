@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '../../../../supabase';
-import { ArrowLeft, CheckCircle2, Minus, Plus, School, X, Trophy, ArrowRight, Activity, ShieldCheck, Square, Play, RotateCcw, AlertTriangle, Radio, Users, Zap, RefreshCcw } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Minus, Plus, School, X, Trophy, ArrowRight, Activity, ShieldCheck, Square, Play, RotateCcw, AlertTriangle, Radio, Users, Zap, RefreshCcw, LoaderCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { FaVolleyballBall } from 'react-icons/fa';
 import { closeVolleyballSet, finishCourtMatch, recordGenericMatchEvent, revertLastScoringEvent, startLiveMatch } from '../actions';
+import { useActionGuard } from '../hooks/useActionGuard';
 import { evaluatePlayerEligibility } from '@/app/lib/competition/player-eligibility';
 
 interface MesaVoleibolProps {
@@ -44,11 +45,13 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
   const targetScore = isPadel ? 6 : (currentPeriod === 'S5' ? 15 : 25);
 
   const [loading, setLoading] = useState(false);
+  const eventGuard = useActionGuard();
+  const startGuard = useActionGuard();
   const [showSummaryModal, setShowSummaryModal] = useState(false); 
   const [showRosterModal, setShowRosterModal] = useState<'HOME' | 'AWAY' | null>(null); 
   const [scoringAction, setScoringAction] = useState<{ team: 'HOME' | 'AWAY', type: 'SCORE' | 'YELLOW' | 'RED' | 'SUB' | 'SCORE_MINUS', points: number } | null>(null);
   const [subOutPlayer, setSubOutPlayer] = useState<string | null>(null);
-  const playerEligibility = (player: any) => evaluatePlayerEligibility({ playerId: player.id, registered: true, teamId: player.team_id, documents: player.player_documents || [], suspended: liveEvents.some((event) => event.player_id === player.id && event.event_type === 'RED'), unpaidFine: liveEvents.some((event) => event.player_id === player.id && event.fine_status === 'UNPAID') });
+  const playerEligibility = (player: any) => evaluatePlayerEligibility({ playerId: player.id, registered: true, teamId: player.team_id, documents: player.player_documents || [], suspended: liveEvents.some((event) => event.player_id === player.id && event.event_type === 'RED') });
 
   useEffect(() => {
     async function loadMatchData() {
@@ -101,6 +104,7 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
   const handlePreMatchSetup = () => setShowStartingLineupModal(true);
 
   const handleQuickStart = async () => {
+    if (!startGuard.tryStart()) return;
     setLoading(true);
     const toastId = toast.loading('Iniciando...');
     try {
@@ -111,7 +115,7 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
       setShowStartingLineupModal(false);
       toast.success('¡Partido en vivo!', { id: toastId, icon: '🏐' });
     } catch (error) { toast.error('Error al iniciar.', { id: toastId }); }
-    setLoading(false);
+    finally { setLoading(false); startGuard.stop(); }
   };
 
   const toggleStartingPlayer = (team: 'HOME' | 'AWAY', playerId: string) => {
@@ -136,6 +140,7 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
   };
 
   const handleTurnMatchLive = async () => {
+    if (!startGuard.tryStart()) return;
     setLoading(true);
     const toastId = toast.loading('Registrando acta...');
     try {
@@ -155,11 +160,12 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
       setShowStartingLineupModal(false);
       toast.success('¡Partido en vivo!', { id: toastId, icon: '🏐' });
     } catch (error) { toast.error('Error al iniciar.', { id: toastId }); }
-    setLoading(false);
+    finally { setLoading(false); startGuard.stop(); }
   };
 
   const handleRefereeAction = (team: 'HOME' | 'AWAY', type: 'SCORE' | 'YELLOW' | 'RED' | 'SUB' | 'SCORE_MINUS', points: number = 0) => {
     if (!isMatchLive) return toast.error('Inicie transmisión primero.');
+    if (eventGuard.busy) return;
     if (type === 'SCORE_MINUS') {
       executeActionRecord(team, type, -1); 
       return;
@@ -169,8 +175,9 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
   };
 
   const executeActionRecord = async (team: 'HOME' | 'AWAY', type: 'SCORE' | 'YELLOW' | 'RED' | 'SUB' | 'SCORE_MINUS', points: number, playerId?: string) => {
-    
-    if (type === 'SCORE_MINUS') {
+    if (!eventGuard.tryStart()) return;
+    try {
+      if (type === 'SCORE_MINUS') {
       const lastGoal = [...liveEvents].reverse().find(e => e.team_id === (team === 'HOME' ? match.home_team.id : match.away_team.id) && e.event_type === 'GOAL' && e.period === currentPeriod);
       if (lastGoal) {
          await revertLastScoringEvent({
@@ -187,9 +194,9 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
          toast.error('No hay puntos recientes para restar');
       }
       return;
-    }
+      }
 
-    if (playerId || type === 'SCORE' || type === 'YELLOW') {
+      if (playerId || type === 'SCORE' || type === 'YELLOW') {
       const teamId = team === 'HOME' ? match.home_team.id : match.away_team.id;
 
       if (type === 'SUB' && playerId) {
@@ -233,8 +240,13 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
       if (type === 'SCORE') toast.success('¡Punto!');
       if (type === 'YELLOW') toast.success('Amonestación');
       if (type === 'RED') toast.error('Expulsión registrada');
+      }
+      if (type !== 'SUB') setScoringAction(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudo registrar el evento.');
+    } finally {
+      eventGuard.stop();
     }
-    if (type !== 'SUB') setScoringAction(null);
   };
 
   const handleCloseSet = async () => {
@@ -318,6 +330,11 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
 
   return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col overflow-hidden text-slate-900 font-sans animate-in slide-in-from-right duration-300">
+      {(eventGuard.busy || startGuard.busy) && (
+        <div className="pointer-events-none fixed right-4 top-4 z-[10000] flex items-center gap-2 rounded-xl bg-slate-950/95 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white shadow-2xl">
+          <LoaderCircle size={16} className="animate-spin text-yellow-400" /> {startGuard.busy ? 'Iniciando partido...' : 'Registrando evento...'}
+        </div>
+      )}
       
       {/* LOBBY PRE-PARTIDO */}
       {showStartingLineupModal && (
@@ -399,7 +416,7 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
                 <Zap size={18} className="text-amber-500" /> Partido Rápido
               </button>
               <div className="hidden md:block"></div>
-              <button onClick={handleTurnMatchLive} disabled={loading} className="w-full md:w-auto px-12 py-4 md:py-5 bg-yellow-600 hover:bg-yellow-500 text-white rounded-2xl font-black text-sm uppercase tracking-[0.2em] flex items-center justify-center gap-3 shadow-[0_0_40px_rgba(202,138,4,0.4)] transition-all disabled:opacity-50">
+            <button onClick={handleTurnMatchLive} disabled={loading || startGuard.busy} className="w-full md:w-auto px-12 py-4 md:py-5 bg-yellow-600 hover:bg-yellow-500 text-white rounded-2xl font-black text-sm uppercase tracking-[0.2em] flex items-center justify-center gap-3 shadow-[0_0_40px_rgba(202,138,4,0.4)] transition-all active:scale-95 disabled:cursor-wait disabled:opacity-50">
                 <FaVolleyballBall size={20} className="animate-spin-slow" /> Confirmar e Iniciar Set
               </button>
             </div>
@@ -445,8 +462,8 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
                   <button 
                     key={player.id} 
                     onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points, player.id)}
-                    disabled={isIneligible || shouldDisable}
-                    className={`p-4 md:p-6 rounded-[1rem] md:rounded-[1.5rem] border transition-all flex flex-col items-center group relative shadow-sm
+                    disabled={eventGuard.busy || isIneligible || shouldDisable}
+                    className={`p-4 md:p-6 rounded-[1rem] md:rounded-[1.5rem] border transition-all active:scale-95 flex flex-col items-center group relative shadow-sm disabled:cursor-wait disabled:opacity-60
                       ${shouldDisable ? 'bg-slate-100 border-slate-200 opacity-50 cursor-not-allowed' : 'bg-white border-slate-200 hover:border-yellow-400 hover:bg-yellow-50'}
                       ${isOut ? 'ring-2 md:ring-4 ring-red-400 scale-95' : ''}
                     `}
@@ -467,7 +484,7 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
 
             {(!scoringAction.type.includes('SUB')) && ( 
               <div className="mt-4 md:mt-6 flex justify-center gap-4 pt-4 md:pt-6 border-t border-slate-100 shrink-0">
-                <button onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points)} className="px-6 md:px-8 py-3 md:py-4 bg-slate-100 text-slate-600 rounded-xl md:rounded-2xl font-black uppercase tracking-widest text-[9px] md:text-xs hover:bg-slate-200 border border-slate-200 transition-colors">
+                <button onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points)} disabled={eventGuard.busy} className="px-6 md:px-8 py-3 md:py-4 bg-slate-100 text-slate-600 rounded-xl md:rounded-2xl font-black uppercase tracking-widest text-[9px] md:text-xs hover:bg-slate-200 active:scale-95 border border-slate-200 transition-all disabled:cursor-wait disabled:opacity-60">
                   Omitir Identificación (Punto de Equipo)
                 </button>
               </div>
@@ -595,7 +612,7 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
 
         {!isMatchLive && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/50 backdrop-blur-sm">
-            <button onClick={handlePreMatchSetup} className="flex flex-col items-center justify-center gap-1.5 md:gap-2 w-32 h-32 md:w-56 md:h-56 bg-yellow-600 rounded-full text-white shadow-[0_0_60px_rgba(202,138,4,0.6)] hover:bg-yellow-500 hover:scale-105 active:scale-95 transition-all border-4 border-white animate-pulse relative z-10">
+            <button onClick={handlePreMatchSetup} disabled={loading || startGuard.busy} className="flex flex-col items-center justify-center gap-1.5 md:gap-2 w-32 h-32 md:w-56 md:h-56 bg-yellow-600 rounded-full text-white shadow-[0_0_60px_rgba(202,138,4,0.6)] hover:bg-yellow-500 hover:scale-105 active:scale-95 transition-all border-4 border-white animate-pulse relative z-10 disabled:cursor-wait disabled:opacity-60">
               <FaVolleyballBall className="w-10 h-10 md:w-16 md:h-16 animate-spin-slow" />
               <span className="font-black uppercase tracking-[0.2em] text-[8px] md:text-sm text-center px-2 md:px-4 leading-tight relative z-10">Iniciar Partido</span>
             </button>
@@ -615,10 +632,10 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
           <h3 className="text-xl sm:text-2xl md:text-3xl font-black text-white uppercase tracking-tighter text-center mb-1 drop-shadow-md leading-tight max-w-[90%] truncate">{match.home_team?.name}</h3>
           
           <div className="flex flex-wrap justify-center gap-1 md:gap-2 bg-black/60 p-1.5 md:p-3 rounded-xl md:rounded-2xl shadow-xl border border-white/10 z-10 mt-2 shrink-0">
-            <button onClick={() => handleRefereeAction('HOME', 'SUB')} disabled={!isMatchLive} className="w-10 h-10 bg-slate-800 border border-slate-600 rounded-xl hover:bg-slate-700 text-blue-400 flex items-center justify-center disabled:opacity-50 transition-colors">
+            <button onClick={() => handleRefereeAction('HOME', 'SUB')} disabled={!isMatchLive || eventGuard.busy} className="w-10 h-10 bg-slate-800 border border-slate-600 rounded-xl hover:bg-slate-700 active:scale-95 text-blue-400 flex items-center justify-center disabled:opacity-50 disabled:cursor-wait transition-all">
               <RefreshCcw size={16} />
             </button>
-            <button onClick={() => handleRefereeAction('HOME', 'YELLOW')} disabled={!isMatchLive} className="w-10 h-10 bg-slate-800 border border-slate-600 rounded-xl hover:bg-yellow-900/50 text-yellow-400 flex items-center justify-center disabled:opacity-50 transition-colors">
+            <button onClick={() => handleRefereeAction('HOME', 'YELLOW')} disabled={!isMatchLive || eventGuard.busy} className="w-10 h-10 bg-slate-800 border border-slate-600 rounded-xl hover:bg-yellow-900/50 active:scale-95 text-yellow-400 flex items-center justify-center disabled:opacity-50 disabled:cursor-wait transition-all">
               <Square size={16} className="fill-yellow-400" />
             </button>
           </div>
@@ -630,8 +647,8 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
           </div>
           
           <div className="flex items-center justify-center gap-3 z-10 bg-white/10 backdrop-blur-md p-3 rounded-[2rem] border border-white/20 shadow-xl shrink-0 mt-auto mb-2">
-            <button disabled={!isMatchLive || homeScore === 0} onClick={() => handleRefereeAction('HOME', 'SCORE_MINUS', -1)} className="h-14 w-14 bg-slate-800 rounded-2xl flex items-center justify-center text-slate-400 border border-slate-600 active:scale-95 transition-all"><Minus size={24} /></button>
-            <button disabled={!isMatchLive} onClick={() => handleRefereeAction('HOME', 'SCORE', 1)} className="h-14 w-32 bg-yellow-500 rounded-2xl flex flex-col items-center justify-center text-slate-900 active:scale-95 transition-all shadow-xl shadow-yellow-500/30 border border-yellow-400 font-black text-2xl">
+            <button disabled={!isMatchLive || homeScore === 0 || eventGuard.busy} onClick={() => handleRefereeAction('HOME', 'SCORE_MINUS', -1)} className="h-14 w-14 bg-slate-800 rounded-2xl flex items-center justify-center text-slate-400 border border-slate-600 active:scale-95 transition-all disabled:cursor-wait"><Minus size={24} /></button>
+            <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('HOME', 'SCORE', 1)} className="h-14 w-32 bg-yellow-500 rounded-2xl flex flex-col items-center justify-center text-slate-900 active:scale-95 transition-all shadow-xl shadow-yellow-500/30 border border-yellow-400 font-black text-2xl disabled:cursor-wait">
               +1 PUNTO
             </button>
           </div>
@@ -650,10 +667,10 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
           <h3 className="text-xl sm:text-2xl md:text-3xl font-black text-white uppercase tracking-tighter text-center mb-1 drop-shadow-md leading-tight max-w-[90%] truncate">{match.away_team?.name}</h3>
           
           <div className="flex flex-wrap justify-center gap-1 md:gap-2 bg-black/60 p-1.5 md:p-3 rounded-xl md:rounded-2xl shadow-xl border border-white/10 z-10 mt-2 shrink-0">
-            <button onClick={() => handleRefereeAction('AWAY', 'SUB')} disabled={!isMatchLive} className="w-10 h-10 bg-slate-800 border border-slate-600 rounded-xl hover:bg-slate-700 text-blue-400 flex items-center justify-center disabled:opacity-50 transition-colors">
+            <button onClick={() => handleRefereeAction('AWAY', 'SUB')} disabled={!isMatchLive || eventGuard.busy} className="w-10 h-10 bg-slate-800 border border-slate-600 rounded-xl hover:bg-slate-700 active:scale-95 text-blue-400 flex items-center justify-center disabled:opacity-50 disabled:cursor-wait transition-all">
               <RefreshCcw size={16} />
             </button>
-            <button onClick={() => handleRefereeAction('AWAY', 'YELLOW')} disabled={!isMatchLive} className="w-10 h-10 bg-slate-800 border border-slate-600 rounded-xl hover:bg-yellow-900/50 text-yellow-400 flex items-center justify-center disabled:opacity-50 transition-colors">
+            <button onClick={() => handleRefereeAction('AWAY', 'YELLOW')} disabled={!isMatchLive || eventGuard.busy} className="w-10 h-10 bg-slate-800 border border-slate-600 rounded-xl hover:bg-yellow-900/50 active:scale-95 text-yellow-400 flex items-center justify-center disabled:opacity-50 disabled:cursor-wait transition-all">
               <Square size={16} className="fill-yellow-400" />
             </button>
           </div>
@@ -665,8 +682,8 @@ export default function MesaVoleibol({ match, categoryData, slug, onClose, onMat
           </div>
           
           <div className="flex items-center justify-center gap-3 z-10 bg-white/10 backdrop-blur-md p-3 rounded-[2rem] border border-white/20 shadow-xl shrink-0 mt-auto mb-2">
-            <button disabled={!isMatchLive || awayScore === 0} onClick={() => handleRefereeAction('AWAY', 'SCORE_MINUS', -1)} className="h-14 w-14 bg-slate-800 rounded-2xl flex items-center justify-center text-slate-400 border border-slate-600 active:scale-95 transition-all"><Minus size={24} /></button>
-            <button disabled={!isMatchLive} onClick={() => handleRefereeAction('AWAY', 'SCORE', 1)} className="h-14 w-32 bg-yellow-500 rounded-2xl flex flex-col items-center justify-center text-slate-900 active:scale-95 transition-all shadow-xl shadow-yellow-500/30 border border-yellow-400 font-black text-2xl">
+            <button disabled={!isMatchLive || awayScore === 0 || eventGuard.busy} onClick={() => handleRefereeAction('AWAY', 'SCORE_MINUS', -1)} className="h-14 w-14 bg-slate-800 rounded-2xl flex items-center justify-center text-slate-400 border border-slate-600 active:scale-95 transition-all disabled:cursor-wait"><Minus size={24} /></button>
+            <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('AWAY', 'SCORE', 1)} className="h-14 w-32 bg-yellow-500 rounded-2xl flex flex-col items-center justify-center text-slate-900 active:scale-95 transition-all shadow-xl shadow-yellow-500/30 border border-yellow-400 font-black text-2xl disabled:cursor-wait">
               +1 PUNTO
             </button>
           </div>

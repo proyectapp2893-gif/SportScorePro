@@ -3,14 +3,27 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../../supabase';
 import { useParams, useSearchParams } from 'next/navigation';
-import { Scale, AlertTriangle, ShieldCheck, DollarSign, Search, CheckCircle2, Flame, ArrowLeft, Wallet, Calendar, Clock, Flag, Eye, Settings2, MessageSquare } from 'lucide-react';
+import { Scale, AlertTriangle, ShieldCheck, DollarSign, Search, CheckCircle2, ArrowLeft, Wallet, Calendar, Clock, Flag, Eye, Settings2, ChevronDown } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
 import ApprovedPaymentProofs from './ApprovedPaymentProofs';
 import { formatCopAmount } from '@/app/lib/formatters';
 import { normalizeDoubleCautions } from '@/app/lib/discipline/double-caution';
 import { normalizeAsOfDate } from '@/app/lib/date-filter';
-import { approveFinePaymentProof, getFinePaymentProofs, getFinePaymentProofUrl, markTeamFinesPaidExternally, updateDisciplinaryRecord } from './actions';
+import { approveFinePaymentProof, getFinePaymentProofs, getFinePaymentProofUrl, markTeamFinesPaidExternally, rejectFinePaymentProof, updateDisciplinaryRecord } from './actions';
+
+function tribunalTeamInitials(name: string) {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'EQ';
+}
+
+function TribunalTeamLogo({ name, logoUrl }: { name: string; logoUrl?: string | null }) {
+  return (
+    <div className="relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+      <span className="text-lg font-black text-slate-400">{tribunalTeamInitials(name)}</span>
+      {logoUrl && <img src={logoUrl} alt={`Logo de ${name}`} className="absolute inset-2 h-[calc(100%-1rem)] w-[calc(100%-1rem)] object-contain" referrerPolicy="no-referrer" />}
+    </div>
+  );
+}
 
 export default function TribunalPage() {
   const params = useParams();
@@ -25,13 +38,19 @@ export default function TribunalPage() {
   const [paymentProofs, setPaymentProofs] = useState<any[]>([]);
   const [selectedProof, setSelectedProof] = useState<any | null>(null);
   const [selectedProofUrl, setSelectedProofUrl] = useState('');
+  const [selectedProofEvents, setSelectedProofEvents] = useState<any[]>([]);
+  const [selectedProofEventIds, setSelectedProofEventIds] = useState<string[]>([]);
+  const [selectedProofAmount, setSelectedProofAmount] = useState('');
+  const [proofRejectionReason, setProofRejectionReason] = useState('');
   const [selectedTeamHistory, setSelectedTeamHistory] = useState<any | null>(null);
   const [selectedDisciplinary, setSelectedDisciplinary] = useState<any | null>(null);
   const [disciplinaryComment, setDisciplinaryComment] = useState('');
   const [suspensionMatches, setSuspensionMatches] = useState('');
   const [externalPaymentTarget, setExternalPaymentTarget] = useState<{ rowId: string; teamId: string; teamName: string } | null>(null);
   const [externalPaymentNote, setExternalPaymentNote] = useState('Pago confirmado por fuera de la plataforma');
+  const [externalPaymentFile, setExternalPaymentFile] = useState<File | null>(null);
   const [externalPaymentBusy, setExternalPaymentBusy] = useState(false);
+  const [expandedTeamId, setExpandedTeamId] = useState<string | null>(null);
   
   // Estados para los filtros y Pestañas
   const [searchTerm, setSearchTerm] = useState('');
@@ -69,7 +88,7 @@ export default function TribunalPage() {
           .select(`
             id, event_type, fine_status, created_at, minute_record, period, disciplinary_comment, suspension_matches,
             match_id, player_id, team_id, match_second,
-            players!inner(name, shirt_number, teams(name, schools(logo_url))),
+            players!inner(name, shirt_number, teams(id, name, schools(name, logo_url))),
             matches!inner(matchdays!inner(round_number, scheduled_date, categories!inner(tournaments!inner(id, client_id))))
           `)
           .eq('matches.matchdays.categories.tournaments.client_id', clientData.id)
@@ -81,7 +100,7 @@ export default function TribunalPage() {
         let compatibleEvents = eventsData;
         if (error) {
           // Compatibilidad mientras la migración disciplinaria aún no se aplica.
-          const fallback = await supabase.from('match_events').select(`id, event_type, fine_status, created_at, minute_record, period, match_id, player_id, team_id, match_second, players!inner(name, shirt_number, teams(name, schools(logo_url))), matches!inner(matchdays!inner(round_number, scheduled_date, categories!inner(tournaments!inner(id, client_id))))`).eq('matches.matchdays.categories.tournaments.client_id', clientData.id).eq('matches.matchdays.categories.tournaments.id', trns.id).in('event_type', ['YELLOW', 'RED']).neq('fine_status', 'NONE').order('created_at', { ascending: false });
+          const fallback = await supabase.from('match_events').select(`id, event_type, fine_status, created_at, minute_record, period, match_id, player_id, team_id, match_second, players!inner(name, shirt_number, teams(id, name, schools(name, logo_url))), matches!inner(matchdays!inner(round_number, scheduled_date, categories!inner(tournaments!inner(id, client_id))))`).eq('matches.matchdays.categories.tournaments.client_id', clientData.id).eq('matches.matchdays.categories.tournaments.id', trns.id).in('event_type', ['YELLOW', 'RED']).neq('fine_status', 'NONE').order('created_at', { ascending: false });
           compatibleEvents = fallback.data as any;
           if (fallback.error) toast.error(`Error BD: ${fallback.error.message}`);
         }
@@ -95,12 +114,25 @@ export default function TribunalPage() {
     setLoading(false);
   }
 
-  const handleApproveProof = async (proof: any) => {
+  const eventFineAmount = (event: any) => {
+    const storedAmount = Number(event.fine_amount || 0);
+    const configuredAmount = Number(event.event_type === 'RED' ? tournamentSettings?.fine_red_amount || 0 : tournamentSettings?.fine_yellow_amount || 0);
+    return storedAmount > 0 ? storedAmount : configuredAmount;
+  };
+
+  const handleApproveProof = async (proof: any, eventIds = selectedProofEventIds, amount = selectedProofAmount) => {
+    if (proof.proof_scope === 'TEAM' && eventIds.length === 0) return toast.error('Selecciona las sanciones que cubre el comprobante.');
+    const amountText = amount.trim();
+    const parsedAmount = amountText ? Number(amountText) : null;
+    if (amountText && (parsedAmount === null || !Number.isFinite(parsedAmount) || parsedAmount <= 0)) return toast.error('Indica un valor válido para el comprobante.');
     const toastId = toast.loading('Validando comprobante...');
-    const result = await approveFinePaymentProof(slug, proof.id);
+    const result = await approveFinePaymentProof(slug, proof.id, eventIds, parsedAmount);
     if (!result.success) return toast.error(result.error, { id: toastId });
-    toast.success('Pago validado. Equipo habilitado.', { id: toastId });
+    toast.success(result.data?.coverageType === 'PARTIAL' ? `Pago parcial validado. ${result.data.appliedAmount} COP aplicado.` : proof.proof_scope === 'TEAM' ? 'Pago validado. Equipo habilitado.' : 'Pago validado. Jugador habilitado.', { id: toastId });
     setSelectedProof(null);
+    setSelectedProofEvents([]);
+    setSelectedProofEventIds([]);
+    setSelectedProofAmount('');
     setProofHistoryVersion(value => value + 1);
     loadData();
   };
@@ -111,6 +143,38 @@ export default function TribunalPage() {
     const result = await getFinePaymentProofUrl(slug, proof.id);
     if (!result.success) return toast.error(result.error);
     setSelectedProofUrl(result.data.url);
+  };
+
+  const openProofReview = async (proof: any, coverageEvents: any[] = []) => {
+    const pendingEvents = coverageEvents.filter((event: any) => event.fine_status === 'UNPAID');
+    const playerEventIds = proof.proof_scope === 'PLAYER' ? pendingEvents.map((event: any) => event.id) : [];
+    setSelectedProofEvents(pendingEvents);
+    setSelectedProofEventIds(playerEventIds);
+    setSelectedProofAmount(proof.proof_scope === 'PLAYER' ? String(pendingEvents.reduce((sum: number, event: any) => sum + eventFineAmount(event), 0)) : '');
+    setProofRejectionReason('');
+    await handleViewProof(proof);
+  };
+
+  const handleRejectProof = async () => {
+    if (!selectedProof) return;
+    const result = await rejectFinePaymentProof(slug, selectedProof.id, proofRejectionReason);
+    if (!result.success) return toast.error(result.error);
+    toast.success('Comprobante rechazado. El delegado podrá enviar uno nuevo.');
+    setSelectedProof(null);
+    setSelectedProofEvents([]);
+    setSelectedProofEventIds([]);
+    setSelectedProofAmount('');
+    setProofRejectionReason('');
+    setProofHistoryVersion((value) => value + 1);
+    loadData();
+  };
+
+  const toggleProofEvent = (event: any) => {
+    const nextIds = selectedProofEventIds.includes(event.id)
+      ? selectedProofEventIds.filter((id) => id !== event.id)
+      : [...selectedProofEventIds, event.id];
+    setSelectedProofEventIds(nextIds);
+    setSelectedProofAmount(String(selectedProofEvents.filter((item: any) => nextIds.includes(item.id)).reduce((sum: number, item: any) => sum + eventFineAmount(item), 0)));
   };
 
   const openDisciplinaryEditor = (event: any) => {
@@ -128,6 +192,8 @@ export default function TribunalPage() {
   };
 
   const proofByEvent = paymentProofs.reduce((acc: Record<string, any>, proof: any) => { acc[proof.match_event_id] = proof; return acc; }, {});
+  const proofByPlayer = paymentProofs.reduce((acc: Record<string, any>, proof: any) => { if (proof.proof_scope === 'PLAYER' && proof.player_id) acc[proof.player_id] = proof; return acc; }, {});
+  const proofByTeam = paymentProofs.reduce((acc: Record<string, any>, proof: any) => { if (proof.proof_scope === 'TEAM' && proof.team_id) acc[proof.team_id] = proof; return acc; }, {});
 
   const handlePayFine = async (eventId: string, playerName: string) => {
     const toastId = toast.loading(`Procesando pago de ${playerName}...`);
@@ -151,13 +217,14 @@ export default function TribunalPage() {
     if (!teamId) return toast.error('No se pudo identificar el equipo.');
     setExternalPaymentTarget({ rowId: fine.id, teamId, teamName });
     setExternalPaymentNote('Pago confirmado por fuera de la plataforma');
+    setExternalPaymentFile(null);
   };
 
   const handleExternalPayment = async () => {
-    if (!externalPaymentTarget || !externalPaymentNote.trim()) return;
+    if (!externalPaymentTarget || !externalPaymentNote.trim() || !externalPaymentFile) return toast.error('Adjunta el comprobante del pago externo.');
     setExternalPaymentBusy(true);
     const toastId = toast.loading('Registrando pago externo...');
-    const result = await markTeamFinesPaidExternally(slug, tournamentSettings?.id || selectedTournamentId || '', externalPaymentTarget.teamId, externalPaymentNote.trim());
+    const result = await markTeamFinesPaidExternally(slug, tournamentSettings?.id || selectedTournamentId || '', externalPaymentTarget.teamId, externalPaymentNote.trim(), externalPaymentFile);
     if (!result.success) {
       setExternalPaymentBusy(false);
       return toast.error(result.error, { id: toastId });
@@ -212,7 +279,8 @@ export default function TribunalPage() {
       paid: 0,
       pendingAmount: 0,
       collectedAmount: 0,
-      proof: null,
+      proof: proofByTeam[teamId] || null,
+      playerProofs: {},
     };
     const amount = fine.event_type === 'RED' ? (tournamentSettings?.fine_red_amount || fine.fine_amount || 0) : (tournamentSettings?.fine_yellow_amount || fine.fine_amount || 0);
     team.events.push(fine);
@@ -224,6 +292,7 @@ export default function TribunalPage() {
       team.pendingAmount += amount;
     }
     if (proofByEvent[fine.id]) team.proof = proofByEvent[fine.id];
+    if (proofByPlayer[fine.player_id]) team.playerProofs[fine.player_id] = proofByPlayer[fine.player_id];
     acc[teamId] = team;
     return acc;
   }, {});
@@ -369,122 +438,96 @@ export default function TribunalPage() {
             </div>
           )}
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-[900px]">
-              <thead>
-                <tr className="bg-slate-100 text-[10px] text-slate-500 uppercase font-black tracking-[0.2em] border-b border-slate-200">
-                  <th className="p-6 pl-8">Estado</th>
-                  <th className="p-6">Equipo</th>
-                  <th className="p-6">Sanciones</th>
-                  <th className="p-6">Modalidad</th>
-                  <th className="p-6 text-right">Saldo del equipo</th>
-                  <th className="p-6 text-right pr-8">Acción</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {loading ? (
-                  <tr><td colSpan={6} className="p-12 text-center text-slate-400 font-bold uppercase text-xs tracking-widest">Consultando Expedientes...</td></tr>
-                ) : finesToDisplay.length === 0 ? (
-                   <tr><td colSpan={6} className="p-12 text-center text-slate-400 font-bold uppercase text-xs tracking-widest">No hay sanciones para esta selección</td></tr>
-                ) : (
-                  finesToDisplay.map((fine: any) => {
-                    const isRed = fine.event_type === 'RED';
-                    const isPaid = fine.fine_status === 'PAID';
-                    const amount = fine.teamBalance?.pendingAmount || fine.teamBalance?.collectedAmount || (isRed ? tournamentSettings?.fine_red_amount : tournamentSettings?.fine_yellow_amount);
-                    const sanctionLabels = fine.teamBalance ? Array.from(new Set(fine.teamBalance.events.map((event: any) => event.event_type === 'RED' ? (event.isDoubleCaution ? 'Doble amarilla · roja' : 'Roja directa') : 'Amarilla'))) : [];
-                    
-                    return (
-                      <tr key={fine.id} className="hover:bg-slate-50 transition-colors group">
-                        {/* ESTADO */}
-                        <td className="p-6 pl-8">
-                          <div className="flex items-center gap-2">
-                            <div className={`w-2 h-2 rounded-full shadow-sm ${isPaid ? 'bg-emerald-500' : 'bg-red-500 animate-pulse'}`}></div>
-                            <span className={`text-[10px] font-black uppercase tracking-widest ${isPaid ? 'text-emerald-600' : 'text-red-600'}`}>
-                              {isPaid ? 'Pagado' : 'Deuda Activa'}
-                            </span>
+          <div className="space-y-4 bg-slate-50/70 p-4 md:p-6">
+            {loading ? (
+              <div className="rounded-3xl border border-slate-200 bg-white p-12 text-center text-xs font-bold uppercase tracking-widest text-slate-400">Consultando expedientes...</div>
+            ) : finesToDisplay.length === 0 ? (
+              <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-12 text-center text-xs font-bold uppercase tracking-widest text-slate-400">No hay sanciones para esta selección</div>
+            ) : finesToDisplay.map((fine: any) => {
+              const isPaid = fine.fine_status === 'PAID';
+              const teamBalance = fine.teamBalance;
+              const teamId = String(teamBalance?.id || fine.team_id || fine.players?.teams?.id || fine.id);
+              const teamName = teamBalance?.name || fine.players?.teams?.name || 'Equipo sin asignar';
+              const amount = teamBalance?.pendingAmount || teamBalance?.collectedAmount || (fine.event_type === 'RED' ? tournamentSettings?.fine_red_amount : tournamentSettings?.fine_yellow_amount);
+              const sanctionLabels = teamBalance ? Array.from(new Set(teamBalance.events.map((event: any) => event.event_type === 'RED' ? (event.isDoubleCaution ? 'Doble amarilla · roja' : 'Roja directa') : 'Amarilla'))) : [];
+              const isExpanded = expandedTeamId === teamId;
+              const playerGroups = teamBalance ? Array.from(new Map(teamBalance.events.map((event: any) => [event.player_id || event.id, event])).values()) : [];
+              const teamLogo = fine.players?.teams?.schools?.logo_url;
+
+              return (
+                <article key={fine.id} className={`overflow-hidden rounded-[2rem] border bg-white shadow-sm transition-all ${isExpanded ? 'border-blue-200 shadow-lg shadow-blue-100/60' : 'border-slate-200 hover:border-blue-200 hover:shadow-md'}`}>
+                  <div className="flex flex-col gap-4 p-4 md:p-5 xl:flex-row xl:items-center">
+                    <button type="button" onClick={() => setExpandedTeamId(isExpanded ? null : teamId)} aria-expanded={isExpanded} className="flex min-w-0 flex-1 items-center gap-4 text-left">
+                      <TribunalTeamLogo name={teamName} logoUrl={teamLogo} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-widest ${isPaid ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}><span className={`h-1.5 w-1.5 rounded-full ${isPaid ? 'bg-emerald-500' : 'bg-red-500'}`} />{isPaid ? 'Pagado' : 'Deuda activa'}</span>
+                          <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">{teamBalance?.events.length || 0} registros</span>
+                        </div>
+                        <h2 className="mt-2 truncate text-lg font-black uppercase tracking-tight text-slate-950 md:text-xl">{teamName}</h2>
+                        <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">{teamBalance?.unpaid || 0} pendientes · {teamBalance?.paid || 0} pagadas</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {sanctionLabels.map((label: any) => <span key={label} className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[9px] font-black uppercase tracking-wider ${String(label).includes('Roja') ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}><span className={`h-3 w-2 rounded-[2px] ${String(label).includes('Roja') ? 'bg-red-500' : 'bg-yellow-400'}`} />{label}</span>)}
+                        </div>
+                      </div>
+                      <div className="hidden shrink-0 items-center gap-5 md:flex">
+                        <div className="text-right"><p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{isPaid ? 'Total pagado' : 'Saldo pendiente'}</p><p className={`mt-1 text-xl font-black tracking-tight ${isPaid ? 'text-emerald-600' : 'text-slate-950'}`}>{formatCopAmount(amount)}</p></div>
+                        <ChevronDown size={22} className={`text-slate-400 transition-transform ${isExpanded ? 'rotate-180 text-blue-600' : ''}`} />
+                      </div>
+                    </button>
+
+                    <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
+                      <div className="flex items-center gap-2 md:hidden"><span className="text-[9px] font-black uppercase tracking-widest text-slate-400">{isPaid ? 'Total pagado' : 'Saldo pendiente'}</span><span className={`text-lg font-black ${isPaid ? 'text-emerald-600' : 'text-slate-950'}`}>{formatCopAmount(amount)}</span></div>
+                      {teamBalance && <button type="button" onClick={() => setSelectedTeamHistory(teamBalance)} className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-indigo-700 transition-colors hover:bg-indigo-100"><Calendar size={14}/> Historial</button>}
+                      {isPaid ? <span className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-emerald-600"><ShieldCheck size={14}/> Liberado</span> : <>
+                        {(teamBalance?.proof || Object.values(teamBalance?.playerProofs || {})[0] || proofByEvent[fine.id]) ? <button type="button" onClick={() => { const proof = teamBalance?.proof || Object.values(teamBalance?.playerProofs || {})[0] || proofByEvent[fine.id]; openProofReview(proof, proof.proof_scope === 'TEAM' ? teamBalance.events : teamBalance.events.filter((event: any) => event.player_id === proof.player_id)); }} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white shadow-md transition-all hover:bg-blue-700 active:scale-95"><Eye size={14}/> Ver comprobante</button> : <span className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-400"><Clock size={14}/> Sin comprobante</span>}
+                        <button type="button" onClick={() => beginExternalPayment(fine)} className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-amber-700 transition-colors hover:bg-amber-100">Registrar pago externo</button>
+                      </>}
+                    </div>
+                  </div>
+
+                  {isExpanded && teamBalance && <div className="border-t border-blue-100 bg-blue-50/40 p-4 md:p-5">
+                    <div className="mb-4 flex flex-col gap-1 md:flex-row md:items-end md:justify-between"><div><p className="text-[10px] font-black uppercase tracking-[0.22em] text-blue-700">Detalle de sanciones</p><p className="mt-1 text-xs font-semibold text-slate-500">Jugadores, tipo de tarjeta, estado del pago y comprobantes asociados.</p></div><span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Haz clic en otro equipo para cambiar el detalle</span></div>
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      {playerGroups.map((playerEvent: any) => {
+                        const playerEvents = teamBalance.events.filter((event: any) => event.player_id === playerEvent.player_id);
+                        const pendingEvents = playerEvents.filter((event: any) => event.fine_status === 'UNPAID');
+                        const proof = teamBalance.proof || teamBalance.playerProofs?.[playerEvent.player_id];
+                        return <div key={playerEvent.player_id || playerEvent.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex min-w-0 items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-xs font-black text-slate-500">#{playerEvent.players?.shirt_number || '-'}</span><div className="min-w-0"><p className="truncate text-sm font-black uppercase text-slate-950">{playerEvent.players?.name || 'Jugador sin asignar'}</p><p className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">{pendingEvents.length ? `${pendingEvents.length} pendiente(s)` : 'Saldo cancelado'}</p></div></div>
+                            {pendingEvents.length ? (proof ? <span className="shrink-0 rounded-lg bg-emerald-100 px-2 py-1 text-[9px] font-black uppercase text-emerald-700">Comprobante recibido</span> : <span className="shrink-0 rounded-lg bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">Sin comprobante</span>) : <span className="shrink-0 rounded-lg bg-emerald-50 px-2 py-1 text-[9px] font-black uppercase text-emerald-700">Pagado</span>}
                           </div>
-                        </td>
-
-                        {/* MINUTO DEL PARTIDO Y FECHA COMPLETA */}
-                        <td className="p-6">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center font-black text-slate-500 shrink-0 border border-slate-200">
-                              <Clock size={18}/>
-                            </div>
-                            <div className="flex flex-col">
-                              <span className="text-sm font-black text-slate-800 tracking-tight">
-                                {fine.teamBalance?.unpaid || 0} pendientes
-                              </span>
-                              <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">
-                                {fine.teamBalance?.events.length || 0} registros disciplinarios
-                              </span>
-                            </div>
+                          <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
+                            {playerEvents.map((event: any) => { const eventIsRed = event.event_type === 'RED'; const eventProof = teamBalance.proof || teamBalance.playerProofs?.[event.player_id] || proofByEvent[event.id]; return <div key={event.id} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2.5"><div className="flex min-w-0 items-center gap-2"><span className={`h-6 w-4 shrink-0 rounded-[3px] border border-black/10 ${eventIsRed ? 'bg-red-500' : 'bg-yellow-400'}`} /><div className="min-w-0"><p className="truncate text-[10px] font-black uppercase text-slate-800">{eventIsRed ? (event.isDoubleCaution ? 'Roja por doble amarilla' : 'Roja directa') : 'Tarjeta amarilla'}</p><p className="truncate text-[9px] font-bold uppercase tracking-wider text-slate-400">{new Date(event.created_at).toLocaleDateString('es-CO')} · {event.period || '--'} {event.minute_record ? `· ${event.minute_record}'` : ''} · {event.fine_status === 'PAID' ? 'Pagada' : 'Pendiente'}</p></div></div><div className="flex shrink-0 items-center gap-2"><span className="text-[10px] font-black text-slate-700">{formatCopAmount(eventFineAmount(event))}</span>{event.fine_status === 'UNPAID' && eventProof && <button type="button" onClick={() => openProofReview(eventProof, eventProof.proof_scope === 'TEAM' ? teamBalance.events : playerEvents)} className="rounded-lg border border-blue-200 bg-white p-1.5 text-blue-700" title="Ver comprobante"><Eye size={14}/></button>}</div></div>; })}
                           </div>
-                        </td>
-
-                        {/* JUGADOR Y EQUIPO */}
-                        <td className="p-6">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center font-black text-slate-400 shrink-0 border border-slate-200 shadow-sm">
-                              {fine.players?.shirt_number || '#'}
-                            </div>
-                            <div className="flex flex-col">
-                              <span className="font-black text-slate-900 uppercase tracking-tight text-sm flex items-center gap-2">
-                                 {fine.players?.teams?.name || 'Equipo sin asignar'}
-                                 {!isPaid && <Flame size={14} className="text-red-500"/>}
-                              </span>
-                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">{fine.players?.teams?.name}</span>
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* TIPO DE SANCIÓN */}
-                        <td className="p-6">
-                           <div className="flex items-center gap-3">
-                              <div className={`w-5 h-7 rounded-[4px] shadow-sm border border-black/10 ${isRed ? 'bg-red-500' : 'bg-yellow-400'}`}></div>
-                              <span className="text-[11px] font-black uppercase tracking-widest text-slate-700">
-                              {fine.teamBalance ? sanctionLabels.join(' · ') : (isRed ? (fine.isDoubleCaution ? 'Roja por doble amonestación' : 'Roja directa') : 'Amonestación')}
-                              </span>
-                           </div>
-                        </td>
-
-                        {/* MONTO */}
-                        <td className="p-6 text-center">
-                           <span className={`text-lg font-black tracking-tighter ${isPaid ? 'text-slate-300 line-through' : 'text-slate-800'}`}>
-                              {formatCopAmount(amount)}
-                           </span>
-                        </td>
-
-                        {/* BOTÓN DE ACCIÓN */}
-                        <td className="p-6 pr-8 text-center">
-                           <div className="flex flex-col items-center gap-2">
-                           {fine.teamBalance && <button type="button" onClick={() => setSelectedTeamHistory(fine.teamBalance)} className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-indigo-700"><Calendar size={14}/> Historial</button>}
-                           {isPaid ? (
-                              <span className="inline-flex items-center gap-1.5 text-[10px] font-black text-emerald-600 uppercase tracking-widest bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-100">
-                                 <ShieldCheck size={14}/> Liberado
-                              </span>
-                           ) : (
-                             <>
-                              {(fine.teamBalance?.proof || proofByEvent[fine.id]) ? <button type="button" onClick={async () => { const proof = fine.teamBalance?.proof || proofByEvent[fine.id]; setSelectedProof(proof); setSelectedProofUrl(''); await handleViewProof(proof); }} className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-center text-[10px] font-black uppercase tracking-widest transition-all shadow-md active:scale-95"><Eye size={14}/> Ver comprobante</button> : <span className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-4 py-2.5 text-center text-[10px] font-black uppercase tracking-widest text-slate-400"><Clock size={14}/> Sin comprobante</span>}
-                              <button type="button" onClick={() => beginExternalPayment(fine)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-amber-700 hover:bg-amber-100">Registrar pago externo</button>
-                              </>
-                           )}
-                           </div>
-                        </td>
-                      </tr>
-                    )
-                  })
-                )}
-              </tbody>
-            </table>
+                          {pendingEvents.length > 0 && proof && <div className="mt-3 flex flex-wrap justify-end gap-2"><button type="button" onClick={() => openProofReview(proof, proof.proof_scope === 'TEAM' ? teamBalance.events : playerEvents)} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-[9px] font-black uppercase tracking-widest text-blue-700">Ver comprobante</button></div>}
+                        </div>;
+                      })}
+                    </div>
+                  </div>}
+                </article>
+              );
+            })}
           </div>
         </div>
         {selectedTeamHistory && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4" onClick={() => setSelectedTeamHistory(null)}>
             <section role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
               <div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Historial disciplinario</p><h2 className="text-xl font-black uppercase">{selectedTeamHistory.name}</h2></div><button type="button" onClick={() => setSelectedTeamHistory(null)} className="rounded-xl bg-slate-100 p-2" aria-label="Cerrar">×</button></div>
+              <div className="mb-4 rounded-2xl border border-violet-100 bg-violet-50/60 p-4">
+                <p className="text-[10px] font-black uppercase tracking-widest text-violet-700">Control de comprobantes por jugador</p>
+                <div className="mt-3 divide-y divide-violet-100">
+                  {Array.from(new Map(selectedTeamHistory.events.map((event: any) => [event.player_id || event.id, event])).values()).map((playerEvent: any) => {
+                    const proof = selectedTeamHistory.proof || selectedTeamHistory.playerProofs?.[playerEvent.player_id];
+                    const playerEvents = selectedTeamHistory.events.filter((event: any) => event.player_id === playerEvent.player_id);
+                    const pending = playerEvents.some((event: any) => event.fine_status === 'UNPAID');
+                    return <div key={playerEvent.player_id || playerEvent.id} className="flex flex-wrap items-center justify-between gap-3 py-2.5"><div><p className="text-xs font-black uppercase">#{playerEvent.players?.shirt_number || '-'} {playerEvent.players?.name || 'Jugador sin asignar'}</p><p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">{pending ? `${playerEvents.filter((event: any) => event.fine_status === 'UNPAID').length} pendiente(s)` : 'Sin saldo pendiente'}</p></div><div className="flex items-center gap-2">{pending && (proof ? <><span className="rounded-lg bg-emerald-100 px-2 py-1 text-[9px] font-black uppercase text-emerald-700">Comprobante recibido</span><button type="button" onClick={() => openProofReview(proof, proof.proof_scope === 'TEAM' ? selectedTeamHistory.events : playerEvents)} className="rounded-lg border border-blue-200 bg-white px-2 py-1 text-[9px] font-black uppercase text-blue-700">Revisar</button></> : <span className="rounded-lg bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">Sin comprobante</span>)}</div></div>;
+                  })}
+                </div>
+              </div>
               <div className="max-h-[60vh] divide-y divide-slate-100 overflow-y-auto">
-                {selectedTeamHistory.events.map((event: any) => <div key={event.id} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="text-xs font-black uppercase">#{event.players?.shirt_number || '-'} {event.players?.name || 'Jugador sin asignar'} · {event.event_type === 'RED' ? 'Tarjeta roja' : 'Tarjeta amarilla'}</p><p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{new Date(event.created_at).toLocaleDateString('es-CO')} · {event.period || '--'} {event.minute_record ? `· ${event.minute_record}'` : ''} {event.suspension_matches ? `· Suspensión: ${event.suspension_matches} jornadas` : ''}</p>{event.disciplinary_comment && <p className="mt-1 text-[10px] font-semibold text-slate-500">{event.disciplinary_comment}</p>}</div><button type="button" onClick={() => openDisciplinaryEditor(event)} className="shrink-0 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-blue-700"><Settings2 size={14} className="mr-1 inline"/> Resolver</button></div>)}
+                {selectedTeamHistory.events.map((event: any) => <div key={event.id} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="text-xs font-black uppercase">#{event.players?.shirt_number || '-'} {event.players?.name || 'Jugador sin asignar'} · {event.event_type === 'RED' ? 'Tarjeta roja' : 'Tarjeta amarilla'}</p><p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{new Date(event.created_at).toLocaleDateString('es-CO')} · {event.period || '--'} {event.minute_record ? `· ${event.minute_record}'` : ''} · {event.fine_status === 'PAID' ? 'Pagada' : 'Pendiente'} {event.suspension_matches ? `· Suspensión: ${event.suspension_matches} jornadas` : ''}</p>{event.disciplinary_comment && <p className="mt-1 text-[10px] font-semibold text-slate-500">{event.disciplinary_comment}</p>}</div><button type="button" onClick={() => openDisciplinaryEditor(event)} className="shrink-0 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-blue-700"><Settings2 size={14} className="mr-1 inline"/> Resolver</button></div>)}
               </div>
             </section>
           </div>
@@ -501,10 +544,13 @@ export default function TribunalPage() {
         )}
         {selectedProof && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4" onClick={() => setSelectedProof(null)}>
-            <section role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
-              <div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Comprobante privado</p><h2 className="text-xl font-black uppercase">{selectedProof.players?.name}</h2></div><button type="button" onClick={() => setSelectedProof(null)} className="rounded-xl bg-slate-100 p-2" aria-label="Cerrar"><ArrowLeft size={18}/></button></div>
-              {selectedProofUrl ? <iframe src={selectedProofUrl} title="Comprobante de pago" className="h-[55vh] w-full rounded-2xl border border-slate-200" /> : <div className="flex h-40 items-center justify-center text-sm font-bold text-slate-400">Cargando comprobante…</div>}
-              <button type="button" onClick={() => handleApproveProof(selectedProof)} className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-emerald-700"><CheckCircle2 size={16} className="mr-2 inline"/> Confirmar pago y habilitar equipo</button>
+            <section role="dialog" aria-modal="true" className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+              <div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Revisión de comprobante</p><h2 className="text-xl font-black uppercase">{selectedProof.proof_scope === 'TEAM' ? (selectedProof.teams?.name || 'Equipo') : (selectedProof.players?.name || 'Jugador')}</h2><p className="mt-1 text-[10px] font-bold uppercase text-slate-400">{selectedProof.proof_scope === 'TEAM' ? 'Pago global con cobertura seleccionable' : 'Pago individual del jugador'}</p></div><button type="button" onClick={() => setSelectedProof(null)} className="rounded-xl bg-slate-100 p-2" aria-label="Cerrar"><ArrowLeft size={18}/></button></div>
+              {selectedProofUrl ? <iframe src={selectedProofUrl} title="Comprobante de pago" className="h-[38vh] w-full rounded-2xl border border-slate-200" /> : <div className="flex h-40 items-center justify-center text-sm font-bold text-slate-400">Cargando comprobante…</div>}
+              {selectedProof.proof_scope === 'TEAM' && <div className="mt-4 rounded-2xl border border-violet-200 bg-violet-50 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-widest text-violet-700">Cobertura del comprobante global</p><p className="mt-1 text-xs font-semibold text-violet-900">Selecciona únicamente las sanciones que demuestra el valor pagado.</p></div><button type="button" onClick={() => { const ids = selectedProofEvents.map((event: any) => event.id); setSelectedProofEventIds(ids); setSelectedProofAmount(String(selectedProofEvents.reduce((sum: number, event: any) => sum + eventFineAmount(event), 0))); }} className="rounded-lg border border-violet-300 bg-white px-3 py-2 text-[9px] font-black uppercase tracking-widest text-violet-700">Seleccionar todas</button></div><div className="mt-3 space-y-2">{selectedProofEvents.map((event: any) => { const checked = selectedProofEventIds.includes(event.id); return <label key={event.id} className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl border bg-white px-3 py-3 ${checked ? 'border-violet-500 ring-2 ring-violet-100' : 'border-violet-100'}`}><span className="flex min-w-0 items-center gap-3"><input type="checkbox" checked={checked} onChange={() => toggleProofEvent(event)} className="h-4 w-4 accent-violet-600" /><span className={`h-6 w-4 shrink-0 rounded-[3px] ${event.event_type === 'RED' ? 'bg-red-500' : 'bg-yellow-400'}`} /><span className="min-w-0"><span className="block truncate text-[10px] font-black uppercase text-slate-800">#{event.players?.shirt_number || '-'} {event.players?.name || 'Jugador'}</span><span className="mt-1 block text-[9px] font-bold uppercase tracking-wider text-slate-400">{event.event_type === 'RED' ? 'Tarjeta roja' : 'Tarjeta amarilla'} · {new Date(event.created_at).toLocaleDateString('es-CO')}</span></span></span><span className="shrink-0 text-xs font-black text-slate-800">{formatCopAmount(eventFineAmount(event))}</span></label>; })}</div><div className="mt-4 grid gap-3 sm:grid-cols-2"><div><p className="text-[9px] font-black uppercase tracking-widest text-violet-700">Sanciones seleccionadas</p><p className="mt-1 text-xl font-black text-slate-950">{formatCopAmount(selectedProofEvents.filter((event: any) => selectedProofEventIds.includes(event.id)).reduce((sum: number, event: any) => sum + eventFineAmount(event), 0))}</p></div><label className="text-[9px] font-black uppercase tracking-widest text-violet-700">Valor validado del comprobante<input type="number" min="1" step="1" value={selectedProofAmount} onChange={(event) => setSelectedProofAmount(event.target.value)} className="mt-1.5 h-11 w-full rounded-xl border border-violet-200 bg-white px-3 text-sm font-black text-slate-950 outline-none focus:border-violet-500" placeholder="Ej. 25000" /></label></div></div>}
+              {selectedProof.proof_scope === 'PLAYER' && <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4"><p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Cobertura individual</p><p className="mt-1 text-xs font-semibold text-blue-900">Se aplicará a todas las sanciones pendientes de este jugador.</p><p className="mt-2 text-xl font-black text-slate-950">{formatCopAmount(selectedProofEvents.reduce((sum: number, event: any) => sum + eventFineAmount(event), 0))}</p></div>}
+              <button type="button" onClick={() => handleApproveProof(selectedProof)} disabled={selectedProof.proof_scope === 'TEAM' && (!selectedProofEventIds.length || !selectedProofAmount.trim())} className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"><CheckCircle2 size={16} className="mr-2 inline"/> {selectedProof.proof_scope === 'TEAM' ? 'Aprobar cobertura seleccionada' : 'Confirmar pago del jugador'}</button>
+              <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 p-4"><label className="text-[9px] font-black uppercase tracking-widest text-red-700">Motivo si el comprobante no coincide<textarea value={proofRejectionReason} onChange={(event) => setProofRejectionReason(event.target.value)} rows={2} className="mt-1.5 w-full rounded-xl border border-red-200 bg-white p-3 text-xs font-semibold text-slate-800 outline-none focus:border-red-500" placeholder="Ej. El valor del comprobante no cubre las sanciones seleccionadas" /></label><button type="button" onClick={handleRejectProof} disabled={proofRejectionReason.trim().length < 5} className="mt-3 w-full rounded-xl border border-red-200 bg-white px-4 py-2.5 text-[10px] font-black uppercase tracking-widest text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40">Rechazar comprobante</button></div>
             </section>
           </div>
         )}
@@ -516,7 +562,9 @@ export default function TribunalPage() {
                 <button type="button" onClick={() => setExternalPaymentTarget(null)} disabled={externalPaymentBusy} className="rounded-xl bg-slate-100 px-3 py-2 text-xl leading-none text-slate-500 disabled:opacity-50" aria-label="Cerrar">×</button>
               </div>
               <label className="mt-5 block text-[10px] font-black uppercase tracking-widest text-slate-500">Soporte o referencia del pago<textarea value={externalPaymentNote} onChange={(event) => setExternalPaymentNote(event.target.value)} rows={3} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-800 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20" placeholder="Indica el soporte o referencia del pago" /></label>
-              <div className="mt-5 flex gap-3"><button type="button" onClick={() => setExternalPaymentTarget(null)} disabled={externalPaymentBusy} className="flex-1 rounded-xl bg-slate-100 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-600 disabled:opacity-50">Cancelar</button><button type="button" onClick={handleExternalPayment} disabled={externalPaymentBusy || externalPaymentNote.trim().length < 5} className="flex-1 rounded-xl bg-amber-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-amber-600/20 disabled:opacity-50">{externalPaymentBusy ? 'Guardando…' : 'Confirmar pago'}</button></div>
+              <label className="mt-4 flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-dashed border-amber-300 bg-amber-50/60 px-4 py-3 text-xs font-black uppercase tracking-widest text-amber-800"><span>{externalPaymentFile ? externalPaymentFile.name : 'Cargar imagen o PDF'}</span><input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" disabled={externalPaymentBusy} onChange={(event) => setExternalPaymentFile(event.target.files?.[0] || null)} /></label>
+              <p className="mt-2 text-[10px] font-semibold text-slate-400">Archivo privado · JPG, PNG, WebP o PDF · máximo 5 MB.</p>
+              <div className="mt-5 flex gap-3"><button type="button" onClick={() => setExternalPaymentTarget(null)} disabled={externalPaymentBusy} className="flex-1 rounded-xl bg-slate-100 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-600 disabled:opacity-50">Cancelar</button><button type="button" onClick={handleExternalPayment} disabled={externalPaymentBusy || externalPaymentNote.trim().length < 5 || !externalPaymentFile} className="flex-1 rounded-xl bg-amber-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-amber-600/20 disabled:opacity-50">{externalPaymentBusy ? 'Guardando…' : 'Confirmar pago'}</button></div>
             </section>
           </div>
         )}

@@ -372,35 +372,85 @@ export async function uploadPlayerIdentityDocument(
   return { success: true, data: undefined };
 }
 
-/** Uploads one private proof representing the consolidated disciplinary balance of a team. */
-export async function uploadPlayerFinePaymentProof(
+export type FinePaymentProofScope = 'PLAYER' | 'TEAM';
+
+/** Uploads a private disciplinary receipt for one player or the whole team. */
+export async function uploadFinePaymentProof(
   slug: string,
   teamId: string,
-  playerId: string,
-  matchEventId: string,
+  scope: FinePaymentProofScope,
+  playerId: string | null,
   file: File,
 ): Promise<DelegateActionResult> {
   const access = await assertDelegateTeam(slug, teamId);
   if (!access.success) return { success: false, error: access.error };
+  if (!['PLAYER', 'TEAM'].includes(scope)) return { success: false, error: 'Alcance de comprobante inválido.' };
+  if (scope === 'PLAYER' && !playerId) return { success: false, error: 'Selecciona el jugador del comprobante.' };
   if (!file || file.size <= 0 || file.size > MAX_PAYMENT_PROOF_SIZE_BYTES) return { success: false, error: 'El comprobante debe pesar máximo 5 MB.' };
   if (!['image/jpeg', 'image/png', 'image/webp', 'application/pdf'].includes(file.type)) return { success: false, error: 'Usa un comprobante JPG, PNG, WebP o PDF.' };
 
   const supabase = createServerSupabaseAdminClient();
-  const { data: event } = await supabase.from('match_events').select('id, player_id, team_id, fine_status').eq('id', matchEventId).eq('player_id', playerId).eq('team_id', teamId).maybeSingle();
-  if (!event) return { success: false, error: 'La sanción no pertenece a este equipo.' };
-  if (event.fine_status === 'PAID') return { success: false, error: 'El saldo de este equipo ya fue validado.' };
+  const tournamentId = (access.team as any).categories?.tournament_id || (access.team as any).categories?.tournaments?.id;
+  if (!tournamentId) return { success: false, error: 'No se pudo identificar el torneo del equipo.' };
+  if (playerId) {
+    const { data: player } = await supabase.from('players').select('id').eq('id', playerId).eq('team_id', teamId).maybeSingle();
+    if (!player) return { success: false, error: 'El jugador no pertenece a este equipo.' };
+  }
+
+  const { data: activeProofs, error: activeProofsError } = await supabase
+    .from('fine_payment_proofs')
+    .select('id, proof_scope, player_id')
+    .eq('team_id', teamId)
+    .eq('tournament_id', tournamentId)
+    .eq('status', 'PENDING');
+  if (activeProofsError) return { success: false, error: 'No se pudo verificar si ya existe un comprobante pendiente.' };
+  if (scope === 'TEAM' && activeProofs?.length) return { success: false, error: 'Ya existe un comprobante pendiente para este equipo. Espera la revisión del Tribunal.' };
+  if (scope === 'PLAYER' && activeProofs?.some((proof: any) => proof.proof_scope === 'TEAM' || proof.player_id === playerId)) {
+    return { success: false, error: 'Ya existe un comprobante pendiente que cubre a este jugador o a todo el equipo.' };
+  }
+
+  let pendingQuery = supabase.from('match_events').select('id').eq('team_id', teamId).in('event_type', ['YELLOW', 'RED']).eq('fine_status', 'UNPAID');
+  if (scope === 'PLAYER') pendingQuery = pendingQuery.eq('player_id', playerId as string);
+  const { data: pendingEvents, error: pendingError } = await pendingQuery;
+  if (pendingError) return { success: false, error: 'No se pudo consultar el saldo disciplinario.' };
+  if (!pendingEvents?.length) return { success: false, error: scope === 'TEAM' ? 'El equipo no tiene multas pendientes.' : 'El jugador no tiene multas pendientes.' };
 
   const extension = file.type === 'application/pdf' ? 'pdf' : file.type.split('/')[1].replace('jpeg', 'jpg');
-  const storagePath = `${access.delegate.client_id}/${teamId}/team-fine-proof-${matchEventId}-${randomUUID()}.${extension}`;
+  const target = scope === 'TEAM' ? 'team' : `player-${playerId}`;
+  const storagePath = `${access.delegate.client_id}/${teamId}/fine-proofs/${target}-${randomUUID()}.${extension}`;
   const { error: uploadError } = await supabase.storage.from('player-documents').upload(storagePath, file, { contentType: file.type, upsert: false });
   if (uploadError) return { success: false, error: 'No se pudo almacenar el comprobante privado.' };
-  const { error } = await supabase.from('fine_payment_proofs').insert({ player_id: playerId, team_id: teamId, match_event_id: matchEventId, storage_path: storagePath, original_filename: file.name.slice(0, 180), mime_type: file.type, file_size: file.size, status: 'PENDING', submitted_by_delegate_id: access.delegate.id });
+  const { error } = await supabase.from('fine_payment_proofs').insert({
+    player_id: scope === 'PLAYER' ? playerId : null,
+    team_id: teamId,
+    tournament_id: tournamentId,
+    match_event_id: null,
+    proof_scope: scope,
+    payment_source: 'DELEGATE',
+    storage_path: storagePath,
+    original_filename: file.name.slice(0, 180),
+    mime_type: file.type,
+    file_size: file.size,
+    status: 'PENDING',
+    submitted_by_delegate_id: access.delegate.id,
+  });
   if (error) {
     await supabase.storage.from('player-documents').remove([storagePath]);
     return { success: false, error: 'No se pudo registrar el comprobante. Verifica que la actualización esté disponible.' };
   }
-  await logAuditEvent({ action: 'delegate.fine_payment_proof.upload', actorType: 'delegate', actorId: access.delegate.id, clientId: access.delegate.client_id, targetType: 'team', targetId: teamId, metadata: { slug, teamId, matchEventId, consolidated: true } });
+  await logAuditEvent({ action: 'delegate.fine_payment_proof.upload', actorType: 'delegate', actorId: access.delegate.id, clientId: access.delegate.client_id, targetType: scope === 'PLAYER' ? 'player' : 'team', targetId: scope === 'PLAYER' ? playerId : teamId, metadata: { slug, teamId, playerId, scope, pendingEvents: pendingEvents.length } });
   return { success: true, data: undefined };
+}
+
+/** Backward-compatible entry point for older clients still sending one event id. */
+export async function uploadPlayerFinePaymentProof(
+  slug: string,
+  teamId: string,
+  playerId: string,
+  _matchEventId: string,
+  file: File,
+): Promise<DelegateActionResult> {
+  return uploadFinePaymentProof(slug, teamId, 'PLAYER', playerId, file);
 }
 
 export async function saveDelegateMatchLineup(slug: string, teamId: string, matchId: string, playerIds: string[]) : Promise<DelegateActionResult> {

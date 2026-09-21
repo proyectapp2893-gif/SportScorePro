@@ -2,20 +2,21 @@
 
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../../../supabase';
-import { ArrowLeft, CheckCircle2, Minus, Plus, School, CalendarDays, X, Radio, Square, RefreshCcw, ArrowRight, PlayCircle, AlertTriangle, Handshake, Star, FileDown } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Minus, Plus, School, CalendarDays, X, Radio, Square, RefreshCcw, ArrowRight, PlayCircle, AlertTriangle, Handshake, Star, FileDown, LoaderCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { FaFutbol } from 'react-icons/fa';
 
 // Importación de Componentes
 import GlobalTimer from './GlobalTimer';
 import { useMatchTimer } from '../../../resultados/hooks/useMatchTimer';
+import { useActionGuard } from '../hooks/useActionGuard';
 import StartingLineupModal from './modals/StartingLineupModal';
 import WalkoverModal from './modals/WalkoverModal';
 import MatchSummaryModal from './modals/MatchSummaryModal';
 import PenaltyShootout from './PenaltyShootout';
-import { applyFootballWalkover, changeMatchPeriod, finishFootballMatch, getFootballMatchRoster, recordFootballMatchEvent, registerMatchParticipants, resetFootballTimer, startLiveMatch, revertLastScoringEvent, removeYellowCardEvent } from '../actions';
+import { applyFootballWalkover, changeMatchPeriod, finishFootballMatch, getFootballMatchRoster, recordFootballMatchEvent, registerMatchParticipants, resetFootballTimer, startLiveMatch, revertLastScoringEvent, removeRedCardEvent, removeYellowCardEvent } from '../actions';
 import { DEMO_SLUG } from '@/app/lib/demo/config';
-import { applyDemoWalkover, changeDemoMatchPeriod, finishDemoFootballMatch, getDemoFootballRoster, recordDemoFootballEvent, startDemoFootballMatch, revertDemoLastFootballGoal, removeDemoYellowCard } from '@/app/lib/demo/actions';
+import { applyDemoWalkover, changeDemoMatchPeriod, finishDemoFootballMatch, getDemoFootballRoster, recordDemoFootballEvent, startDemoFootballMatch, revertDemoLastFootballGoal, removeDemoRedCard, removeDemoYellowCard } from '@/app/lib/demo/actions';
 import { evaluatePlayerEligibility, type PlayerEligibility } from '@/app/lib/competition/player-eligibility';
 
 interface MesaFutbolProps {
@@ -52,12 +53,15 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   const minPlayers = categoryData?.sports?.name.includes('MICRO') ? 4 : 7;
 
   const [loading, setLoading] = useState(false);
+  const eventGuard = useActionGuard();
+  const startGuard = useActionGuard();
   const [showPeriodConfirm, setShowPeriodConfirm] = useState<{ isOpen: boolean; targetPeriod: string }>({ isOpen: false, targetPeriod: '' });
   const [showSummaryModal, setShowSummaryModal] = useState(false); 
   const [showRosterModal, setShowRosterModal] = useState<'HOME' | 'AWAY' | null>(null); 
   const [goalCorrectionTeam, setGoalCorrectionTeam] = useState<'HOME' | 'AWAY' | null>(null);
   const [goalCorrectionPlayer, setGoalCorrectionPlayer] = useState<string>('');
   const [yellowCorrectionEvent, setYellowCorrectionEvent] = useState<any | null>(null);
+  const [redCorrectionEvent, setRedCorrectionEvent] = useState<any | null>(null);
   const [showTimeline, setShowTimeline] = useState(false);
   
   const [scoringAction, setScoringAction] = useState<{ team: 'HOME' | 'AWAY', type: 'SCORE' | 'YELLOW' | 'RED' | 'SUB' | 'ASSIST' | 'MVP', points: number } | null>(null);
@@ -183,6 +187,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   const handlePreMatchSetup = () => setShowStartingLineupModal(true);
 
   const handleQuickStart = async () => {
+    if (!startGuard.tryStart()) return;
     setLoading(true);
     const toastId = toast.loading('Iniciando partido rápido...');
     try {
@@ -194,10 +199,11 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
       if (!isRunning) toggleTimer();
       toast.success('¡Pitazo inicial! Partido en vivo.', { id: toastId, icon: '⚽' });
     } catch (error) { toast.error('Error al iniciar', { id: toastId }); }
-    setLoading(false);
+    finally { setLoading(false); startGuard.stop(); }
   };
 
   const handleTurnMatchLive = async () => {
+    if (!startGuard.tryStart()) return;
     setLoading(true);
     const toastId = toast.loading('Registrando acta...');
     try {
@@ -219,7 +225,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
       if (!isRunning) toggleTimer();
       toast.success('¡Partido en vivo!', { id: toastId, icon: '⚽' });
     } catch (error) { toast.error('Error', { id: toastId }); }
-    setLoading(false);
+    finally { setLoading(false); startGuard.stop(); }
   };
 
   const toggleStartingPlayer = (team: 'HOME' | 'AWAY', playerId: string) => {
@@ -282,6 +288,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
 
   const handleRefereeAction = (team: 'HOME' | 'AWAY', type: 'SCORE' | 'YELLOW' | 'RED' | 'SUB' | 'ASSIST' | 'MVP', points: number = 0) => {
     if (!isMatchLive) return toast.error('Inicie transmisión primero.');
+    if (eventGuard.busy) return;
     
     if (points < 0) { setGoalCorrectionTeam(team); setGoalCorrectionPlayer(''); return; }
     setSubOutPlayer(null); 
@@ -337,6 +344,22 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
     } finally { setLoading(false); }
   };
 
+  const confirmRedCorrection = async () => {
+    if (!redCorrectionEvent) return;
+    setLoading(true);
+    try {
+      const result = isDemo
+        ? removeDemoRedCard(match.id, redCorrectionEvent.id)
+        : await removeRedCardEvent({ slug, matchId: match.id, eventId: redCorrectionEvent.id });
+      if (!result?.success) throw new Error(('error' in result && result.error) || 'No fue posible eliminar la tarjeta.');
+      await fetchLiveEvents();
+      toast.success('Tarjeta roja eliminada y puntaje de Fair Play restaurado.');
+      setRedCorrectionEvent(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No fue posible eliminar la tarjeta roja.');
+    } finally { setLoading(false); }
+  };
+
   const handleTimeoutOrInjury = () => {
      if (!isMatchLive) return toast.error('El partido no está en vivo.');
      toggleTimer();
@@ -348,7 +371,9 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
   };
 
   const executeActionRecord = async (team: 'HOME' | 'AWAY', type: 'SCORE' | 'YELLOW' | 'RED' | 'SUB' | 'ASSIST' | 'MVP', points: number, playerId?: string) => {
-    if (playerId || type === 'SCORE' || type === 'YELLOW') {
+    if (!eventGuard.tryStart()) return;
+    try {
+      if (playerId || type === 'SCORE' || type === 'YELLOW') {
       const exactSecond = phase === 'EXTRA' ? (match.match_duration_seconds || 2400) + extraSeconds : regularSeconds;
       const teamId = team === 'HOME' ? match.home_team.id : match.away_team.id;
       const minuteRecord = Math.floor(exactSecond / 60) + 1;
@@ -415,8 +440,11 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
 
       await fetchLiveEvents(); 
       if (type === 'SCORE' && points > 0) toast.success('¡Goooool!');
+      }
+      if (type !== 'SUB') setScoringAction(null);
+    } finally {
+      eventGuard.stop();
     }
-    if (type !== 'SUB') setScoringAction(null);
   };
 
   const handlePenaltyRecord = (team: 'HOME' | 'AWAY', index: number, isGoal: boolean) => {
@@ -505,6 +533,11 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
 
   return (
     <div className="absolute inset-0 z-50 flex flex-col overflow-hidden text-white font-sans animate-in slide-in-from-right duration-300 bg-[url('/bg-futbol.jpg')] bg-cover bg-center">
+      {(eventGuard.busy || startGuard.busy) && (
+        <div className="pointer-events-none fixed right-4 top-4 z-[10000] flex items-center gap-2 rounded-xl bg-slate-950/95 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white shadow-2xl">
+          <LoaderCircle size={16} className="animate-spin text-emerald-400" /> {startGuard.busy ? 'Iniciando partido...' : 'Registrando evento...'}
+        </div>
+      )}
       
       <div className="absolute inset-0 bg-slate-900/50 z-0 backdrop-blur-[2px]"></div>
 
@@ -607,16 +640,16 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
               </button>
               
               <div className="mesa-action-row flex flex-wrap justify-center gap-1 sm:gap-2 landscape:gap-1 mb-2 sm:mb-6 landscape:mb-1 bg-slate-900/80 backdrop-blur-md p-1 sm:p-2.5 rounded-2xl border border-slate-700 shadow-xl z-10">
-                <button aria-label={`Amarilla para ${match.home_team?.name || 'local'}`} onClick={() => handleRefereeAction('HOME', 'YELLOW')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center hover:bg-slate-800"><Square className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-yellow-500 fill-yellow-500 drop-shadow-[0_0_5px_rgba(234,179,8,0.5)]" /></button>
-                <button onClick={() => handleRefereeAction('HOME', 'RED')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center hover:bg-slate-800"><Square className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-red-500 fill-red-500 drop-shadow-[0_0_5px_rgba(239,68,68,0.5)]" /></button>
-                <button onClick={() => handleRefereeAction('HOME', 'SUB')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-blue-400 hover:bg-slate-800"><RefreshCcw className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6" /></button>
-                <button title="Asistencia" onClick={() => handleRefereeAction('HOME', 'ASSIST')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-cyan-400 hover:bg-slate-800"><Handshake className="w-5 h-5" /></button>
-                <button title="Jugador MVP" onClick={() => handleRefereeAction('HOME', 'MVP')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-violet-400 hover:bg-slate-800"><Star className="w-5 h-5" /></button>
+                <button aria-label={`Amarilla para ${match.home_team?.name || 'local'}`} onClick={() => handleRefereeAction('HOME', 'YELLOW')} disabled={!isMatchLive || eventGuard.busy} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center hover:bg-slate-800 active:scale-95 transition-all disabled:cursor-wait"><Square className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-yellow-500 fill-yellow-500 drop-shadow-[0_0_5px_rgba(234,179,8,0.5)]" /></button>
+                <button onClick={() => handleRefereeAction('HOME', 'RED')} disabled={!isMatchLive || eventGuard.busy} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center hover:bg-slate-800 active:scale-95 transition-all disabled:cursor-wait"><Square className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-red-500 fill-red-500 drop-shadow-[0_0_5px_rgba(239,68,68,0.5)]" /></button>
+                <button onClick={() => handleRefereeAction('HOME', 'SUB')} disabled={!isMatchLive || eventGuard.busy} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-blue-400 hover:bg-slate-800 active:scale-95 transition-all disabled:cursor-wait"><RefreshCcw className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6" /></button>
+                <button title="Asistencia" onClick={() => handleRefereeAction('HOME', 'ASSIST')} disabled={!isMatchLive || eventGuard.busy} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-cyan-400 hover:bg-slate-800 active:scale-95 transition-all disabled:cursor-wait"><Handshake className="w-5 h-5" /></button>
+                <button title="Jugador MVP" onClick={() => handleRefereeAction('HOME', 'MVP')} disabled={!isMatchLive || eventGuard.busy} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-violet-400 hover:bg-slate-800 active:scale-95 transition-all disabled:cursor-wait"><Star className="w-5 h-5" /></button>
               </div>
               
               <div className="mesa-action-row mesa-score-row flex items-center justify-center gap-2 sm:gap-4 landscape:gap-1 bg-slate-900/80 backdrop-blur-md p-2 sm:p-4 landscape:p-1 rounded-2xl sm:rounded-3xl border border-slate-700 shadow-2xl z-10">
-                <button disabled={!isMatchLive} onClick={() => handleRefereeAction('HOME', 'SCORE', -1)} className="h-12 w-14 sm:h-14 sm:w-16 md:h-16 md:w-20 landscape:h-11 landscape:w-14 bg-slate-950 rounded-xl sm:rounded-2xl flex items-center justify-center text-slate-500 border border-slate-800 hover:text-red-400 active:scale-95 transition-all"><Minus className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8 landscape:h-5 landscape:w-5" /></button>
-                <button disabled={!isMatchLive} onClick={() => handleRefereeAction('HOME', 'SCORE', 1)} className="h-12 w-24 sm:h-16 sm:w-32 md:h-20 md:w-40 landscape:h-14 landscape:w-28 bg-gradient-to-b from-emerald-500 to-emerald-700 rounded-xl sm:rounded-2xl flex items-center justify-center text-white border border-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.3)] sm:shadow-[0_0_25px_rgba(16,185,129,0.4)] active:scale-95 transition-all"><FaFutbol className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8 landscape:h-5 landscape:w-5 mr-2 sm:mr-3 opacity-70" /><Plus className="w-6 h-6 sm:w-8 sm:h-8 md:w-10 md:h-10 landscape:h-7 landscape:w-7 font-black" /></button>
+                <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('HOME', 'SCORE', -1)} className="h-12 w-14 sm:h-14 sm:w-16 md:h-16 md:w-20 landscape:h-11 landscape:w-14 bg-slate-950 rounded-xl sm:rounded-2xl flex items-center justify-center text-slate-500 border border-slate-800 hover:text-red-400 active:scale-95 transition-all disabled:cursor-wait"><Minus className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8 landscape:h-5 landscape:w-5" /></button>
+                <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('HOME', 'SCORE', 1)} className="h-12 w-24 sm:h-16 sm:w-32 md:h-20 md:w-40 landscape:h-14 landscape:w-28 bg-gradient-to-b from-emerald-500 to-emerald-700 rounded-xl sm:rounded-2xl flex items-center justify-center text-white border border-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.3)] sm:shadow-[0_0_25px_rgba(16,185,129,0.4)] active:scale-95 transition-all disabled:cursor-wait"><FaFutbol className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8 landscape:h-5 landscape:w-5 mr-2 sm:mr-3 opacity-70" /><Plus className="w-6 h-6 sm:w-8 sm:h-8 md:w-10 md:h-10 landscape:h-7 landscape:w-7 font-black" /></button>
               </div>
             </div>
 
@@ -628,16 +661,16 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
               </button>
               
               <div className="mesa-action-row flex flex-wrap justify-center gap-1 sm:gap-2 landscape:gap-1 mb-2 sm:mb-6 landscape:mb-1 bg-slate-900/80 backdrop-blur-md p-1 sm:p-2.5 rounded-2xl border border-slate-700 shadow-xl z-10">
-                <button aria-label={`Amarilla para ${match.away_team?.name || 'visitante'}`} onClick={() => handleRefereeAction('AWAY', 'YELLOW')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center hover:bg-slate-800"><Square className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-yellow-500 fill-yellow-500 drop-shadow-[0_0_5px_rgba(234,179,8,0.5)]" /></button>
-                <button onClick={() => handleRefereeAction('AWAY', 'RED')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center hover:bg-slate-800"><Square className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-red-500 fill-red-500 drop-shadow-[0_0_5px_rgba(239,68,68,0.5)]" /></button>
-                <button onClick={() => handleRefereeAction('AWAY', 'SUB')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-blue-400 hover:bg-slate-800"><RefreshCcw className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6" /></button>
-                <button title="Asistencia" onClick={() => handleRefereeAction('AWAY', 'ASSIST')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-cyan-400 hover:bg-slate-800"><Handshake className="w-5 h-5" /></button>
-                <button title="Jugador MVP" onClick={() => handleRefereeAction('AWAY', 'MVP')} disabled={!isMatchLive} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-violet-400 hover:bg-slate-800"><Star className="w-5 h-5" /></button>
+                <button aria-label={`Amarilla para ${match.away_team?.name || 'visitante'}`} onClick={() => handleRefereeAction('AWAY', 'YELLOW')} disabled={!isMatchLive || eventGuard.busy} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center hover:bg-slate-800 active:scale-95 transition-all disabled:cursor-wait"><Square className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-yellow-500 fill-yellow-500 drop-shadow-[0_0_5px_rgba(234,179,8,0.5)]" /></button>
+                <button onClick={() => handleRefereeAction('AWAY', 'RED')} disabled={!isMatchLive || eventGuard.busy} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center hover:bg-slate-800 active:scale-95 transition-all disabled:cursor-wait"><Square className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-red-500 fill-red-500 drop-shadow-[0_0_5px_rgba(239,68,68,0.5)]" /></button>
+                <button onClick={() => handleRefereeAction('AWAY', 'SUB')} disabled={!isMatchLive || eventGuard.busy} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-blue-400 hover:bg-slate-800 active:scale-95 transition-all disabled:cursor-wait"><RefreshCcw className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6" /></button>
+                <button title="Asistencia" onClick={() => handleRefereeAction('AWAY', 'ASSIST')} disabled={!isMatchLive || eventGuard.busy} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-cyan-400 hover:bg-slate-800 active:scale-95 transition-all disabled:cursor-wait"><Handshake className="w-5 h-5" /></button>
+                <button title="Jugador MVP" onClick={() => handleRefereeAction('AWAY', 'MVP')} disabled={!isMatchLive || eventGuard.busy} className="w-12 h-10 sm:w-14 sm:h-12 md:w-16 md:h-14 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center text-violet-400 hover:bg-slate-800 active:scale-95 transition-all disabled:cursor-wait"><Star className="w-5 h-5" /></button>
               </div>
               
               <div className="mesa-action-row mesa-score-row flex items-center justify-center gap-2 sm:gap-4 landscape:gap-1 bg-slate-900/80 backdrop-blur-md p-2 sm:p-4 landscape:p-1 rounded-2xl sm:rounded-3xl border border-slate-700 shadow-2xl z-10">
-                <button disabled={!isMatchLive} onClick={() => handleRefereeAction('AWAY', 'SCORE', -1)} className="h-12 w-14 sm:h-14 sm:w-16 md:h-16 md:w-20 landscape:h-11 landscape:w-14 bg-slate-950 rounded-xl sm:rounded-2xl flex items-center justify-center text-slate-500 border border-slate-800 hover:text-red-400 active:scale-95 transition-all"><Minus className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8 landscape:h-5 landscape:w-5" /></button>
-                <button disabled={!isMatchLive} onClick={() => handleRefereeAction('AWAY', 'SCORE', 1)} className="h-12 w-24 sm:h-16 sm:w-32 md:h-20 md:w-40 landscape:h-14 landscape:w-28 bg-gradient-to-b from-emerald-500 to-emerald-700 rounded-xl sm:rounded-2xl flex items-center justify-center text-white border border-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.3)] sm:shadow-[0_0_25px_rgba(16,185,129,0.4)] active:scale-95 transition-all"><FaFutbol className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8 landscape:h-5 landscape:w-5 mr-2 sm:mr-3 opacity-70" /><Plus className="w-6 h-6 sm:w-8 sm:h-8 md:w-10 md:h-10 landscape:h-7 landscape:w-7 font-black" /></button>
+                <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('AWAY', 'SCORE', -1)} className="h-12 w-14 sm:h-14 sm:w-16 md:h-16 md:w-20 landscape:h-11 landscape:w-14 bg-slate-950 rounded-xl sm:rounded-2xl flex items-center justify-center text-slate-500 border border-slate-800 hover:text-red-400 active:scale-95 transition-all disabled:cursor-wait"><Minus className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8 landscape:h-5 landscape:w-5" /></button>
+                <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('AWAY', 'SCORE', 1)} className="h-12 w-24 sm:h-16 sm:w-32 md:h-20 md:w-40 landscape:h-14 landscape:w-28 bg-gradient-to-b from-emerald-500 to-emerald-700 rounded-xl sm:rounded-2xl flex items-center justify-center text-white border border-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.3)] sm:shadow-[0_0_25px_rgba(16,185,129,0.4)] active:scale-95 transition-all disabled:cursor-wait"><FaFutbol className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8 landscape:h-5 landscape:w-5 mr-2 sm:mr-3 opacity-70" /><Plus className="w-6 h-6 sm:w-8 sm:h-8 md:w-10 md:h-10 landscape:h-7 landscape:w-7 font-black" /></button>
               </div>
             </div>
           </div>
@@ -653,6 +686,8 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
               const content = <><span className="w-10 shrink-0 text-slate-400">{event.minute_record || '--'}</span><span className="w-5 shrink-0" aria-hidden="true">{event.event_type === 'GOAL' ? '⚽' : event.event_type === 'YELLOW' ? '🟨' : event.event_type === 'RED' ? '🟥' : event.event_type === 'SUB' ? '🔄' : '•'}</span><span className="truncate">{event.players?.name || 'Evento de equipo'} · {event.event_type}</span></>;
               return event.event_type === 'YELLOW'
                 ? <button type="button" key={event.id} onClick={() => setYellowCorrectionEvent(event)} aria-label={`Corregir tarjeta amarilla de ${event.players?.name || 'jugador'}`} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm font-bold text-white hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400">{content}</button>
+                : event.event_type === 'RED'
+                  ? <button type="button" key={event.id} onClick={() => setRedCorrectionEvent(event)} aria-label={`Corregir tarjeta roja de ${event.players?.name || 'jugador'}`} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm font-bold text-white hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400">{content}</button>
                 : <div key={event.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-bold text-white">{content}</div>;
             })}</div>}
           </section>}
@@ -670,7 +705,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
         {/* 🔥 EL GRAN OVERLAY PARA INICIAR PARTIDO (AHORA SE OCULTA AL ABRIR ALINEACIÓN) 🔥 */}
         {!isMatchLive && !showStartingLineupModal && (
           <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/70 backdrop-blur-md">
-            <button onClick={handlePreMatchSetup} className="flex flex-col items-center justify-center gap-2 w-48 h-48 sm:w-56 sm:h-56 bg-red-600 rounded-full text-white shadow-[0_0_80px_rgba(220,38,38,0.7)] hover:scale-105 active:scale-95 transition-all border-4 border-white animate-pulse">
+            <button onClick={handlePreMatchSetup} disabled={loading || startGuard.busy} className="flex flex-col items-center justify-center gap-2 w-48 h-48 sm:w-56 sm:h-56 bg-red-600 rounded-full text-white shadow-[0_0_80px_rgba(220,38,38,0.7)] hover:scale-105 active:scale-95 transition-all border-4 border-white animate-pulse disabled:cursor-wait disabled:opacity-60">
               <Radio className="w-16 h-16 sm:w-20 sm:h-20" />
               <span className="font-black uppercase tracking-widest text-sm sm:text-lg text-center px-4 leading-tight mt-2">
                 Iniciar Partido
@@ -687,7 +722,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
         
         {showPeriodStartOverlay && (
            <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/80 backdrop-blur-md">
-              <button onClick={handleStartPeriodFromOverlay} className="flex flex-col items-center justify-center gap-3 w-48 h-48 sm:w-64 sm:h-64 bg-emerald-600 rounded-full text-white shadow-[0_0_80px_rgba(16,185,129,0.7)] hover:scale-105 active:scale-95 transition-all border-4 border-white animate-pulse">
+              <button onClick={handleStartPeriodFromOverlay} disabled={eventGuard.busy} className="flex flex-col items-center justify-center gap-3 w-48 h-48 sm:w-64 sm:h-64 bg-emerald-600 rounded-full text-white shadow-[0_0_80px_rgba(16,185,129,0.7)] hover:scale-105 active:scale-95 transition-all border-4 border-white animate-pulse disabled:cursor-wait disabled:opacity-60">
                 <PlayCircle className="w-16 h-16 sm:w-20 sm:h-20" />
                 <span className="font-black uppercase tracking-widest text-base sm:text-lg text-center px-4 leading-tight">
                   ARRANCAR<br/>{currentPeriod}
@@ -734,7 +769,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
                   if (eligibility.status === 'INELIGIBLE' && scoringAction.type !== 'SUB') shouldDisable = true;
 
                   return (
-                    <button key={player.id} onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points, player.id)} disabled={shouldDisable} className={`p-3 sm:p-4 rounded-xl border flex flex-col items-center relative ${hasRed ? 'bg-red-50 border-red-200 opacity-50' : shouldDisable ? 'bg-slate-100 opacity-50' : 'hover:bg-emerald-50'} ${isOut ? 'ring-2 ring-red-400' : ''}`}>
+                    <button key={player.id} onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points, player.id)} disabled={eventGuard.busy || shouldDisable} className={`p-3 sm:p-4 rounded-xl border flex flex-col items-center relative transition-all active:scale-95 disabled:cursor-wait disabled:opacity-60 ${hasRed ? 'bg-red-50 border-red-200 opacity-50' : shouldDisable ? 'bg-slate-100 opacity-50' : 'hover:bg-emerald-50'} ${isOut ? 'ring-2 ring-red-400' : ''}`}>
                       {playerYellows > 0 && !isSuspended && !hasRed && <Square className="absolute top-2 right-2 text-yellow-400 fill-yellow-400 w-2.5 h-2.5 sm:w-3 sm:h-3" />}
                       {hasRed && <Square className="absolute top-2 left-2 text-red-500 fill-red-500 w-2.5 h-2.5 sm:w-3 sm:h-3" />}
                       <span className="text-xl sm:text-2xl font-black">{player.shirt_number || '-'}</span>
@@ -748,7 +783,7 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
                 })}
               </div>
               {scoringAction.type !== 'SUB' && (
-                <button onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points)} className="mt-4 px-6 py-3 bg-slate-100 text-slate-600 rounded-xl font-black uppercase text-[10px] sm:text-xs w-full">Omitir Identificación</button>
+                <button onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points)} disabled={eventGuard.busy} className="mt-4 px-6 py-3 bg-slate-100 text-slate-600 rounded-xl font-black uppercase text-[10px] sm:text-xs w-full active:scale-95 transition-all disabled:cursor-wait disabled:opacity-60">Omitir Identificación</button>
               )}
             </div>
           </div>
@@ -793,6 +828,26 @@ export default function MesaFutbol({ match, categoryData, onClose, onMatchUpdate
               <div className="mt-5 grid grid-cols-2 gap-3">
                 <button type="button" onClick={() => setYellowCorrectionEvent(null)} className="rounded-xl bg-slate-100 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-600 hover:bg-slate-200">Cancelar</button>
                 <button type="button" disabled={loading} onClick={confirmYellowCorrection} className="rounded-xl bg-red-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-red-700 disabled:opacity-50">Eliminar tarjeta</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {redCorrectionEvent && (
+          <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="red-correction-title">
+            <div className="w-full max-w-lg rounded-3xl border border-slate-700 bg-white p-5 text-slate-900 shadow-2xl sm:p-6">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-600">Corrección disciplinaria</p>
+                  <h3 id="red-correction-title" className="mt-1 text-xl font-black uppercase">¿Eliminar tarjeta roja?</h3>
+                  <p className="mt-2 text-xs font-semibold leading-relaxed text-slate-500">Se eliminará únicamente esta roja, su comprobante asociado y se restaurará el descuento de Fair Play.</p>
+                </div>
+                <button type="button" aria-label="Cerrar corrección de tarjeta roja" onClick={() => setRedCorrectionEvent(null)} className="rounded-full bg-slate-100 p-2 text-slate-500 hover:bg-slate-200"><X className="h-5 w-5" /></button>
+              </div>
+              <div className="rounded-2xl bg-red-50 p-4 text-sm font-bold text-slate-700">{redCorrectionEvent.players?.name || 'Jugador'} · {redCorrectionEvent.minute_record || '--'} · {match.home_team.id === redCorrectionEvent.team_id ? match.home_team.name : match.away_team.name}</div>
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <button type="button" onClick={() => setRedCorrectionEvent(null)} className="rounded-xl bg-slate-100 px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-600 hover:bg-slate-200">Cancelar</button>
+                <button type="button" disabled={loading} onClick={confirmRedCorrection} className="rounded-xl bg-red-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-red-700 disabled:opacity-50">Eliminar tarjeta</button>
               </div>
             </div>
           </div>

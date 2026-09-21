@@ -2,10 +2,11 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../../../../supabase';
-import { ArrowLeft, CheckCircle2, Play, Pause, RotateCcw, Minus, Plus, School, CalendarDays, X, Flame, AlertTriangle, Radio, RefreshCcw, UsersRound, Zap } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Play, Pause, RotateCcw, Minus, Plus, School, CalendarDays, X, Flame, AlertTriangle, Radio, RefreshCcw, UsersRound, Zap, LoaderCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { FaBaseballBall } from 'react-icons/fa';
 import { useElapsedMatchTimer } from '../hooks/useElapsedMatchTimer';
+import { useActionGuard } from '../hooks/useActionGuard';
 import { changeMatchPeriod, finishCourtMatch, recordGenericMatchEvent, revertLastScoringEvent, startLiveMatch } from '../actions';
 import { evaluatePlayerEligibility } from '@/app/lib/competition/player-eligibility';
 
@@ -36,6 +37,8 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
   const minPlayers = 9;
 
   const [loading, setLoading] = useState(false);
+  const eventGuard = useActionGuard();
+  const startGuard = useActionGuard();
   const [showFinishConfirm, setShowFinishConfirm] = useState(false);
   const [showPeriodConfirm, setShowPeriodConfirm] = useState<{ isOpen: boolean; targetPeriod: string }>({ isOpen: false, targetPeriod: '' });
   const [showResetTimerConfirm, setShowResetTimerConfirm] = useState(false);
@@ -43,7 +46,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
 
   const [scoringAction, setScoringAction] = useState<{ team: 'HOME' | 'AWAY', type: 'SCORE' | 'SUB' | 'SCORE_MINUS', points: number } | null>(null);
   const [subOutPlayer, setSubOutPlayer] = useState<string | null>(null);
-  const playerEligibility = (player: any) => evaluatePlayerEligibility({ playerId: player.id, registered: true, teamId: player.team_id, documents: player.player_documents || [], suspended: liveEvents.some((event) => event.player_id === player.id && event.event_type === 'RED'), unpaidFine: liveEvents.some((event) => event.player_id === player.id && event.fine_status === 'UNPAID') });
+  const playerEligibility = (player: any) => evaluatePlayerEligibility({ playerId: player.id, registered: true, teamId: player.team_id, documents: player.player_documents || [], suspended: liveEvents.some((event) => event.player_id === player.id && event.event_type === 'RED') });
 
   const {
     timerSeconds,
@@ -99,6 +102,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
   const handlePreMatchSetup = () => setShowStartingLineupModal(true);
 
   const handleQuickStart = async () => {
+    if (!startGuard.tryStart()) return;
     setLoading(true);
     const toastId = toast.loading('Iniciando...');
     try {
@@ -111,7 +115,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
       await toggleTimer();
       toast.success('¡Play Ball! Partido en vivo.', { id: toastId, icon: '⚾' });
     } catch (error) { toast.error('Error al iniciar.', { id: toastId }); }
-    setLoading(false);
+    finally { setLoading(false); startGuard.stop(); }
   };
 
   const toggleStartingPlayer = (team: 'HOME' | 'AWAY', playerId: string) => {
@@ -136,6 +140,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
   };
 
   const handleTurnMatchLive = async () => {
+    if (!startGuard.tryStart()) return;
     setLoading(true);
     const toastId = toast.loading('Registrando acta...');
     try {
@@ -159,7 +164,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
       await toggleTimer();
       toast.success('¡Play Ball!', { id: toastId, icon: '⚾' });
     } catch (error) { toast.error('Error al iniciar.', { id: toastId }); }
-    setLoading(false);
+    finally { setLoading(false); startGuard.stop(); }
   };
 
   const requestPeriodChange = (period: string) => {
@@ -181,6 +186,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
 
   const handleRefereeAction = (team: 'HOME' | 'AWAY', type: 'SCORE' | 'SUB' | 'SCORE_MINUS', points: number = 0) => {
     if (!isMatchLive) return toast.error('Inicie transmisión primero.');
+    if (eventGuard.busy) return;
     if (type === 'SCORE_MINUS') {
       executeActionRecord(team, type, -1); 
       return;
@@ -190,8 +196,9 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
   };
 
   const executeActionRecord = async (team: 'HOME' | 'AWAY', type: 'SCORE' | 'SUB' | 'SCORE_MINUS', points: number, playerId?: string) => {
-    
-    if (type === 'SCORE_MINUS') {
+    if (!eventGuard.tryStart()) return;
+    try {
+      if (type === 'SCORE_MINUS') {
       const lastGoal = [...liveEvents].reverse().find(e => e.team_id === (team === 'HOME' ? match.home_team.id : match.away_team.id) && e.event_type === 'GOAL');
       if (lastGoal) {
          const result = await revertLastScoringEvent({
@@ -212,9 +219,9 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
          toast.error('No hay carreras para restar');
       }
       return;
-    }
+      }
 
-    if (type === 'SCORE') {
+      if (type === 'SCORE') {
       const result = await recordGenericMatchEvent({
         slug,
         matchId: match.id,
@@ -229,7 +236,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
       if (typeof result?.away_score === 'number') setAwayScore(result.away_score);
     }
 
-    if (playerId || type !== 'SCORE') {
+      if (playerId || type !== 'SCORE') {
       const teamId = team === 'HOME' ? match.home_team.id : match.away_team.id;
 
       if (type === 'SUB' && playerId) {
@@ -275,9 +282,14 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
       if (data) setLiveEvents(data);
 
       if (type === 'SCORE') toast.success('Carrera anotada');
-    }
+      }
 
-    if (type !== 'SUB') setScoringAction(null);
+      if (type !== 'SUB') setScoringAction(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudo registrar el evento.');
+    } finally {
+      eventGuard.stop();
+    }
   };
 
   const confirmFinishMatch = async () => {
@@ -309,6 +321,11 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
 
   return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col overflow-hidden text-slate-900 font-sans animate-in slide-in-from-right duration-300">
+      {(eventGuard.busy || startGuard.busy) && (
+        <div className="pointer-events-none fixed right-4 top-4 z-[10000] flex items-center gap-2 rounded-xl bg-slate-950/95 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white shadow-2xl">
+          <LoaderCircle size={16} className="animate-spin text-red-400" /> {startGuard.busy ? 'Iniciando partido...' : 'Registrando evento...'}
+        </div>
+      )}
       
       {/* LOBBY PRE-PARTIDO LINEUP */}
       {showStartingLineupModal && (
@@ -402,7 +419,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
                 <Zap size={16} className="text-amber-500" /> Rápido
               </button>
               <div className="hidden sm:block"></div>
-              <button onClick={handleTurnMatchLive} disabled={loading} className="w-full sm:w-auto px-6 md:px-12 py-3 md:py-4 bg-red-600 hover:bg-red-500 text-white rounded-xl md:rounded-2xl font-black text-[10px] md:text-xs uppercase tracking-[0.2em] flex items-center justify-center gap-2 md:gap-3 shadow-[0_0_30px_rgba(220,38,38,0.4)] transition-all disabled:opacity-50">
+              <button onClick={handleTurnMatchLive} disabled={loading || startGuard.busy} className="w-full sm:w-auto px-6 md:px-12 py-3 md:py-4 bg-red-600 hover:bg-red-500 text-white rounded-xl md:rounded-2xl font-black text-[10px] md:text-xs uppercase tracking-[0.2em] flex items-center justify-center gap-2 md:gap-3 shadow-[0_0_30px_rgba(220,38,38,0.4)] transition-all active:scale-95 disabled:cursor-wait disabled:opacity-50">
                 <FaBaseballBall className="w-4 h-4 md:w-5 md:h-5 animate-spin-slow" /> <span className="truncate">Confirmar y Play Ball</span>
               </button>
             </div>
@@ -487,8 +504,8 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
                   <button 
                     key={player.id} 
                     onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points, player.id)}
-                    disabled={isIneligible || shouldDisable}
-                    className={`p-3 sm:p-4 md:p-6 rounded-[1rem] md:rounded-[1.5rem] border transition-all flex flex-col items-center group relative shadow-sm
+                    disabled={eventGuard.busy || isIneligible || shouldDisable}
+                    className={`p-3 sm:p-4 md:p-6 rounded-[1rem] md:rounded-[1.5rem] border transition-all active:scale-95 flex flex-col items-center group relative shadow-sm disabled:cursor-wait disabled:opacity-60
                       ${shouldDisable ? 'bg-slate-100 border-slate-200 opacity-50 cursor-not-allowed' : 'bg-white border-slate-200 hover:border-red-400 hover:bg-red-50'}
                       ${isOut ? 'ring-2 sm:ring-4 ring-red-400 scale-95 bg-white' : ''}
                     `}
@@ -513,7 +530,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
 
             {scoringAction.type === 'SCORE' && (
               <div className="mt-4 sm:mt-6 flex justify-center gap-4 pt-4 sm:pt-6 border-t border-slate-100 shrink-0">
-                <button onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points)} className="px-6 sm:px-8 py-3 sm:py-4 bg-slate-100 text-slate-600 rounded-xl sm:rounded-2xl font-black uppercase tracking-widest text-[9px] sm:text-xs hover:bg-slate-200 border border-slate-200 transition-colors w-full sm:w-auto">
+                <button onClick={() => executeActionRecord(scoringAction.team, scoringAction.type, scoringAction.points)} disabled={eventGuard.busy} className="px-6 sm:px-8 py-3 sm:py-4 bg-slate-100 text-slate-600 rounded-xl sm:rounded-2xl font-black uppercase tracking-widest text-[9px] sm:text-xs hover:bg-slate-200 active:scale-95 border border-slate-200 transition-all w-full sm:w-auto disabled:cursor-wait disabled:opacity-60">
                   Saltar (Carrera Anónima)
                 </button>
               </div>
@@ -618,7 +635,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
 
         <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-30 flex items-center justify-center pointer-events-none">
           {!isMatchLive ? (
-            <button onClick={handlePreMatchSetup} className="pointer-events-auto flex flex-col items-center justify-center gap-1 sm:gap-2 w-32 h-32 sm:w-40 sm:h-40 md:w-48 md:h-48 bg-red-600 rounded-full text-white shadow-[0_0_40px_rgba(220,38,38,0.5)] hover:bg-red-500 hover:scale-105 active:scale-95 transition-all border-2 sm:border-4 border-white animate-pulse">
+            <button onClick={handlePreMatchSetup} disabled={loading || startGuard.busy} className="pointer-events-auto flex flex-col items-center justify-center gap-1 sm:gap-2 w-32 h-32 sm:w-40 sm:h-40 md:w-48 md:h-48 bg-red-600 rounded-full text-white shadow-[0_0_40px_rgba(220,38,38,0.5)] hover:bg-red-500 hover:scale-105 active:scale-95 transition-all border-2 sm:border-4 border-white animate-pulse disabled:cursor-wait disabled:opacity-60">
               <Radio className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12" />
               <span className="font-black uppercase tracking-widest text-[9px] sm:text-xs md:text-sm text-center px-2 sm:px-4 leading-tight">Cantar Play Ball</span>
             </button>
@@ -654,7 +671,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
           <p className="text-slate-600 font-black text-[9px] sm:text-xs md:text-sm uppercase tracking-[0.2em] mb-2 sm:mb-4 z-10 bg-white/50 px-3 py-1 rounded-full shrink-0">Local</p>
 
           <div className="flex gap-1.5 sm:gap-2 mb-2 sm:mb-4 md:mb-8 bg-white/80 backdrop-blur-md p-1.5 sm:p-2 rounded-xl sm:rounded-2xl shadow-xl border border-white z-10 shrink-0">
-            <button onClick={() => handleRefereeAction('HOME', 'SUB')} disabled={!isMatchLive} className="w-10 h-8 sm:w-12 sm:h-10 md:w-14 md:h-12 bg-slate-900 border border-slate-800 rounded-lg sm:rounded-xl shadow-sm hover:bg-slate-800 text-white flex items-center justify-center disabled:opacity-50 transition-colors" title="Cambio de Jugador">
+            <button onClick={() => handleRefereeAction('HOME', 'SUB')} disabled={!isMatchLive || eventGuard.busy} className="w-10 h-8 sm:w-12 sm:h-10 md:w-14 md:h-12 bg-slate-900 border border-slate-800 rounded-lg sm:rounded-xl shadow-sm hover:bg-slate-800 active:scale-95 text-white flex items-center justify-center disabled:opacity-50 disabled:cursor-wait transition-all" title="Cambio de Jugador">
               <RefreshCcw size={14} className="sm:w-4 sm:h-4 md:w-5 md:h-5" />
             </button>
           </div>
@@ -667,8 +684,8 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
           </div>
           
           <div className="flex items-center justify-center gap-2 sm:gap-3 md:gap-4 z-10 bg-white/60 backdrop-blur-md p-2 sm:p-3 md:p-4 rounded-2xl md:rounded-[2rem] border border-white shadow-xl w-full max-w-[200px] sm:max-w-[250px] md:max-w-xs shrink-0 mt-auto mb-2 sm:mb-0">
-            <button disabled={!isMatchLive} onClick={() => handleRefereeAction('HOME', 'SCORE_MINUS', -1)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-16 md:w-16 bg-white rounded-xl sm:rounded-2xl flex items-center justify-center text-red-500 border-2 border-slate-100 shadow-md active:scale-95 transition-all disabled:opacity-50 shrink-0"><Minus size={20} className="sm:w-6 sm:h-6 md:w-8 md:h-8" /></button>
-            <button disabled={!isMatchLive} onClick={() => handleRefereeAction('HOME', 'SCORE', 1)} className="flex-1 h-12 sm:h-14 md:h-16 bg-red-600 rounded-xl sm:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-md shadow-red-300 border border-red-500 disabled:opacity-50">
+            <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('HOME', 'SCORE_MINUS', -1)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-16 md:w-16 bg-white rounded-xl sm:rounded-2xl flex items-center justify-center text-red-500 border-2 border-slate-100 shadow-md active:scale-95 transition-all disabled:opacity-50 disabled:cursor-wait shrink-0"><Minus size={20} className="sm:w-6 sm:h-6 md:w-8 md:h-8" /></button>
+            <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('HOME', 'SCORE', 1)} className="flex-1 h-12 sm:h-14 md:h-16 bg-red-600 rounded-xl sm:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-md shadow-red-300 border border-red-500 disabled:opacity-50 disabled:cursor-wait">
                <span className="font-black text-xl sm:text-2xl md:text-3xl leading-none">+1</span><span className="text-[6px] sm:text-[7px] md:text-[8px] font-black uppercase opacity-80 mt-0.5">Carrera</span>
             </button>
           </div>
@@ -699,7 +716,7 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
           <p className="text-slate-600 font-black text-[9px] sm:text-xs md:text-sm uppercase tracking-[0.2em] mb-2 sm:mb-4 z-10 bg-white/50 px-3 py-1 rounded-full shrink-0">Visitante</p>
 
           <div className="flex gap-1.5 sm:gap-2 mb-2 sm:mb-4 md:mb-8 bg-white/80 backdrop-blur-md p-1.5 sm:p-2 rounded-xl sm:rounded-2xl shadow-xl border border-white z-10 shrink-0">
-            <button onClick={() => handleRefereeAction('AWAY', 'SUB')} disabled={!isMatchLive} className="w-10 h-8 sm:w-12 sm:h-10 md:w-14 md:h-12 bg-slate-900 border border-slate-800 rounded-lg sm:rounded-xl shadow-sm hover:bg-slate-800 text-white flex items-center justify-center disabled:opacity-50 transition-colors" title="Cambio de Jugador">
+            <button onClick={() => handleRefereeAction('AWAY', 'SUB')} disabled={!isMatchLive || eventGuard.busy} className="w-10 h-8 sm:w-12 sm:h-10 md:w-14 md:h-12 bg-slate-900 border border-slate-800 rounded-lg sm:rounded-xl shadow-sm hover:bg-slate-800 active:scale-95 text-white flex items-center justify-center disabled:opacity-50 disabled:cursor-wait transition-all" title="Cambio de Jugador">
               <RefreshCcw size={14} className="sm:w-4 sm:h-4 md:w-5 md:h-5" />
             </button>
           </div>
@@ -712,8 +729,8 @@ export default function MesaSoftbol({ match, categoryData, slug, onClose, onMatc
           </div>
           
           <div className="flex items-center justify-center gap-2 sm:gap-3 md:gap-4 z-10 bg-white/60 backdrop-blur-md p-2 sm:p-3 md:p-4 rounded-2xl md:rounded-[2rem] border border-white shadow-xl w-full max-w-[200px] sm:max-w-[250px] md:max-w-xs shrink-0 mt-auto mb-2 sm:mb-0">
-            <button disabled={!isMatchLive} onClick={() => handleRefereeAction('AWAY', 'SCORE_MINUS', -1)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-16 md:w-16 bg-white rounded-xl sm:rounded-2xl flex items-center justify-center text-red-500 border-2 border-slate-100 shadow-md active:scale-95 transition-all disabled:opacity-50 shrink-0"><Minus size={20} className="sm:w-6 sm:h-6 md:w-8 md:h-8" /></button>
-            <button disabled={!isMatchLive} onClick={() => handleRefereeAction('AWAY', 'SCORE', 1)} className="flex-1 h-12 sm:h-14 md:h-16 bg-red-600 rounded-xl sm:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-md shadow-red-300 border border-red-500 disabled:opacity-50">
+            <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('AWAY', 'SCORE_MINUS', -1)} className="h-12 w-12 sm:h-14 sm:w-14 md:h-16 md:w-16 bg-white rounded-xl sm:rounded-2xl flex items-center justify-center text-red-500 border-2 border-slate-100 shadow-md active:scale-95 transition-all disabled:opacity-50 disabled:cursor-wait shrink-0"><Minus size={20} className="sm:w-6 sm:h-6 md:w-8 md:h-8" /></button>
+            <button disabled={!isMatchLive || eventGuard.busy} onClick={() => handleRefereeAction('AWAY', 'SCORE', 1)} className="flex-1 h-12 sm:h-14 md:h-16 bg-red-600 rounded-xl sm:rounded-2xl flex flex-col items-center justify-center text-white active:scale-95 transition-all shadow-md shadow-red-300 border border-red-500 disabled:opacity-50 disabled:cursor-wait">
                <span className="font-black text-2xl md:text-3xl leading-none">+1</span><span className="text-[6px] sm:text-[7px] md:text-[8px] font-black uppercase opacity-80 mt-0.5">Carrera</span>
             </button>
           </div>
