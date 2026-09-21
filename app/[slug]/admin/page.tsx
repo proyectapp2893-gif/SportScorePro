@@ -17,7 +17,6 @@ import { getDemoTournamentOperations } from './operations/demo';
 import type { TournamentOperationsData } from './operations/types';
 import { adminCategoryModulePath, adminDashboardPath, adminTournamentModulePath } from './operations/routes';
 import { resolveTournamentSelection, tournamentStorageKey } from './operations/tournament-selection';
-import { normalizeAsOfDate } from '@/app/lib/date-filter';
 
 type AdminHubProps = { demoMode?: boolean; demoBasePath?: string };
 
@@ -25,7 +24,6 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
-  const asOfDate = normalizeAsOfDate(searchParams.get('hasta'));
   const slug = params?.slug as string;
   const isDemo = demoMode || slug === DEMO_SLUG;
   const activeDemoBasePath = slug === DEMO_SLUG ? `/${DEMO_SLUG}` : demoBasePath;
@@ -243,7 +241,6 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
           .eq('matchdays.category_id', cat.id)
           .eq('status', 'FINISHED')
           .order('matchdays(round_number)', { ascending: true });
-        if (asOfDate) matchesQuery = matchesQuery.lte('matchdays.scheduled_date', asOfDate);
         const { data: matchesData } = await matchesQuery;
         
         let sortedTeams: any[] = [];
@@ -305,7 +302,6 @@ export default function AdminHub({ demoMode = false, demoBasePath = '/demo-7c9f3
             .select('player_id, event_type, matches!inner(status, matchdays!inner(category_id, scheduled_date))')
             .eq('matches.matchdays.category_id', cat.id)
             .in('event_type', ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3']);
-          if (asOfDate) scoringEventsQuery = scoringEventsQuery.lte('matches.matchdays.scheduled_date', asOfDate);
           const { data: scoringEvents } = await scoringEventsQuery;
 
           const scoringByPlayer: Record<string, number> = {};

@@ -13,8 +13,7 @@ export default function AsOfDateFilter({ alwaysShow = false }: { alwaysShow?: bo
   const selectedDate = normalizeAsOfDate(searchParams.get(AS_OF_DATE_PARAM));
   const storageKey = routeParams.slug ? `sportscore-as-of-date-${routeParams.slug}` : '';
   const isOperationalRoute = pathname.includes('/admin/mesa') || pathname.includes('/planillero') || (!alwaysShow && pathname.includes('/admin/boletines')) || pathname.startsWith('/tv');
-  const isDateFilteredRoute = pathname.endsWith('/admin')
-    || pathname.includes('/admin/estadisticas')
+  const isDateFilteredRoute = pathname.includes('/admin/estadisticas')
     || pathname.includes('/admin/fase-final')
     || pathname.includes('/admin/planillas')
     || pathname.includes('/admin/participaciones')
