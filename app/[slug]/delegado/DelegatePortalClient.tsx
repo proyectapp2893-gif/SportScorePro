@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Activity, CalendarDays, Camera, CheckCircle2, ChevronDown, CircleHelp, ClipboardCopy, Download, ExternalLink, Eye, FileCheck2, FileSpreadsheet, KeyRound, LoaderCircle, Lock, LogOut, Pencil, Plus, ShieldCheck, Square, Trash2, Trophy, Upload, Users, X } from 'lucide-react';
+import { Activity, BarChart3, CalendarDays, Camera, CheckCircle2, ChevronDown, CircleHelp, ClipboardCopy, Download, ExternalLink, Eye, FileCheck2, FileSpreadsheet, KeyRound, LoaderCircle, Lock, LogOut, Pencil, Plus, ShieldCheck, Square, Trash2, Trophy, Upload, Users, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '@/app/lib/sports/rules';
@@ -330,6 +330,9 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
 
   const selectedTeam = data?.teams?.find((team: any) => team.id === selectedTeamId) || data?.teams?.[0];
   const selectedCategory = selectedTeam?.categories;
+  const generalResultsHref = selectedCategory?.tournaments?.id
+    ? `/${slug}/resultados?tournament=${encodeURIComponent(String(selectedCategory.tournaments.id))}`
+    : `/${slug}/resultados`;
   const tournamentStatutes = data?.statutesByTournament?.[selectedCategory?.tournaments?.id];
   const tournamentBulletins = data?.bulletinsByTournament?.[selectedCategory?.tournaments?.id] || [];
   const categoryDescriptor = `${selectedCategory?.name || ''} ${selectedCategory?.sports?.name || ''} ${selectedCategory?.format || ''} ${selectedCategory?.modality || ''} ${selectedCategory?.players_per_side || ''}`.toUpperCase();
@@ -1307,6 +1310,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               )}
               {selectedTeam && <div className="mt-3 flex flex-wrap items-center gap-2">
                 <a href={`/${slug}/equipo/${toTeamSlug(selectedTeam.name)}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-[8px] font-black uppercase tracking-wider text-white transition hover:bg-white/15 sm:text-[9px]"><ExternalLink size={13} /> Ver resultados del equipo</a>
+                <a href={generalResultsHref} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-[8px] font-black uppercase tracking-wider text-white transition hover:bg-blue-500 sm:text-[9px]"><BarChart3 size={13} /> Resultados generales</a>
                 <button type="button" onClick={copyPublicTeamLink} className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/10 text-blue-300 transition hover:bg-white/15" aria-label="Copiar enlace de resultados" title="Copiar enlace de resultados"><ClipboardCopy size={13} /></button>
               </div>}
               {selectedTeam && <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[9px] font-bold uppercase tracking-wider text-slate-300">
