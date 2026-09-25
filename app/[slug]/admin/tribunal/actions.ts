@@ -161,15 +161,21 @@ export async function rejectFinePaymentProof(slug: string, proofId: string, reas
   if (safeReason.length < 5) return { success: false as const, error: 'Indica el motivo del rechazo.' };
   const supabase = createPrivilegedSupabaseClient();
   const { data: proof } = await supabase.from('fine_payment_proofs')
-    .select('id, team_id, teams!inner(categories!inner(tournaments!inner(client_id)))')
+    .select('id, team_id, storage_path, teams!inner(categories!inner(tournaments!inner(client_id)))')
     .eq('id', proofId)
     .eq('teams.categories.tournaments.client_id', clientId)
     .eq('status', 'PENDING')
     .maybeSingle();
   if (!proof) return { success: false as const, error: 'Comprobante pendiente no encontrado.' };
-  const { data: rejected, error } = await supabase.from('fine_payment_proofs').update({ status: 'REJECTED', rejection_reason: safeReason, reviewed_by: clientId, reviewed_at: new Date().toISOString() }).eq('id', proofId).eq('status', 'PENDING').select('id').maybeSingle();
-  if (error || !rejected) return { success: false as const, error: 'No se pudo rechazar el comprobante.' };
-  await logAuditEvent({ action: 'admin.fine_payment_proof.reject', actorType: 'client', actorId: clientId, clientId, targetType: 'team', targetId: proof.team_id, metadata: { slug, proofId, reason: safeReason } });
+  const { data: deleted, error } = await supabase.from('fine_payment_proofs')
+    .delete()
+    .eq('id', proofId)
+    .eq('status', 'PENDING')
+    .select('id')
+    .maybeSingle();
+  if (error || !deleted) return { success: false as const, error: 'No se pudo rechazar el comprobante.' };
+  if (proof.storage_path) await supabase.storage.from('player-documents').remove([proof.storage_path]);
+  await logAuditEvent({ action: 'admin.fine_payment_proof.reject', actorType: 'client', actorId: clientId, clientId, targetType: 'team', targetId: proof.team_id, metadata: { slug, proofId, reason: safeReason, deleted: true } });
   revalidatePath(`/${slug}/admin/tribunal`);
   revalidatePath(`/${slug}/delegado`);
   return { success: true as const };

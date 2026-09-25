@@ -159,7 +159,7 @@ export default function TribunalPage() {
     if (!selectedProof) return;
     const result = await rejectFinePaymentProof(slug, selectedProof.id, proofRejectionReason);
     if (!result.success) return toast.error(result.error);
-    toast.success('Comprobante rechazado. El delegado podrá enviar uno nuevo.');
+    toast.success('Comprobante rechazado y eliminado. El delegado podrá enviar uno nuevo.');
     setSelectedProof(null);
     setSelectedProofEvents([]);
     setSelectedProofEventIds([]);
