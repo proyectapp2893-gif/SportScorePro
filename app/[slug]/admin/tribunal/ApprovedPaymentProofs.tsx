@@ -1,14 +1,16 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CheckCircle2, ChevronDown, Eye } from 'lucide-react';
-import { getApprovedFinePaymentProofs, getApprovedProofTeams, getFinePaymentProofUrl } from './actions';
+import { CheckCircle2, ChevronDown, Eye, RotateCcw } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { confirmDialog, promptDialog } from '@/app/components/AppDialog';
+import { getApprovedFinePaymentProofs, getApprovedProofTeams, getFinePaymentProofUrl, reverseFinePaymentProof } from './actions';
 
 type Proof = Extract<Awaited<ReturnType<typeof getApprovedFinePaymentProofs>>, { success: true }>['data'][number];
 type Team = { id: string; name: string };
 const date = (value: string | null) => value ? new Date(value).toLocaleString('es-CO', { timeZone: 'America/Bogota' }) : 'Sin fecha registrada';
 
-export default function ApprovedPaymentProofs({ slug, tournamentId }: { slug: string; tournamentId: string }) {
+export default function ApprovedPaymentProofs({ slug, tournamentId, onReversed }: { slug: string; tournamentId: string; onReversed: () => void }) {
   const [page, setPage] = useState(0);
   const [proofs, setProofs] = useState<Proof[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -64,6 +66,32 @@ export default function ApprovedPaymentProofs({ slug, tournamentId }: { slug: st
     else setFileErrors(current => ({ ...current, [proof.id]: result.error }));
   };
 
+  const reverseProof = async (proof: Proof) => {
+    const reason = await promptDialog({
+      title: 'Motivo de la reversión',
+      description: 'El comprobante quedará como revertido y las sanciones cubiertas volverán a pendiente. Escribe el motivo para dejarlo en el historial.',
+      placeholder: 'Ej. Se aprobó por error',
+      minLength: 5,
+      confirmLabel: 'Continuar',
+      tone: 'danger',
+    });
+    if (!reason) return;
+    const confirmed = await confirmDialog({
+      title: '¿Revertir este pago?',
+      description: `Se revertirá el comprobante de ${proof.teams?.name || 'este equipo'} y se devolverán ${proof.fine_payment_proof_allocations?.length || 1} sanción(es) a pendiente. Esta acción quedará registrada.`,
+      confirmLabel: 'Revertir pago',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    const toastId = toast.loading('Revirtiendo pago…');
+    const result = await reverseFinePaymentProof(slug, proof.id, reason);
+    if (!result.success) return toast.error(result.error, { id: toastId });
+    toast.success(`Pago revertido. ${result.data.updated} sanción(es) volvieron a pendiente.`, { id: toastId });
+    setSelectedId(null);
+    setRetry(value => value + 1);
+    onReversed();
+  };
+
   return <section className="border-b border-slate-200 bg-emerald-50/40 p-4 md:p-6" aria-labelledby="approved-proofs-title">
     <button type="button" onClick={() => setExpanded(value => !value)} aria-expanded={expanded} className="mb-4 flex w-full items-center gap-3 text-left"><CheckCircle2 className="shrink-0 text-emerald-600" /><span className="flex-1"><span id="approved-proofs-title" className="block text-xl font-black text-slate-900">Comprobantes aprobados</span><span className="block text-xs text-slate-500">Historial del torneo seleccionado, del más reciente al más antiguo.</span></span><ChevronDown className={`text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`} /></button>
     {expanded && <div className="mb-5 grid gap-3 rounded-2xl border border-emerald-100 bg-white p-4 md:grid-cols-[minmax(180px,1fr)_repeat(2,minmax(150px,0.7fr))_auto] md:items-end">
@@ -78,11 +106,13 @@ export default function ApprovedPaymentProofs({ slug, tournamentId }: { slug: st
       <p className="text-sm font-black uppercase">{proof.teams?.name || 'Equipo sin nombre'}</p>
       <p className="mt-1 text-sm text-slate-600">{proof.proof_scope === 'TEAM' ? 'Comprobante global del equipo' : `#${proof.players?.shirt_number ?? '—'} ${proof.players?.name || 'Jugador sin nombre'}`}</p>
       <p className="mt-1 text-[10px] font-black uppercase tracking-wider text-slate-500">Enviado por: {proof.sender_name} · {proof.sender_role}</p>
-      <p className="mt-1 text-[10px] font-black uppercase tracking-wider text-violet-600">{proof.coverage_type === 'PARTIAL' ? 'Pago global parcial' : 'Pago aplicado completo'} · {proof.approved_amount ? new Intl.NumberFormat('es-CO').format(Number(proof.approved_amount)) : '—'} COP · {proof.fine_payment_proof_allocations?.length || 0} sanción(es) cubierta(s)</p>
+      <p className={`mt-1 text-[10px] font-black uppercase tracking-wider ${proof.status === 'REVERSED' ? 'text-red-600' : 'text-violet-600'}`}>{proof.status === 'REVERSED' ? 'Pago revertido' : proof.coverage_type === 'PARTIAL' ? 'Pago global parcial' : 'Pago aplicado completo'} · {proof.approved_amount ? new Intl.NumberFormat('es-CO').format(Number(proof.approved_amount)) : '—'} COP · {proof.fine_payment_proof_allocations?.length || 0} sanción(es) cubierta(s)</p>
       <p className="mt-2 break-all text-xs text-slate-500">{proof.original_filename}</p>
       <p className="mt-2 text-xs text-slate-600">Enviado: {date(proof.submitted_at)}</p>
       <p className="mt-1 text-xs font-bold text-emerald-700">Aprobado: {date(proof.reviewed_at)}</p>
+      {proof.status === 'REVERSED' && <p className="mt-1 text-xs font-bold text-red-700">Revertido: {date(proof.reversed_at)} · {proof.reversal_reason || 'Sin motivo registrado'}</p>}
       <button type="button" onClick={() => openProof(proof)} className="mt-3 inline-flex items-center gap-2 rounded-xl border border-emerald-200 px-4 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-50"><Eye size={16} />{selectedId === proof.id ? 'Ocultar comprobante' : 'Ver comprobante'}</button>
+      {proof.status === 'APPROVED' && <button type="button" onClick={() => void reverseProof(proof)} className="ml-2 mt-3 inline-flex items-center gap-2 rounded-xl border border-red-200 px-4 py-2 text-xs font-bold text-red-700 hover:bg-red-50"><RotateCcw size={15} />Revertir pago</button>}
       {selectedId === proof.id && <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">{fileErrors[proof.id] ? <p role="alert" className="text-sm text-red-700">{fileErrors[proof.id]}</p> : !urls[proof.id] ? <p role="status" className="text-sm text-slate-500">Abriendo comprobante…</p> : proof.mime_type === 'application/pdf' ? <><div className="mb-2 flex items-center justify-end gap-2"><span className="mr-auto text-[10px] font-bold uppercase tracking-widest text-slate-500">Zoom PDF · {zoomByProof[proof.id] || 100}%</span><button type="button" aria-label="Reducir zoom" onClick={() => setZoomByProof(current => ({ ...current, [proof.id]: Math.max(50, (current[proof.id] || 100) - 10) }))} className="rounded-lg border bg-white px-3 py-1 text-sm font-black">−</button><button type="button" onClick={() => setZoomByProof(current => ({ ...current, [proof.id]: 100 }))} className="rounded-lg border bg-white px-3 py-1 text-xs font-bold">100%</button><button type="button" aria-label="Aumentar zoom" onClick={() => setZoomByProof(current => ({ ...current, [proof.id]: Math.min(200, (current[proof.id] || 100) + 10) }))} className="rounded-lg border bg-white px-3 py-1 text-sm font-black">+</button></div><iframe src={`${urls[proof.id]}#zoom=${zoomByProof[proof.id] || 100}`} title={`Comprobante aprobado de ${proof.teams?.name || 'equipo'}`} className="h-96 w-full rounded-lg border-0" /></> : <img src={urls[proof.id]} alt={`Comprobante aprobado de ${proof.teams?.name || 'equipo'}`} className="max-h-96 w-full rounded-lg object-contain" />}</div>}
     </article>)}</div>)}
     {expanded && <div className="mt-4 flex items-center justify-between gap-3"><button type="button" disabled={loading || page === 0} onClick={() => setPage(value => value - 1)} className="rounded-xl border px-3 py-2 text-xs font-bold disabled:opacity-40">Anterior</button><span className="text-xs text-slate-500">Página {page + 1}</span><button type="button" disabled={loading || Boolean(error) || !hasMore} onClick={() => setPage(value => value + 1)} className="rounded-xl border px-3 py-2 text-xs font-bold disabled:opacity-40">Siguiente</button></div>}

@@ -82,21 +82,21 @@ export async function getApprovedFinePaymentProofs(slug: string, tournamentId: s
     return query;
   };
   let { data, error } = await applyFilters(supabase.from('fine_payment_proofs')
-    .select('id, team_id, original_filename, mime_type, submitted_at, reviewed_at, proof_scope, payment_source, approved_amount, coverage_type, submitted_by_delegate_id, reviewed_by, players(name,shirt_number), teams!inner(name, categories!inner(tournament_id, tournaments!inner(client_id))), fine_payment_proof_allocations(match_event_id, amount_applied)')
+    .select('id, team_id, original_filename, mime_type, status, submitted_at, reviewed_at, reversed_at, reversal_reason, proof_scope, payment_source, approved_amount, coverage_type, submitted_by_delegate_id, reviewed_by, players(name,shirt_number), teams!inner(name, categories!inner(tournament_id, tournaments!inner(client_id))), fine_payment_proof_allocations(match_event_id, amount_applied)')
     .eq('tournament_id', tournamentId)
     .eq('teams.categories.tournaments.client_id', clientId)
-    .eq('status', 'APPROVED')
+    .in('status', ['APPROVED', 'REVERSED'])
     .order('reviewed_at', { ascending: false, nullsFirst: false }).order('id', { ascending: false })
     .range(page * 20, page * 20 + 20)));
   if (error) {
     const fallback = await applyFilters(supabase.from('fine_payment_proofs')
-      .select('id, team_id, original_filename, mime_type, submitted_at, reviewed_at, proof_scope, payment_source, submitted_by_delegate_id, reviewed_by, players(name,shirt_number), teams!inner(name, categories!inner(tournament_id, tournaments!inner(client_id)))')
+      .select('id, team_id, original_filename, mime_type, status, submitted_at, reviewed_at, proof_scope, payment_source, submitted_by_delegate_id, reviewed_by, players(name,shirt_number), teams!inner(name, categories!inner(tournament_id, tournaments!inner(client_id)))')
       .eq('tournament_id', tournamentId)
       .eq('teams.categories.tournaments.client_id', clientId)
-      .eq('status', 'APPROVED')
+      .in('status', ['APPROVED', 'REVERSED'])
       .order('reviewed_at', { ascending: false, nullsFirst: false }).order('id', { ascending: false })
       .range(page * 20, page * 20 + 20));
-    data = (fallback.data || []).map((proof: any) => ({ ...proof, approved_amount: null, coverage_type: null, fine_payment_proof_allocations: [] }));
+    data = (fallback.data || []).map((proof: any) => ({ ...proof, approved_amount: null, coverage_type: null, reversed_at: null, reversal_reason: null, fine_payment_proof_allocations: [] }));
     error = fallback.error;
   }
   if (error) return { success: false as const, error: 'No se pudo cargar el historial de comprobantes.' };
@@ -126,6 +126,35 @@ export async function getApprovedFinePaymentProofs(slug: string, tournamentId: s
     }),
     hasMore: (data || []).length > 20,
   };
+}
+
+export async function reverseFinePaymentProof(slug: string, proofId: string, reason: string) {
+  if (!(await hasAdminSession(slug))) return { success: false as const, error: 'Sesión administrativa no válida.' };
+  const clientId = await getClientIdBySlug(slug);
+  if (!clientId) return { success: false as const, error: 'Institución no encontrada.' };
+  const safeReason = reason.trim();
+  if (safeReason.length < 5) return { success: false as const, error: 'Indica el motivo de la reversión.' };
+  const supabase = createPrivilegedSupabaseClient();
+  const { data: proof } = await supabase.from('fine_payment_proofs')
+    .select('id, team_id, player_id, proof_scope, payment_source, status, teams!inner(categories!inner(tournaments!inner(client_id)))')
+    .eq('id', proofId)
+    .eq('teams.categories.tournaments.client_id', clientId)
+    .maybeSingle();
+  if (!proof) return { success: false as const, error: 'Comprobante no encontrado.' };
+  if (proof.status !== 'APPROVED') return { success: false as const, error: 'Solo se pueden revertir comprobantes aprobados.' };
+  const { data, error } = await supabase.rpc('sportscore_reverse_fine_payment_proof', {
+    p_proof_id: proofId,
+    p_reason: safeReason,
+    p_reviewer: clientId,
+  });
+  if (error) return { success: false as const, error: error.message || 'No se pudo revertir el pago.' };
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) return { success: false as const, error: 'No se pudo confirmar la reversión.' };
+  await logAuditEvent({ action: 'admin.fine_payment_proof.reverse', actorType: 'client', actorId: clientId, clientId, targetType: proof.proof_scope === 'PLAYER' ? 'player' : 'team', targetId: proof.proof_scope === 'PLAYER' ? proof.player_id : proof.team_id, metadata: { slug, proofId, reason: safeReason, paymentSource: proof.payment_source, updatedEvents: row.updated_events } });
+  revalidatePath(`/${slug}/delegado`);
+  revalidatePath(`/${slug}/admin/boletines`);
+  revalidatePath(`/${slug}/admin/tribunal`);
+  return { success: true as const, data: { updated: row.updated_events } };
 }
 
 export async function approveFinePaymentProof(slug: string, proofId: string, selectedEventIds: string[] = [], approvedAmount?: number | null) {
