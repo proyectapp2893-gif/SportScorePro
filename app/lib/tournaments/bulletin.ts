@@ -6,8 +6,16 @@ import { normalizeDoubleCautions } from '../discipline/double-caution';
 
 export type BulletinSnapshot = { categories: Array<{ id:string; name:string; sport:string; fairPlayEnabled:boolean; round:number; results:any[]; standings:any[]; scorers:any[]; cards:any[]; supersededCardIds?:string[]; debts:any[]; sanctions:any[] }> };
 
+function remainingAtBulletin(sanction:any, bulletinNumber:number):number {
+  const originalMatches=Number(sanction.originalMatches??sanction.matches??0);
+  if(Number.isFinite(Number(sanction.completedMatches))&&Number.isFinite(Number(sanction.startCompletedMatches))) {
+    return Math.max(0,originalMatches-Math.max(0,Number(sanction.completedMatches)-Number(sanction.startCompletedMatches)));
+  }
+  return remainingSuspension({id:sanction.id,originalMatches,startBulletinNumber:Number(sanction.startBulletinNumber??1)},bulletinNumber);
+}
+
 export function hydrateDynamicBulletinFields(snapshot:BulletinSnapshot,live:BulletinSnapshot,currentBulletinNumber:number):BulletinSnapshot {
-  return {...snapshot,categories:snapshot.categories.map(category=>{const current=live.categories.find(item=>item.id===category.id);return {...category,cards:category.cards.filter((card:any)=>!current?.supersededCardIds?.includes(card.id)),debts:current?.debts||[],sanctions:category.sanctions.map((sanction:any)=>{const active=current?.sanctions.find((item:any)=>item.id===sanction.id);const originalMatches=Number(sanction.originalMatches??sanction.matches??0);const startBulletinNumber=Number(sanction.startBulletinNumber??1);return {...sanction,...(active?{comment:active.comment}:{}),originalMatches,startBulletinNumber,matches:remainingSuspension({id:sanction.id,originalMatches,startBulletinNumber},currentBulletinNumber)}}).filter((sanction:any)=>sanction.matches>0)}})};
+  return {...snapshot,categories:snapshot.categories.map(category=>{const current=live.categories.find(item=>item.id===category.id);return {...category,cards:category.cards.filter((card:any)=>!current?.supersededCardIds?.includes(card.id)),debts:current?.debts||[],sanctions:category.sanctions.map((sanction:any)=>{const active=current?.sanctions.find((item:any)=>item.id===sanction.id);const originalMatches=Number(sanction.originalMatches??sanction.matches??0);const startBulletinNumber=Number(sanction.startBulletinNumber??1);const historicalServed=originalMatches-Number(sanction.matches??0);const inferredStart=active&&Number.isFinite(Number(active.completedMatches))?Number(active.completedMatches)-historicalServed:undefined;const startCompletedMatches=Number(sanction.startCompletedMatches??inferredStart);const counted=active?{...sanction,...active,originalMatches,startBulletinNumber,...(Number.isFinite(startCompletedMatches)?{startCompletedMatches}:{})}: {...sanction,originalMatches,startBulletinNumber};return {...counted,matches:remainingAtBulletin(counted,currentBulletinNumber)}}).filter((sanction:any)=>sanction.matches>0)}})};
 }
 
 export function stampSuspensionOrigins(snapshot:BulletinSnapshot,bulletinNumber:number,previous?:BulletinSnapshot):BulletinSnapshot {
@@ -21,11 +29,14 @@ export function stampSuspensionOrigins(snapshot:BulletinSnapshot,bulletinNumber:
         // Legacy snapshots have no origin metadata, but already contained this
         // sanction in the preceding bulletin. Do not restart it in the new one.
         const startBulletinNumber = Number(old?.startBulletinNumber ?? (old ? bulletinNumber - 1 : bulletinNumber));
+        const hasMatchProgress = Number.isFinite(Number(old?.startCompletedMatches)) || Number.isFinite(Number(old?.completedMatches)) || !old || Number.isFinite(Number(sanction.completedMatches));
+        const historicalServed = originalMatches - Number(old?.matches ?? originalMatches);
+        const inferredStart = Number.isFinite(Number(sanction.completedMatches)) ? Number(sanction.completedMatches) - historicalServed : undefined;
+        const startCompletedMatches = hasMatchProgress ? Number(old?.startCompletedMatches ?? (old?.completedMatches ?? inferredStart ?? 0)) : undefined;
+        const counted = { ...sanction, originalMatches, startBulletinNumber, ...(startCompletedMatches === undefined ? {} : { startCompletedMatches }) };
         return {
-          ...sanction,
-          originalMatches,
-          startBulletinNumber,
-          matches: remainingSuspension({ id: sanction.id, originalMatches, startBulletinNumber }, bulletinNumber),
+          ...counted,
+          matches: remainingAtBulletin(counted, bulletinNumber),
         };
       }),
     })),
@@ -84,6 +95,6 @@ export async function buildBulletinSnapshot(db:any, tournamentId:string, asOfDat
       standings:Array.from(rows.values()).sort((a:any,b:any)=>compareTeamsForStandings(a,b,rules,Boolean(tournament?.fair_play_enabled),Number(tournament?.fp_starting_points||0))),scorers:Array.from(scorerMap.values()).sort((a:any,b:any)=>b.total-a.total).slice(0,10),
       cards:normalizedCards.filter((e:any)=>Number(dayById.get(matchById.get(e.match_id)?.matchday_id)?.round_number||0)===round).map((e:any)=>({id:e.id,player:e.players?.name||'Jugador',team:teamById.get(e.team_id)?.name||'Equipo',card:e.event_type==='RED'?(e.isDoubleCaution?'Roja · doble amarilla':'Roja'):'Amarilla'})),
       debts:Array.from(debtMap.entries()).filter(([,amount]:any)=>amount>0).map(([id,amount])=>({team:teamById.get(id)?.name||'Equipo',amount})),
-      sanctions:categoryEvents.filter((e:any)=>e.disciplinary_comment||e.suspension_matches).map((e:any)=>({id:e.id,player:e.players?.name||'Jugador',team:teamById.get(e.team_id)?.name||'Equipo',matches:Number(e.suspension_matches||0),comment:e.disciplinary_comment||''}))};
+      sanctions:categoryEvents.filter((e:any)=>e.disciplinary_comment||e.suspension_matches).map((e:any)=>{const sanctionRound=Number(dayById.get(matchById.get(e.match_id)?.matchday_id)?.round_number||0);const completedRounds=new Set<number>(finished.filter((match:any)=>{const matchRound=Number(dayById.get(match.matchday_id)?.round_number||0);return (match.home_team_id===e.team_id||match.away_team_id===e.team_id)&&matchRound>sanctionRound&&matchRound<=round}).map((match:any)=>Number(dayById.get(match.matchday_id)?.round_number||0)));return{id:e.id,player:e.players?.name||'Jugador',team:teamById.get(e.team_id)?.name||'Equipo',teamId:e.team_id,round:sanctionRound,completedMatches:completedRounds.size,matches:Number(e.suspension_matches||0),comment:e.disciplinary_comment||''}})};
   })};
 }
