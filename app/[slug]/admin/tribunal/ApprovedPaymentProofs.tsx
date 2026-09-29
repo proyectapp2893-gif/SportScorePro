@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { CheckCircle2, ChevronDown, Eye } from 'lucide-react';
-import { getApprovedFinePaymentProofs, getFinePaymentProofUrl } from './actions';
+import { getApprovedFinePaymentProofs, getApprovedProofTeams, getFinePaymentProofUrl } from './actions';
 
 type Proof = Extract<Awaited<ReturnType<typeof getApprovedFinePaymentProofs>>, { success: true }>['data'][number];
+type Team = { id: string; name: string };
 const date = (value: string | null) => value ? new Date(value).toLocaleString('es-CO', { timeZone: 'America/Bogota' }) : 'Sin fecha registrada';
 
 export default function ApprovedPaymentProofs({ slug, tournamentId }: { slug: string; tournamentId: string }) {
@@ -14,7 +15,12 @@ export default function ApprovedPaymentProofs({ slug, tournamentId }: { slug: st
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [teamsError, setTeamsError] = useState('');
+  const [teamId, setTeamId] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [fileErrors, setFileErrors] = useState<Record<string, string>>({});
@@ -22,15 +28,32 @@ export default function ApprovedPaymentProofs({ slug, tournamentId }: { slug: st
 
   useEffect(() => {
     let active = true;
+    getApprovedProofTeams(slug, tournamentId).then(result => {
+      if (!active) return;
+      if (!result.success) { setTeamsError(result.error); return; }
+      setTeams(result.data);
+    }).catch(() => { if (active) setTeamsError('No se pudieron cargar los equipos del torneo.'); });
+    return () => { active = false; };
+  }, [slug, tournamentId]);
+
+  useEffect(() => {
+    let active = true;
     setLoading(true); setError('');
-    getApprovedFinePaymentProofs(slug, tournamentId, page).then(result => {
+    getApprovedFinePaymentProofs(slug, tournamentId, page, { teamId, fromDate, toDate }).then(result => {
       if (!active) return;
       if (!result.success) { setError(result.error); return; }
       setProofs(result.data); setHasMore(result.hasMore);
     }).catch(() => { if (active) setError('No se pudo cargar el historial. Intenta nuevamente.'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [slug, tournamentId, page, retry]);
+  }, [slug, tournamentId, page, retry, teamId, fromDate, toDate]);
+
+  const clearFilters = () => {
+    setTeamId('');
+    setFromDate('');
+    setToDate('');
+    setPage(0);
+  };
 
   const openProof = async (proof: Proof) => {
     if (selectedId === proof.id) { setSelectedId(null); return; }
@@ -43,7 +66,15 @@ export default function ApprovedPaymentProofs({ slug, tournamentId }: { slug: st
 
   return <section className="border-b border-slate-200 bg-emerald-50/40 p-4 md:p-6" aria-labelledby="approved-proofs-title">
     <button type="button" onClick={() => setExpanded(value => !value)} aria-expanded={expanded} className="mb-4 flex w-full items-center gap-3 text-left"><CheckCircle2 className="shrink-0 text-emerald-600" /><span className="flex-1"><span id="approved-proofs-title" className="block text-xl font-black text-slate-900">Comprobantes aprobados</span><span className="block text-xs text-slate-500">Historial del torneo seleccionado, del más reciente al más antiguo.</span></span><ChevronDown className={`text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`} /></button>
-    {expanded && (loading ? <p role="status" className="py-4 text-sm text-slate-500">Cargando historial…</p> : error ? <div role="alert"><p className="text-sm text-red-700">{error}</p><button type="button" onClick={() => setRetry(value => value + 1)} className="mt-2 rounded-xl border px-4 py-2 text-sm font-bold">Reintentar</button></div> : proofs.length === 0 ? <p className="rounded-2xl border border-dashed border-emerald-200 p-4 text-sm text-slate-500">No hay comprobantes aprobados en esta página.</p> : <div className="grid gap-3 md:grid-cols-2">{proofs.map(proof => <article key={proof.id} className="rounded-2xl border border-emerald-100 bg-white p-4">
+    {expanded && <div className="mb-5 grid gap-3 rounded-2xl border border-emerald-100 bg-white p-4 md:grid-cols-[minmax(180px,1fr)_repeat(2,minmax(150px,0.7fr))_auto] md:items-end">
+      <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Equipo<select value={teamId} onChange={event => { setTeamId(event.target.value); setPage(0); }} className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-800"><option value="">Todos los equipos</option>{teams.map(team => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
+      <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Aprobado desde<input type="date" value={fromDate} onChange={event => { setFromDate(event.target.value); setPage(0); }} className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-800" /></label>
+      <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Aprobado hasta<input type="date" value={toDate} onChange={event => { setToDate(event.target.value); setPage(0); }} className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-800" /></label>
+      <button type="button" onClick={clearFilters} disabled={!teamId && !fromDate && !toDate} className="h-11 rounded-xl border border-slate-200 px-4 text-xs font-black uppercase tracking-wider text-slate-600 disabled:opacity-40">Limpiar</button>
+      {teamsError && <p role="alert" className="text-xs text-red-700 md:col-span-full">{teamsError}</p>}
+      {fromDate && toDate && fromDate > toDate && <p role="alert" className="text-xs text-red-700 md:col-span-full">La fecha inicial no puede ser posterior a la fecha final.</p>}
+    </div>}
+    {expanded && (loading ? <p role="status" className="py-4 text-sm text-slate-500">Cargando historial…</p> : error ? <div role="alert"><p className="text-sm text-red-700">{error}</p><button type="button" onClick={() => setRetry(value => value + 1)} className="mt-2 rounded-xl border px-4 py-2 text-sm font-bold">Reintentar</button></div> : proofs.length === 0 ? <p className="rounded-2xl border border-dashed border-emerald-200 p-4 text-sm text-slate-500">No hay comprobantes aprobados para estos filtros.</p> : <div className="grid gap-3 md:grid-cols-2">{proofs.map(proof => <article key={proof.id} className="rounded-2xl border border-emerald-100 bg-white p-4">
       <p className="text-sm font-black uppercase">{proof.teams?.name || 'Equipo sin nombre'}</p>
       <p className="mt-1 text-sm text-slate-600">{proof.proof_scope === 'TEAM' ? 'Comprobante global del equipo' : `#${proof.players?.shirt_number ?? '—'} ${proof.players?.name || 'Jugador sin nombre'}`}</p>
       <p className="mt-1 text-[10px] font-black uppercase tracking-wider text-slate-500">Enviado por: {proof.sender_name} · {proof.sender_role}</p>

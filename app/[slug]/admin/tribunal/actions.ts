@@ -6,6 +6,7 @@ import { getClientIdBySlug } from '@/app/lib/tenant';
 import { logAuditEvent } from '@/app/lib/audit';
 import { revalidatePath } from 'next/cache';
 import { randomUUID } from 'crypto';
+import { nextDate, normalizeAsOfDate } from '@/app/lib/date-filter';
 
 const MAX_PAYMENT_PROOF_SIZE_BYTES = 5 * 1024 * 1024;
 const PAYMENT_PROOF_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
@@ -50,27 +51,51 @@ export async function getFinePaymentProofs(slug: string, tournamentId: string) {
   return { success: true as const, data: data || [] };
 }
 
-export async function getApprovedFinePaymentProofs(slug: string, tournamentId: string, page = 0) {
+export async function getApprovedProofTeams(slug: string, tournamentId: string) {
+  if (!(await hasAdminSession(slug))) return { success: false as const, error: 'Sesión administrativa no válida.' };
+  const clientId = await getClientIdBySlug(slug);
+  if (!clientId) return { success: false as const, error: 'Institución no encontrada.' };
+  const supabase = createPrivilegedSupabaseClient();
+  const { data, error } = await supabase.from('teams')
+    .select('id, name, categories!inner(tournament_id, tournaments!inner(client_id))')
+    .eq('categories.tournament_id', tournamentId)
+    .eq('categories.tournaments.client_id', clientId)
+    .order('name', { ascending: true });
+  if (error) return { success: false as const, error: 'No se pudieron cargar los equipos del torneo.' };
+  return { success: true as const, data: (data || []).map((team: any) => ({ id: team.id, name: team.name })) };
+}
+
+export async function getApprovedFinePaymentProofs(slug: string, tournamentId: string, page = 0, filters: { teamId?: string; fromDate?: string; toDate?: string } = {}) {
   if (!(await hasAdminSession(slug))) return { success: false as const, error: 'Sesión administrativa no válida.' };
   const clientId = await getClientIdBySlug(slug);
   if (!clientId) return { success: false as const, error: 'Institución no encontrada.' };
   if (!Number.isSafeInteger(page) || page < 0) return { success: false as const, error: 'Página inválida.' };
+  const fromDate = filters.fromDate ? normalizeAsOfDate(filters.fromDate) : null;
+  const toDate = filters.toDate ? normalizeAsOfDate(filters.toDate) : null;
+  if ((filters.fromDate && !fromDate) || (filters.toDate && !toDate)) return { success: false as const, error: 'Una de las fechas del filtro no es válida.' };
+  if (fromDate && toDate && fromDate > toDate) return { success: false as const, error: 'La fecha inicial no puede ser posterior a la fecha final.' };
   const supabase = createPrivilegedSupabaseClient();
-  let { data, error } = await supabase.from('fine_payment_proofs')
-    .select('id, original_filename, mime_type, submitted_at, reviewed_at, proof_scope, payment_source, approved_amount, coverage_type, submitted_by_delegate_id, reviewed_by, players(name,shirt_number), teams!inner(name, categories!inner(tournament_id, tournaments!inner(client_id))), fine_payment_proof_allocations(match_event_id, amount_applied)')
+  const applyFilters = (query: any) => {
+    if (filters.teamId) query = query.eq('team_id', filters.teamId);
+    if (fromDate) query = query.gte('reviewed_at', `${fromDate}T00:00:00-05:00`);
+    if (toDate) query = query.lt('reviewed_at', `${nextDate(toDate)}T00:00:00-05:00`);
+    return query;
+  };
+  let { data, error } = await applyFilters(supabase.from('fine_payment_proofs')
+    .select('id, team_id, original_filename, mime_type, submitted_at, reviewed_at, proof_scope, payment_source, approved_amount, coverage_type, submitted_by_delegate_id, reviewed_by, players(name,shirt_number), teams!inner(name, categories!inner(tournament_id, tournaments!inner(client_id))), fine_payment_proof_allocations(match_event_id, amount_applied)')
     .eq('tournament_id', tournamentId)
     .eq('teams.categories.tournaments.client_id', clientId)
     .eq('status', 'APPROVED')
     .order('reviewed_at', { ascending: false, nullsFirst: false }).order('id', { ascending: false })
-    .range(page * 20, page * 20 + 20);
+    .range(page * 20, page * 20 + 20)));
   if (error) {
-    const fallback = await supabase.from('fine_payment_proofs')
-      .select('id, original_filename, mime_type, submitted_at, reviewed_at, proof_scope, payment_source, submitted_by_delegate_id, reviewed_by, players(name,shirt_number), teams!inner(name, categories!inner(tournament_id, tournaments!inner(client_id)))')
+    const fallback = await applyFilters(supabase.from('fine_payment_proofs')
+      .select('id, team_id, original_filename, mime_type, submitted_at, reviewed_at, proof_scope, payment_source, submitted_by_delegate_id, reviewed_by, players(name,shirt_number), teams!inner(name, categories!inner(tournament_id, tournaments!inner(client_id)))')
       .eq('tournament_id', tournamentId)
       .eq('teams.categories.tournaments.client_id', clientId)
       .eq('status', 'APPROVED')
       .order('reviewed_at', { ascending: false, nullsFirst: false }).order('id', { ascending: false })
-      .range(page * 20, page * 20 + 20);
+      .range(page * 20, page * 20 + 20));
     data = (fallback.data || []).map((proof: any) => ({ ...proof, approved_amount: null, coverage_type: null, fine_payment_proof_allocations: [] }));
     error = fallback.error;
   }
