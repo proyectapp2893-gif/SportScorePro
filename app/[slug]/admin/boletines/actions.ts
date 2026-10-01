@@ -1,8 +1,9 @@
 'use server';
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { hasAdminSession } from '@/app/lib/auth';
 import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import { getClientIdBySlug } from '@/app/lib/tenant';
-import { buildBulletinSnapshot, getAvailableBulletinRounds, getNextUnpublishedRound, hydrateDynamicBulletinFields, stampSuspensionOrigins } from '@/app/lib/tournaments/bulletin';
+import { buildBulletinSnapshot, buildBulletinSnapshotSet, getAvailableBulletinRounds, getNextUnpublishedRound, hydrateDynamicBulletinFields, stampSuspensionOrigins } from '@/app/lib/tournaments/bulletin';
 import { revalidatePath } from 'next/cache';
 import { nextDate } from '@/app/lib/date-filter';
 
@@ -11,9 +12,11 @@ export async function loadBulletinEditor(slug:string,tournamentId:string,asOfDat
   const db=await owned(slug,tournamentId); if(!db)return null;
   let bulletinsQuery=db.from('tournament_bulletins').select('id,bulletin_number,confirmed_at,snapshot').eq('tournament_id',tournamentId).order('bulletin_number',{ascending:false});
   if(asOfDate)bulletinsQuery=bulletinsQuery.lt('confirmed_at',`${nextDate(asOfDate)}T00:00:00-05:00`);
-  const [{data:published},availableRounds,liveSnapshot]=await Promise.all([bulletinsQuery,getAvailableBulletinRounds(db,tournamentId,asOfDate),buildBulletinSnapshot(db,tournamentId,asOfDate)]);
+  const [{data:published},availableRounds]=await Promise.all([bulletinsQuery,getAvailableBulletinRounds(db,tournamentId,asOfDate)]);
   const bulletins=published||[],publishedNumbers=bulletins.map((item:any)=>Number(item.bulletin_number));
   const nextNumber=getNextUnpublishedRound(availableRounds,publishedNumbers);
+  const draftRounds=availableRounds.filter(round=>!publishedNumbers.includes(round));
+  const {live:liveSnapshot,byRound:draftSnapshots}=await buildBulletinSnapshotSet(db,tournamentId,asOfDate,draftRounds);
   const entries:any[]=[];
   let previousSnapshot:any=undefined;
   for(const round of availableRounds){
@@ -24,7 +27,7 @@ export async function loadBulletinEditor(slug:string,tournamentId:string,asOfDat
       previousSnapshot=publishedBulletin.snapshot;
       continue;
     }
-    const rawSnapshot=await buildBulletinSnapshot(db,tournamentId,asOfDate,round);
+    const rawSnapshot=draftSnapshots.get(round)||{categories:[]};
     const snapshot=hydrateDynamicBulletinFields(stampSuspensionOrigins(rawSnapshot,round,previousSnapshot),rawSnapshot,round);
     entries.push({id:`draft-${round}`,bulletin_number:round,confirmed_at:null,snapshot,preview:true,canConfirm:round===nextNumber});
     previousSnapshot=snapshot;

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ admin: vi.fn(), client: vi.fn(), db: vi.fn() }));
 vi.mock('@/app/lib/auth', () => ({ hasAdminSession: mocks.admin }));
@@ -9,7 +10,7 @@ import { getApprovedFinePaymentProofs, getFinePaymentProofUrl } from '../app/[sl
 
 function database(result: unknown) {
   const query: Record<string, any> = {};
-  for (const method of ['select', 'eq', 'order', 'range']) query[method] = vi.fn(() => query);
+  for (const method of ['select', 'eq', 'in', 'gte', 'lt', 'order', 'range']) query[method] = vi.fn(() => query);
   query.maybeSingle = vi.fn().mockResolvedValue(result);
   query.then = (resolve: (value: unknown) => void) => Promise.resolve(result).then(resolve);
   const signed = vi.fn().mockResolvedValue({ data: { signedUrl: 'private-url' }, error: null });
@@ -28,7 +29,7 @@ describe('approved receipt history', () => {
   it('scopes approved history to the tenant and tournament, with stable pagination', async () => {
     const { query } = database({ data: Array.from({ length: 21 }, (_, id) => ({ id })), error: null });
     const result = await getApprovedFinePaymentProofs('tenant', 'tournament', 2);
-    expect(query.eq).toHaveBeenCalledWith('status', 'APPROVED');
+    expect(query.in).toHaveBeenCalledWith('status', ['APPROVED', 'REVERSED']);
     expect(query.eq).toHaveBeenCalledWith('tournament_id', 'tournament');
     expect(query.eq).toHaveBeenCalledWith('teams.categories.tournaments.client_id', 'tenant-id');
     expect(query.range).toHaveBeenCalledWith(40, 60);

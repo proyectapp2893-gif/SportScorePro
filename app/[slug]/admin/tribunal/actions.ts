@@ -1,4 +1,5 @@
 'use server';
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { hasAdminSession } from '@/app/lib/auth';
 import { createPrivilegedSupabaseClient } from '@/app/lib/supabase/server';
@@ -6,7 +7,7 @@ import { getClientIdBySlug } from '@/app/lib/tenant';
 import { logAuditEvent } from '@/app/lib/audit';
 import { revalidatePath } from 'next/cache';
 import { randomUUID } from 'crypto';
-import { nextDate, normalizeAsOfDate } from '@/app/lib/date-filter';
+import { nextDate, normalizeAsOfDate } from '../../../lib/date-filter';
 
 const MAX_PAYMENT_PROOF_SIZE_BYTES = 5 * 1024 * 1024;
 const PAYMENT_PROOF_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
@@ -87,7 +88,7 @@ export async function getApprovedFinePaymentProofs(slug: string, tournamentId: s
     .eq('teams.categories.tournaments.client_id', clientId)
     .in('status', ['APPROVED', 'REVERSED'])
     .order('reviewed_at', { ascending: false, nullsFirst: false }).order('id', { ascending: false })
-    .range(page * 20, page * 20 + 20)));
+    .range(page * 20, page * 20 + 20));
   if (error) {
     const fallback = await applyFilters(supabase.from('fine_payment_proofs')
       .select('id, team_id, original_filename, mime_type, status, submitted_at, reviewed_at, proof_scope, payment_source, submitted_by_delegate_id, reviewed_by, players(name,shirt_number), teams!inner(name, categories!inner(tournament_id, tournaments!inner(client_id)))')

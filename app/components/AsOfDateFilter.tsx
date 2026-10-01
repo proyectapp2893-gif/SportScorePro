@@ -48,6 +48,7 @@ export default function AsOfDateFilter({ alwaysShow = false }: { alwaysShow?: bo
   function clearDate() {
     const params = new URLSearchParams(searchParams.toString());
     params.delete(AS_OF_DATE_PARAM);
+    if (storageKey) window.localStorage.removeItem(storageKey);
     const query = params.toString();
     router.push(query ? `${pathname}?${query}` : pathname);
   }

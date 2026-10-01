@@ -62,12 +62,16 @@ export async function getAvailableBulletinRounds(db:any,tournamentId:string,asOf
   return Array.from(matchesByRound.entries()).filter(([,matches])=>matches.some((match:any)=>match.status==='FINISHED')&&matches.every((match:any)=>match.status==='FINISHED')).map(([round])=>round).sort((a,b)=>a-b);
 }
 
-export async function buildBulletinSnapshot(db:any, tournamentId:string, asOfDate?:string|null,targetRound?:number|null):Promise<BulletinSnapshot> {
-  const {data:tournament}=await db.from('tournaments').select('fair_play_enabled,fp_starting_points,fp_yellow_deduction,fp_red_deduction,fine_yellow_amount,fine_red_amount').eq('id',tournamentId).maybeSingle();
-  const { data: categoryData } = await db.from('categories').select('id,name,sports(name)').eq('tournament_id', tournamentId);
+type BulletinSource = { tournament:any; categories:any[]; teams:any[]; days:any[]; matches:any[]; events:any[] };
+
+async function loadBulletinSource(db:any,tournamentId:string,asOfDate?:string|null):Promise<BulletinSource> {
+  const [{data:tournament},{data:categoryData}]=await Promise.all([
+    db.from('tournaments').select('fair_play_enabled,fp_starting_points,fp_yellow_deduction,fp_red_deduction,fine_yellow_amount,fine_red_amount').eq('id',tournamentId).maybeSingle(),
+    db.from('categories').select('id,name,sports(name)').eq('tournament_id',tournamentId),
+  ]);
   const categories=categoryData||[];
-  const categoryIds=categories.map((c:any)=>c.id); if(!categoryIds.length)return {categories:[]};
-  let daysQuery=db.from('matchdays').select('id,category_id,round_number,scheduled_date').in('category_id',categoryIds); if(asOfDate)daysQuery=daysQuery.lte('scheduled_date',asOfDate); if(targetRound)daysQuery=daysQuery.lte('round_number',targetRound);
+  const categoryIds=categories.map((c:any)=>c.id); if(!categoryIds.length)return {tournament,categories:[],teams:[],days:[],matches:[],events:[]};
+  let daysQuery=db.from('matchdays').select('id,category_id,round_number,scheduled_date').in('category_id',categoryIds); if(asOfDate)daysQuery=daysQuery.lte('scheduled_date',asOfDate);
   const [{data:teamData},{data:dayData}]=await Promise.all([db.from('teams').select('id,name,category_id,fair_play_points').in('category_id',categoryIds),daysQuery]);
   const teams=teamData||[], days=dayData||[];
   const dayIds=days.map((d:any)=>d.id); const {data:matchData}=dayIds.length?await db.from('matches').select('id,matchday_id,status,home_score,away_score,home_sets,away_sets,home_team_id,away_team_id').in('matchday_id',dayIds):{data:[]};
@@ -75,6 +79,16 @@ export async function buildBulletinSnapshot(db:any, tournamentId:string, asOfDat
   const matchIds=matches.map((m:any)=>m.id); const {data:eventData}=matchIds.length?await db.from('match_events').select('id,match_id,team_id,player_id,event_type,fine_status,created_at,period,match_second,minute_record,players(name)').in('match_id',matchIds):{data:[]};
   const events=eventData||[];
   if(events.length){const {data:disciplinaryData}=await db.from('match_events').select('id,disciplinary_comment,suspension_matches').in('id',events.map((event:any)=>event.id));const disciplinaryById=new Map<string,any>((disciplinaryData||[]).map((event:any)=>[event.id,event]));events.forEach((event:any)=>Object.assign(event,disciplinaryById.get(event.id)||{}));}
+  return {tournament,categories,teams,days,matches,events};
+}
+
+function snapshotFromSource(source:BulletinSource,targetRound?:number|null):BulletinSnapshot {
+  const {tournament,categories,teams}=source;
+  const days=targetRound?source.days.filter((day:any)=>Number(day.round_number)<=targetRound):source.days;
+  const allowedDayIds=new Set(days.map((day:any)=>day.id));
+  const matches=source.matches.filter((match:any)=>allowedDayIds.has(match.matchday_id));
+  const allowedMatchIds=new Set(matches.map((match:any)=>match.id));
+  const events=source.events.filter((event:any)=>allowedMatchIds.has(event.match_id));
   const teamById=new Map<string,any>(teams.map((t:any)=>[t.id,t])); const dayById=new Map<string,any>(days.map((d:any)=>[d.id,d])); const matchById=new Map<string,any>(matches.map((m:any)=>[m.id,m]));
   return {categories:categories.map((category:any)=>{
     const categoryTeams=teams.filter((t:any)=>t.category_id===category.id), ids=new Set(categoryTeams.map((t:any)=>t.id));
@@ -97,4 +111,13 @@ export async function buildBulletinSnapshot(db:any, tournamentId:string, asOfDat
       debts:Array.from(debtMap.entries()).filter(([,amount]:any)=>amount>0).map(([id,amount])=>({team:teamById.get(id)?.name||'Equipo',amount})),
       sanctions:categoryEvents.filter((e:any)=>e.disciplinary_comment||e.suspension_matches).map((e:any)=>{const sanctionRound=Number(dayById.get(matchById.get(e.match_id)?.matchday_id)?.round_number||0);const completedRounds=new Set<number>(finished.filter((match:any)=>{const matchRound=Number(dayById.get(match.matchday_id)?.round_number||0);return (match.home_team_id===e.team_id||match.away_team_id===e.team_id)&&matchRound>sanctionRound&&matchRound<=round}).map((match:any)=>Number(dayById.get(match.matchday_id)?.round_number||0)));return{id:e.id,player:e.players?.name||'Jugador',team:teamById.get(e.team_id)?.name||'Equipo',teamId:e.team_id,round:sanctionRound,completedMatches:completedRounds.size,matches:Number(e.suspension_matches||0),comment:e.disciplinary_comment||''}})};
   })};
+}
+
+export async function buildBulletinSnapshotSet(db:any,tournamentId:string,asOfDate:string|null|undefined,targetRounds:number[]):Promise<{live:BulletinSnapshot;byRound:Map<number,BulletinSnapshot>}> {
+  const source=await loadBulletinSource(db,tournamentId,asOfDate);
+  return {live:snapshotFromSource(source),byRound:new Map(targetRounds.map(round=>[round,snapshotFromSource(source,round)]))};
+}
+
+export async function buildBulletinSnapshot(db:any,tournamentId:string,asOfDate?:string|null,targetRound?:number|null):Promise<BulletinSnapshot> {
+  return snapshotFromSource(await loadBulletinSource(db,tournamentId,asOfDate),targetRound);
 }

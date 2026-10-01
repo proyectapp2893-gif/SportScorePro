@@ -7,6 +7,7 @@ import { getClientIdBySlug } from '@/app/lib/tenant';
 import AdminBulletinCard from './AdminBulletinCard';
 import { normalizeAsOfDate } from '@/app/lib/date-filter';
 import AsOfDateFilter from '@/app/components/AsOfDateFilter';
+import { loadBulletinEditor } from './actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,5 +17,6 @@ export default async function BulletinsPage({params,searchParams}:{params:Promis
   const clientId=await getClientIdBySlug(slug);const db=createServerSupabaseAdminClient();
   const {data:tournament}=await db.from('tournaments').select('id,name').eq('id',tournamentId).eq('client_id',clientId||'').maybeSingle();
   if(!tournament)redirect(`/${slug}/admin`);
-  return <main className="min-h-screen bg-slate-50 px-4 py-8 sm:px-6"><div className="mx-auto max-w-6xl"><Link href={`/${slug}/admin?tournament=${tournament.id}`} className="mb-6 flex items-center gap-2 text-xs font-black uppercase tracking-widest text-slate-500"><ArrowLeft size={16}/> Volver al panel</Link><header className="rounded-3xl bg-slate-950 p-6 text-white sm:p-8"><p className="text-[9px] font-black uppercase tracking-[.22em] text-violet-300">Publicaciones oficiales</p><h1 className="mt-1 text-3xl font-black uppercase">Boletines del torneo</h1><p className="mt-2 text-sm font-semibold text-slate-400">{tournament.name}</p></header><AsOfDateFilter alwaysShow /><AdminBulletinCard slug={slug} tournamentId={tournament.id} asOfDate={asOfDate}/></div></main>;
+  const initialData=await loadBulletinEditor(slug,tournament.id,asOfDate);
+  return <main className="min-h-screen bg-slate-50 px-4 py-8 sm:px-6"><div className="mx-auto max-w-6xl"><Link href={`/${slug}/admin?tournament=${tournament.id}`} className="mb-6 flex items-center gap-2 text-xs font-black uppercase tracking-widest text-slate-500"><ArrowLeft size={16}/> Volver al panel</Link><header className="rounded-3xl bg-slate-950 p-6 text-white sm:p-8"><p className="text-[9px] font-black uppercase tracking-[.22em] text-violet-300">Publicaciones oficiales</p><h1 className="mt-1 text-3xl font-black uppercase">Boletines del torneo</h1><p className="mt-2 text-sm font-semibold text-slate-400">{tournament.name}</p></header><AsOfDateFilter alwaysShow /><AdminBulletinCard key={asOfDate||'current'} slug={slug} tournamentId={tournament.id} asOfDate={asOfDate} initialData={initialData}/></div></main>;
 }
