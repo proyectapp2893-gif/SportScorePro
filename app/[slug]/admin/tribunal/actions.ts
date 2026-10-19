@@ -52,6 +52,34 @@ export async function getFinePaymentProofs(slug: string, tournamentId: string) {
   return { success: true as const, data: data || [] };
 }
 
+export async function getPendingFineEventsForProof(slug: string, tournamentId: string, proofId: string) {
+  if (!(await hasAdminSession(slug))) return { success: false as const, error: 'Sesión administrativa no válida.' };
+  const clientId = await getClientIdBySlug(slug);
+  if (!clientId) return { success: false as const, error: 'Institución no encontrada.' };
+  const supabase = createPrivilegedSupabaseClient();
+  const { data: proof, error: proofError } = await supabase.from('fine_payment_proofs')
+    .select('id, team_id, player_id, proof_scope, teams!inner(categories!inner(tournament_id, tournaments!inner(client_id)))')
+    .eq('id', proofId)
+    .eq('tournament_id', tournamentId)
+    .eq('status', 'PENDING')
+    .eq('teams.categories.tournaments.client_id', clientId)
+    .maybeSingle();
+  if (proofError || !proof) return { success: false as const, error: 'Comprobante pendiente no encontrado en este torneo.' };
+  let query = supabase.from('match_events')
+    .select('id, event_type, fine_status, created_at, fine_amount, players(name, shirt_number), matches!inner(matchdays!inner(categories!inner(tournament_id)))')
+    .eq('team_id', proof.team_id)
+    .eq('matches.matchdays.categories.tournament_id', tournamentId)
+    .in('event_type', ['YELLOW', 'RED'])
+    .eq('fine_status', 'UNPAID');
+  if (proof.proof_scope === 'PLAYER') {
+    if (!proof.player_id) return { success: false as const, error: 'El comprobante individual no tiene jugador asociado.' };
+    query = query.eq('player_id', proof.player_id);
+  }
+  const { data, error } = await query.order('created_at', { ascending: false });
+  if (error) return { success: false as const, error: 'No se pudieron cargar las sanciones pendientes del comprobante.' };
+  return { success: true as const, data: data || [] };
+}
+
 export async function getApprovedProofTeams(slug: string, tournamentId: string) {
   if (!(await hasAdminSession(slug))) return { success: false as const, error: 'Sesión administrativa no válida.' };
   const clientId = await getClientIdBySlug(slug);
@@ -236,7 +264,7 @@ export async function rejectFinePaymentProof(slug: string, proofId: string, reas
   return { success: true as const };
 }
 
-export async function markTeamFinesPaidExternally(slug: string, tournamentId: string, teamId: string, note: string, file?: File) {
+export async function markFinesPaidExternally(slug: string, tournamentId: string, teamId: string, playerId: string | null, note: string, file?: File) {
   if (!(await hasAdminSession(slug))) return { success: false as const, error: 'Sesión administrativa no válida.' };
   const clientId = await getClientIdBySlug(slug);
   if (!clientId) return { success: false as const, error: 'Institución no encontrada.' };
@@ -247,27 +275,36 @@ export async function markTeamFinesPaidExternally(slug: string, tournamentId: st
   const supabase = createPrivilegedSupabaseClient();
   const { data: team } = await supabase.from('teams').select('id,name,categories!inner(tournament_id,tournaments!inner(client_id))').eq('id', teamId).eq('categories.tournament_id', tournamentId).eq('categories.tournaments.client_id', clientId).maybeSingle();
   if (!team) return { success: false as const, error: 'El equipo no pertenece al torneo seleccionado.' };
+  let player: { id: string; name: string } | null = null;
+  if (playerId) {
+    const { data, error } = await supabase.from('players').select('id,name').eq('id', playerId).eq('team_id', teamId).maybeSingle();
+    if (error || !data) return { success: false as const, error: 'El jugador no pertenece a este equipo.' };
+    player = data;
+  }
   const { data: matches, error: matchesError } = await supabase.from('matches').select('id,matchdays!inner(categories!inner(tournament_id))').eq('matchdays.categories.tournament_id', tournamentId);
   if (matchesError) return { success: false as const, error: 'No se pudieron consultar los partidos del torneo.' };
   const matchIds = (matches || []).map((match: any) => match.id);
   if (!matchIds.length) return { success: false as const, error: 'El torneo no tiene partidos para actualizar.' };
-  const { data: pending, error: pendingError } = await supabase.from('match_events').select('id').eq('team_id', teamId).in('match_id', matchIds).in('event_type', ['YELLOW', 'RED']).eq('fine_status', 'UNPAID');
+  let pendingQuery = supabase.from('match_events').select('id').eq('team_id', teamId).in('match_id', matchIds).in('event_type', ['YELLOW', 'RED']).eq('fine_status', 'UNPAID');
+  if (playerId) pendingQuery = pendingQuery.eq('player_id', playerId);
+  const { data: pending, error: pendingError } = await pendingQuery;
   if (pendingError) return { success: false as const, error: 'No se pudieron consultar las multas pendientes.' };
-  if (!pending?.length) return { success: false as const, error: 'El equipo no tiene multas pendientes.' };
-  const { data: activeProofs, error: activeProofsError } = await supabase.from('fine_payment_proofs').select('id').eq('team_id', teamId).eq('tournament_id', tournamentId).eq('status', 'PENDING');
+  if (!pending?.length) return { success: false as const, error: playerId ? 'El jugador no tiene multas pendientes.' : 'El equipo no tiene multas pendientes.' };
+  const { data: activeProofs, error: activeProofsError } = await supabase.from('fine_payment_proofs').select('id, proof_scope, player_id').eq('team_id', teamId).eq('tournament_id', tournamentId).eq('status', 'PENDING');
   if (activeProofsError) return { success: false as const, error: 'No se pudo verificar si existe un comprobante pendiente.' };
-  if (activeProofs?.length) return { success: false as const, error: 'El equipo ya tiene un comprobante pendiente. Revísalo o recházalo antes de registrar otro pago.' };
+  if (!playerId && activeProofs?.length) return { success: false as const, error: 'El equipo ya tiene un comprobante pendiente. Revísalo o recházalo antes de registrar otro pago.' };
+  if (playerId && activeProofs?.some((proof: any) => proof.proof_scope === 'TEAM' || proof.player_id === playerId)) return { success: false as const, error: 'Ya existe un comprobante pendiente para este jugador o todo el equipo.' };
 
   const extension = file.type === 'application/pdf' ? 'pdf' : file.type.split('/')[1].replace('jpeg', 'jpg');
-  const storagePath = `${clientId}/${teamId}/fine-proofs/external-${randomUUID()}.${extension}`;
+  const storagePath = `${clientId}/${teamId}/fine-proofs/external-${playerId ? `player-${playerId}-` : ''}${randomUUID()}.${extension}`;
   const { error: uploadError } = await supabase.storage.from('player-documents').upload(storagePath, file, { contentType: file.type, upsert: false });
   if (uploadError) return { success: false as const, error: 'No se pudo almacenar el comprobante externo.' };
   const { data: proof, error: proofError } = await supabase.from('fine_payment_proofs').insert({
     team_id: teamId,
     tournament_id: tournamentId,
-    player_id: null,
+    player_id: playerId,
     match_event_id: null,
-    proof_scope: 'TEAM',
+    proof_scope: playerId ? 'PLAYER' : 'TEAM',
     payment_source: 'EXTERNAL',
     payment_note: safeNote,
     storage_path: storagePath,
@@ -292,9 +329,10 @@ export async function markTeamFinesPaidExternally(slug: string, tournamentId: st
     await supabase.storage.from('player-documents').remove([storagePath]);
     return { success: false as const, error: approvalError?.message || 'No se pudieron actualizar las multas.' };
   }
-  await logAuditEvent({ action: 'admin.fines.external_payment', actorType: 'client', actorId: clientId, clientId, targetType: 'team', targetId: teamId, metadata: { slug, tournamentId, teamName: (team as any).name, proofId: proof.id, updatedEvents: approval[0].updated_events || 0, appliedAmount: approval[0].applied_amount, note: safeNote, paymentSource: 'EXTERNAL' } });
+  await logAuditEvent({ action: 'admin.fines.external_payment', actorType: 'client', actorId: clientId, clientId, targetType: playerId ? 'player' : 'team', targetId: playerId || teamId, metadata: { slug, tournamentId, teamId, teamName: (team as any).name, playerId, playerName: player?.name || null, scope: playerId ? 'PLAYER' : 'TEAM', proofId: proof.id, updatedEvents: approval[0].updated_events || 0, appliedAmount: approval[0].applied_amount, note: safeNote, paymentSource: 'EXTERNAL' } });
   revalidatePath(`/${slug}/admin/tribunal`);
   revalidatePath(`/${slug}/delegado`);
+  revalidatePath(`/${slug}/admin/boletines`);
   return { success: true as const, data: { updated: approval[0].updated_events || 0, proofId: proof.id, appliedAmount: approval[0].applied_amount } };
 }
 
