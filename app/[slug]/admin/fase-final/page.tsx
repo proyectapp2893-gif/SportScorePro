@@ -25,6 +25,7 @@ function FaseFinalContent() {
   
   const [teams, setTeams] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loyolaGroupsComplete, setLoyolaGroupsComplete] = useState(false);
 
   // MEJORA: Carga de datos filtrada por Cliente (Tenant Isolation)
   useEffect(() => {
@@ -62,6 +63,7 @@ function FaseFinalContent() {
       loadTeamsAndCalculatePositions();
     } else {
       setTeams([]);
+      setLoyolaGroupsComplete(false);
     }
   }, [selectedCategory, asOfDate]);
 
@@ -88,13 +90,15 @@ function FaseFinalContent() {
           away_team:teams!away_team_id(id),
           matchdays!inner(category_id, scheduled_date, round_number)
         `)
-        .eq('matchdays.category_id', selectedCategory)
-        .eq('status', 'FINISHED');
+        .eq('matchdays.category_id', selectedCategory);
       if (asOfDate) finishedMatchesQuery = finishedMatchesQuery.lte('matchdays.scheduled_date', asOfDate);
       const { data: finishedMatches } = await finishedMatchesQuery;
 
       const tournament = categories.find((category) => category.id === selectedCategory)?.tournaments;
-      (finishedMatches || []).filter((match: any) => tournament?.tournament_format !== 'LOYOLA' || match.matchdays?.round_number < 100).forEach((match: any) => {
+      const groupMatches = (finishedMatches || []).filter((match: any) => match.matchdays?.round_number >= 101 && match.matchdays?.round_number <= 106);
+      const groupsComplete = groupMatches.length === 24 && groupMatches.every((match: any) => match.status === 'FINISHED');
+      setLoyolaGroupsComplete(groupsComplete);
+      (finishedMatches || []).filter((match: any) => match.status === 'FINISHED' && (tournament?.tournament_format !== 'LOYOLA' || (groupsComplete && match.matchdays?.round_number >= 101 && match.matchdays?.round_number <= 106))).forEach((match: any) => {
         const homeId = match.home_team?.id;
         const awayId = match.away_team?.id;
         if (!homeId || !awayId || !teamStats[homeId] || !teamStats[awayId]) return;
@@ -160,7 +164,7 @@ function FaseFinalContent() {
   // Lógica Voleibol (2 Grupos)
   const groupA = teams.filter(t => t.group_name === 'A');
   const groupB = teams.filter(t => t.group_name === 'B');
-  const isLoyolaGroups = activeCategory?.tournaments?.tournament_format === 'LOYOLA' && groupA.length === 4 && groupB.length === 4;
+  const isLoyolaGroups = activeCategory?.tournaments?.tournament_format === 'LOYOLA' && loyolaGroupsComplete && groupA.length === 4 && groupB.length === 4;
   const semi1A = groupA[0]; const semi1B = groupB[1]; // 1°A vs 2°B
   const semi2B = groupB[0]; const semi2A = groupA[1]; // 1°B vs 2°A
 
@@ -380,7 +384,8 @@ function FaseFinalContent() {
                 )}
 
                 {/* ESTADO DE DESARROLLO (Si no se cumplen condiciones) */}
-                {!isVolleyball && !isCuadrangular && !isLoyolaGroups && !isPentagonal && teams.length > 0 && (
+                {activeCategory?.tournaments?.tournament_format === 'LOYOLA' && !loyolaGroupsComplete && <div className="relative z-10 py-12 text-center"><GitMerge size={44} className="mx-auto mb-5 text-slate-400" /><p className="text-lg font-black uppercase">Semifinales pendientes</p><p className="mt-3 text-xs font-bold text-slate-500">Los clasificados se conocerán al finalizar los 24 partidos de las seis jornadas de grupos.</p></div>}
+                {activeCategory?.tournaments?.tournament_format !== 'LOYOLA' && !isVolleyball && !isCuadrangular && !isLoyolaGroups && !isPentagonal && teams.length > 0 && (
                   <div className="flex flex-col items-center justify-center text-center relative z-10 py-12">
                     <div className="bg-slate-50 p-6 rounded-full mb-6 border border-slate-200 shadow-inner">
                       <GitMerge size={48} className="text-slate-400" />

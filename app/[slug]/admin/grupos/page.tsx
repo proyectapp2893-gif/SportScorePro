@@ -7,7 +7,7 @@ import Link from 'next/link';
 import { useSearchParams, useRouter, useParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 'react-icons/fa';
-import { createCategoryFixture, deleteCategoryFixture, getAdminCategoryFixture, getAdminFixtureCategories, getCategoryGroupEligibility, getLoyolaDrawHistory, prepareLoyolaGroupDraw, randomizeCategoryGroups, reorganizeCategoryFixtureTimes, updateFixtureMatch, updateTeamGroup, updateTournamentFixtureVisibility, updateTournamentPublicFixtureVisibility } from './actions';
+import { createCategoryFixture, createLoyolaApprovedGroupFixture, createLoyolaSemifinals, deleteCategoryFixture, getAdminCategoryFixture, getAdminFixtureCategories, getCategoryGroupEligibility, getLoyolaDrawHistory, prepareLoyolaGroupDraw, randomizeCategoryGroups, reorganizeCategoryFixtureTimes, updateFixtureMatch, updateTeamGroup, updateTournamentFixtureVisibility, updateTournamentPublicFixtureVisibility } from './actions';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '../../../lib/sports/rules';
 import AppSelect from '@/app/components/AppSelect';
 import { advanceRoundRobinSemifinalsTournament, advanceThreeStageTournament, getThreeStageStatus, startRoundRobinSemifinalsTournament, startThreeStageTournament } from './stage-actions';
@@ -719,21 +719,24 @@ function FixtureContent() {
 
 
   const handlePlayoffClick = () => {
-    if (availableRounds.includes(100)) return toast.error('El sistema detecta una Fase Final ya activa.');
+    if (availableRounds.includes(100) || availableRounds.some((round) => round >= 201)) return toast.error('La Fase Final ya está activa.');
     if (selectedTournament?.tournament_format === 'LOYOLA' && !loyolaDrawComplete) {
       return toast.error('Completa primero el sorteo manual: cuatro equipos en A y cuatro en B.');
     }
+    if (selectedTournament?.tournament_format === 'LOYOLA' && !loyolaGroupsComplete) return toast.error('Finaliza los 24 partidos de grupos antes de crear semifinales.');
     setShowPlayoffConfirm(true);
   };
 
   const executeGeneratePlayoffs = async () => {
     setShowPlayoffConfirm(false);
     if (selectedTournament?.tournament_format === 'LOYOLA') {
-      if (!groupEligibility || !loyolaDrawComplete) return toast.error(groupEligibilityError || 'Completa primero el sorteo manual.');
-      const qualified = new Set(groupEligibility.qualifiedIds);
-      const groupA = teams.filter((team) => qualified.has(team.id) && team.group_name === 'A');
-      const groupB = teams.filter((team) => qualified.has(team.id) && team.group_name === 'B');
-      if (groupA.length !== 4 || groupB.length !== 4) return toast.error('Sortea primero los ocho clasificados en dos grupos de cuatro.');
+      if (!selectedCategory) return;
+      setLoading(true);
+      const result = await createLoyolaSemifinals(slug, selectedCategory);
+      if (result.success) { toast.success('Semifinales creadas con la tabla final de los grupos.'); await loadCategoryData(); setActiveRound(201); }
+      else toast.error(result.error);
+      setLoading(false);
+      return;
     }
     setLoading(true);
     const toastId = toast.loading('Analizando posiciones para llaves finales...');
@@ -891,11 +894,23 @@ function FixtureContent() {
   const drawPrepared = loyolaDrawHistory.some((event) => event.action === 'admin.loyola.draw_prepared');
   const pendingLoyolaTeams = isLoyolaDraw ? eligibleTeams.filter((team) => team.group_name !== 'A' && team.group_name !== 'B') : [];
   const loyolaDrawComplete = drawPrepared && eligibleTeams.filter((team) => team.group_name === 'A').length === 4 && eligibleTeams.filter((team) => team.group_name === 'B').length === 4;
+  const loyolaGroupRounds = availableRounds.filter((round) => round >= 101 && round <= 106);
+  const loyolaGroupMatches = matches.filter((match) => match.matchdays?.round_number >= 101 && match.matchdays?.round_number <= 106);
+  const loyolaGroupsComplete = loyolaGroupRounds.length === 6 && loyolaGroupMatches.length === 24 && loyolaGroupMatches.every((match) => match.status === 'FINISHED');
+  const handleCreateLoyolaGroups = async () => {
+    if (!selectedCategory || !loyolaDrawComplete) return;
+    setLoading(true);
+    const result = await createLoyolaApprovedGroupFixture(slug, selectedCategory);
+    if (result.success) { toast.success('Se crearon las seis jornadas y los 24 partidos aprobados.'); await loadCategoryData(); setActiveRound(101); }
+    else toast.error(result.error);
+    setLoading(false);
+  };
   const publicFlagAvailable = isDemo || selectedTournament?.fixture_visible_to_public !== undefined;
   const fixtureWorkflow = getFixtureWorkflowState({ hasFixture: matches.length > 0, delegatesVisible: Boolean(selectedTournament?.fixture_visible_to_delegates), publicVisible: Boolean(selectedTournament?.fixture_visible_to_public), publicFlagAvailable: isDemo || selectedTournament?.fixture_visible_to_public !== undefined, analysis: matches.length > 0 ? fixtureAnalysis : null });
 
   const uniqueSports = Array.from(new Set(categories.map(c => c.sports?.name).filter(Boolean)));
-  const hasFaseFinal = availableRounds.includes(100);
+  const hasFaseFinal = availableRounds.includes(100) || availableRounds.some((round) => round >= 201);
+  const loyolaStageStarted = loyolaGroupRounds.length > 0 || hasFaseFinal;
   const oddTeamGroups = Object.entries(teams.reduce((groups: Record<string, any[]>, team) => {
     const group = team.group_name || 'A';
     if (!groups[group]) groups[group] = [];
@@ -1120,7 +1135,7 @@ function FixtureContent() {
               <GitMerge size={40} />
             </div>
             <h3 className="text-2xl font-black text-slate-900 uppercase tracking-tighter mb-2">Generar Eliminatorias</h3>
-            <p className="text-slate-500 text-sm font-medium mb-8 leading-relaxed">El sistema sincronizará los cruces finales (Ej: 1A vs 2B). Asegúrese de haber asignado los grupos A y B a los colegios en la pestaña "GRUPOS".</p>
+            <p className="text-slate-500 text-sm font-medium mb-8 leading-relaxed">{selectedTournament?.tournament_format === 'LOYOLA' ? 'Se crearán las semifinales 1.º A contra 2.º B y 1.º B contra 2.º A según los resultados de las seis jornadas de grupos.' : 'El sistema sincronizará los cruces finales (Ej: 1A vs 2B). Asegúrese de haber asignado los grupos A y B a los colegios en la pestaña "GRUPOS".'}</p>
             <div className="flex w-full gap-4">
               <button onClick={() => setShowPlayoffConfirm(false)} className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-slate-200 shadow-sm">Cancelar</button>
               <button onClick={executeGeneratePlayoffs} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-indigo-700 transition-all shadow-lg">Estructurar Llaves</button>
@@ -1294,7 +1309,7 @@ function FixtureContent() {
                 </div>
 
                 {viewMode === 'FIXTURE' && <div className="grid w-full grid-cols-2 gap-2.5 xl:grid-cols-4">
-                  {matches.length > 0 && (
+                  {matches.length > 0 && !loyolaStageStarted && (
                     <button onClick={handleReorganizeTimes} disabled={loading} className="flex min-h-16 items-center justify-center gap-2 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-[9px] font-black uppercase leading-tight tracking-widest text-blue-700 shadow-sm transition-all hover:-translate-y-0.5 hover:bg-blue-600 hover:text-white hover:shadow-md disabled:opacity-50">
                       <Clock size={16} className={reorganizing ? 'animate-spin' : ''} /> {reorganizing ? 'Procesando...' : 'Reorganizar fechas y horarios'}
                     </button>
@@ -1312,9 +1327,10 @@ function FixtureContent() {
                   )}
                   {!stageStatus?.enabled && matches.length > 0 && (
                     <>
+                      {isLoyolaDraw && !loyolaStageStarted && <button onClick={handleCreateLoyolaGroups} disabled={loading || !loyolaDrawComplete} className="flex min-h-16 items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-emerald-700 disabled:opacity-50"><CalendarDays size={16} /> Crear seis jornadas de grupos</button>}
                       {!hasFaseFinal && (
-                        <button onClick={handlePlayoffClick} disabled={loading || (isLoyolaDraw && !loyolaDrawComplete)} title={isLoyolaDraw && !loyolaDrawComplete ? 'Completa el sorteo manual de los grupos A y B' : undefined} className="flex min-h-16 items-center justify-center gap-2 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-indigo-600 shadow-sm transition-all hover:-translate-y-0.5 hover:bg-indigo-600 hover:text-white hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50">
-                          <GitMerge size={16} /> {isLoyolaDraw && !loyolaDrawComplete ? 'Completa sorteo para Fase Final' : 'Fase Final'}
+                        <button onClick={handlePlayoffClick} disabled={loading || (isLoyolaDraw && !loyolaGroupsComplete)} title={isLoyolaDraw && !loyolaGroupsComplete ? 'Finaliza primero los 24 partidos de grupos' : undefined} className="flex min-h-16 items-center justify-center gap-2 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-indigo-600 shadow-sm transition-all hover:-translate-y-0.5 hover:bg-indigo-600 hover:text-white hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50">
+                          <GitMerge size={16} /> {isLoyolaDraw ? 'Crear semifinales' : 'Fase Final'}
                         </button>
                       )}
                       <button onClick={handleDeleteClick} disabled={loading} className="flex min-h-16 items-center justify-center gap-2 rounded-2xl border border-red-200 bg-white px-4 py-3 text-[9px] font-black uppercase tracking-widest text-red-600 shadow-sm transition-all hover:-translate-y-0.5 hover:bg-red-50 hover:shadow-md">
@@ -1336,7 +1352,7 @@ function FixtureContent() {
                       {eliminatedTeams.length > 0 && <p className="mt-2 text-xs font-bold text-amber-700">Eliminado de la fase regular: {eliminatedTeams.map((team) => team.name).join(', ')}.</p>}
                     </div>
 
-                    {isLoyolaDraw ? <button type="button" onClick={handlePrepareLoyolaDraw} disabled={loading || !groupEligibility || hasFaseFinal} className="rounded-xl bg-indigo-600 px-6 py-4 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-50">{drawPrepared ? 'Reiniciar sorteo manual' : 'Preparar sorteo manual'}</button> : <div className="flex flex-col sm:flex-row gap-3 lg:justify-end">
+                    {isLoyolaDraw ? <button type="button" onClick={handlePrepareLoyolaDraw} disabled={loading || !groupEligibility || loyolaStageStarted} className="rounded-xl bg-indigo-600 px-6 py-4 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-50">{drawPrepared ? 'Reiniciar sorteo manual' : 'Preparar sorteo manual'}</button> : <div className="flex flex-col sm:flex-row gap-3 lg:justify-end">
                       <div className="flex bg-slate-100 p-1 rounded-xl shadow-inner">
                         {(selectedTournament?.tournament_format === 'LOYOLA' ? [2] : [2, 3, 4]).map((count) => (
                           <button
@@ -1362,8 +1378,8 @@ function FixtureContent() {
                   {isLoyolaDraw && <section className="mb-6 rounded-2xl border border-indigo-200 bg-indigo-50 p-5">
                     <h4 className="mb-3 text-sm font-black uppercase text-indigo-800">Bombo de clasificados · {pendingLoyolaTeams.length} pendientes</h4>
                     {!drawPrepared && <p className="text-xs font-bold text-indigo-700">Prepara el sorteo para retirar al eliminado de los grupos y dejar los ocho clasificados sin asignación.</p>}
-                    {drawPrepared && <div className="grid gap-2 sm:grid-cols-2">{pendingLoyolaTeams.map((team) => <div key={team.id} className="flex items-center justify-between gap-2 rounded-xl bg-white p-3 text-xs font-bold"><span className="truncate">{team.name}</span><span className="flex shrink-0 gap-1">{(['A', 'B'] as const).map((group) => <button key={group} type="button" disabled={loading || hasFaseFinal || eligibleTeams.filter((item) => item.group_name === group).length >= 4} onClick={() => handleUpdateTeamGroup(team.id, group)} className="rounded-lg bg-indigo-600 px-3 py-2 text-[10px] font-black text-white disabled:opacity-40">{group}</button>)}</span></div>)}</div>}
-                    {drawPrepared && pendingLoyolaTeams.length === 0 && <p className="text-xs font-bold text-emerald-700">Los ocho equipos ya están asignados. Revisa los grupos antes de crear las semifinales.</p>}
+                    {drawPrepared && <div className="grid gap-2 sm:grid-cols-2">{pendingLoyolaTeams.map((team) => <div key={team.id} className="flex items-center justify-between gap-2 rounded-xl bg-white p-3 text-xs font-bold"><span className="truncate">{team.name}</span><span className="flex shrink-0 gap-1">{(['A', 'B'] as const).map((group) => <button key={group} type="button" disabled={loading || loyolaStageStarted || eligibleTeams.filter((item) => item.group_name === group).length >= 4} onClick={() => handleUpdateTeamGroup(team.id, group)} className="rounded-lg bg-indigo-600 px-3 py-2 text-[10px] font-black text-white disabled:opacity-40">{group}</button>)}</span></div>)}</div>}
+                    {drawPrepared && pendingLoyolaTeams.length === 0 && <p className="text-xs font-bold text-emerald-700">Los ocho equipos ya están asignados. Revisa los grupos antes de crear sus seis jornadas.</p>}
                   </section>}
                   <div className={`grid grid-cols-1 gap-6 sm:grid-cols-2 ${isLoyolaDraw ? '' : 'lg:grid-cols-4'}`}>
                      {(isLoyolaDraw ? ['A', 'B'] : ['A', 'B', 'C', 'D']).map(group => (
@@ -1391,7 +1407,7 @@ function FixtureContent() {
                                         { value: 'D', label: 'Gr. D' },
                                       ])}
                                     />}
-                                    {isLoyolaDraw && drawPrepared && !hasFaseFinal && <button type="button" onClick={() => handleUpdateTeamGroup(team.id, '')} disabled={loading} className="shrink-0 rounded-lg px-2 py-1 text-[10px] font-black text-amber-700 disabled:opacity-40">Quitar</button>}
+                                    {isLoyolaDraw && drawPrepared && !loyolaStageStarted && <button type="button" onClick={() => handleUpdateTeamGroup(team.id, '')} disabled={loading} className="shrink-0 rounded-lg px-2 py-1 text-[10px] font-black text-amber-700 disabled:opacity-40">Quitar</button>}
                                  </div>
                               ))}
                               {eligibleTeams.filter(t => t.group_name === group).length === 0 && (

@@ -4,7 +4,8 @@ import { hasAdminSession } from '@/app/lib/auth';
 import { logAuditEvent } from '@/app/lib/audit';
 import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import { categoryBelongsToClientSlug, getClientIdBySlug, teamBelongsToClientSlug } from '@/app/lib/tenant';
-import { selectLoyolaQualifiers } from '@/app/lib/tournaments/loyola-qualification';
+import { rankLoyolaTeams, selectLoyolaQualifiers } from '@/app/lib/tournaments/loyola-qualification';
+import { buildLoyolaGroupFixture } from '@/app/lib/tournaments/loyola-group-fixture';
 
 type FixtureActionResult =
   | { success: true }
@@ -136,6 +137,9 @@ export async function reorganizeCategoryFixtureTimes(slug: string, categoryId: s
     .select('id, home_team_id, away_team_id, status, scheduled_time, venue, matchdays!inner(id, round_number, category_id, scheduled_date)')
     .eq('matchdays.category_id', categoryId);
   if (error) return { success: false, error: 'No se pudo cargar el fixture.' };
+  if ((matches || []).some((match: any) => Number(match.matchdays?.round_number || 0) >= 101 && Number(match.matchdays?.round_number || 0) <= 106)) {
+    return { success: false, error: 'Las fechas y horas aprobadas de los grupos Loyola se editan por partido y no se reorganizan automáticamente.' };
+  }
   const validMatches = (matches || []).filter((match: any) => match.home_team_id && match.away_team_id);
   const schedulable = validMatches.filter((match: any) => match.status === 'SCHEDULED')
     .sort((a: any, b: any) => Number(a.matchdays?.round_number || 0) - Number(b.matchdays?.round_number || 0) || a.id.localeCompare(b.id));
@@ -485,6 +489,114 @@ export async function deleteCategoryFixture(slug: string, categoryId: string): P
   return { success: true };
 }
 
+export async function createLoyolaApprovedGroupFixture(slug: string, categoryId: string): Promise<FixtureCreateResult> {
+  if (!(await hasAdminSession(slug)) || !(await categoryBelongsToClientSlug(categoryId, slug))) return { success: false, error: 'Acceso no autorizado.' };
+  const supabase = createServerSupabaseAdminClient();
+  const { data: category, error: categoryError } = await supabase.from('categories')
+    .select('name, tournaments(name, tournament_format)').eq('id', categoryId).maybeSingle();
+  const tournament = Array.isArray(category?.tournaments) ? category.tournaments[0] : category?.tournaments;
+  if (categoryError || category?.name !== '+ 35' || tournament?.name !== 'VII EDICIÓN LOYOLA SOCCER CUP' || tournament?.tournament_format !== 'LOYOLA') {
+    return { success: false, error: 'El calendario aprobado solo corresponde a Loyola Soccer Cup +35.' };
+  }
+  let approvedRounds: ReturnType<typeof buildLoyolaGroupFixture>;
+  try {
+    const eligibility = await getLoyolaQualifiers(supabase, categoryId);
+    if (!eligibility || eligibility.qualifiedIds.length !== 8) return { success: false, error: 'No se pudieron validar los ocho clasificados.' };
+    const { data: teams, error: teamsError } = await supabase.from('teams').select('id, name, group_name').eq('category_id', categoryId);
+    if (teamsError || !teams) return { success: false, error: 'No se pudieron cargar los grupos.' };
+    const qualified = new Set(eligibility.qualifiedIds);
+    if (teams.some((team) => !qualified.has(team.id) && team.group_name)) return { success: false, error: 'El equipo eliminado aún figura en un grupo.' };
+    approvedRounds = buildLoyolaGroupFixture(teams.filter((team) => qualified.has(team.id)));
+  } catch (error) { return { success: false, error: error instanceof Error ? error.message : 'No se pudo validar el calendario.' }; }
+
+  const { data: existing, error: existingError } = await supabase.from('matchdays')
+    .select('id, round_number, matches(id, status)').eq('category_id', categoryId).gte('round_number', 100);
+  if (existingError) return { success: false, error: 'No se pudieron revisar las fases existentes.' };
+  if ((existing || []).some((day) => day.round_number >= 101)) return { success: false, error: 'La fase de grupos o una fase posterior ya fue creada.' };
+  const legacyFinals = (existing || []).filter((day) => day.round_number === 100);
+  if (legacyFinals.some((day) => day.matches?.some((match) => match.status !== 'SCHEDULED'))) {
+    return { success: false, error: 'Hay cruces finales en curso o finalizados; no se pueden reemplazar automáticamente.' };
+  }
+  const legacyMatchIds = legacyFinals.flatMap((day) => (day.matches || []).map((match) => match.id));
+  if (legacyMatchIds.length) {
+    const { count, error } = await supabase.from('match_events').select('id', { count: 'exact', head: true }).in('match_id', legacyMatchIds);
+    if (error || count) return { success: false, error: 'Los cruces actuales tienen eventos; requieren revisión antes de reemplazarlos.' };
+  }
+
+  const createdDayIds: string[] = [];
+  try {
+    for (const round of approvedRounds) {
+      const { data: day, error: dayError } = await supabase.from('matchdays').insert({ category_id: categoryId, round_number: round.roundNumber, scheduled_date: round.scheduledDate, is_open: true }).select('id').single();
+      if (dayError || !day) throw new Error(`No se pudo crear la jornada ${round.roundNumber - 100}.`);
+      createdDayIds.push(day.id);
+      const { error: matchError } = await supabase.from('matches').insert(round.matches.map((match) => ({
+        matchday_id: day.id, home_team_id: match.homeTeamId, away_team_id: match.awayTeamId,
+        scheduled_time: match.scheduledTime, venue: match.venue, group_name: match.groupName,
+        leg: round.roundNumber <= 103 ? 1 : 2, status: 'SCHEDULED', match_type: 'GROUP',
+      })));
+      if (matchError) throw new Error(`No se pudieron crear los partidos de la jornada ${round.roundNumber - 100}.`);
+    }
+    for (const day of legacyFinals) {
+      const { error: matchDeleteError } = await supabase.from('matches').delete().eq('matchday_id', day.id);
+      if (matchDeleteError) throw new Error('No se pudieron retirar los cruces finales prematuros.');
+      const { error } = await supabase.from('matchdays').delete().eq('id', day.id);
+      if (error) throw new Error('No se pudieron retirar los cruces finales prematuros.');
+    }
+  } catch (error) {
+    if (createdDayIds.length) {
+      await supabase.from('matches').delete().in('matchday_id', createdDayIds);
+      await supabase.from('matchdays').delete().in('id', createdDayIds);
+    }
+    return { success: false, error: error instanceof Error ? error.message : 'No se pudo crear la fase de grupos.' };
+  }
+  await logAuditEvent({ action: 'admin.loyola.groups_created', actorType: 'client', clientId: await getClientIdBySlug(slug), targetType: 'category', targetId: categoryId, metadata: { slug, rounds: approvedRounds.map((round) => round.roundNumber), matches: 24, replacedPrematureFinals: legacyMatchIds.length } });
+  return { success: true, insertedMatches: 24 };
+}
+
+export async function createLoyolaSemifinals(slug: string, categoryId: string): Promise<FixtureCreateResult> {
+  if (!(await hasAdminSession(slug)) || !(await categoryBelongsToClientSlug(categoryId, slug))) return { success: false, error: 'Acceso no autorizado.' };
+  const supabase = createServerSupabaseAdminClient();
+  const { data: category, error: categoryError } = await supabase.from('categories')
+    .select('tournaments(tournament_format, fair_play_enabled, fp_starting_points), sports(name)')
+    .eq('id', categoryId).maybeSingle();
+  const tournament = Array.isArray(category?.tournaments) ? category.tournaments[0] : category?.tournaments;
+  const sport = Array.isArray(category?.sports) ? category.sports[0] : category?.sports;
+  if (categoryError || tournament?.tournament_format !== 'LOYOLA') return { success: false, error: 'La categoría no corresponde a Loyola.' };
+  const { data: days, error: daysError } = await supabase.from('matchdays').select('id, round_number')
+    .eq('category_id', categoryId).gte('round_number', 100);
+  if (daysError || !days) return { success: false, error: 'No se pudieron revisar las jornadas.' };
+  if (days.some((day) => day.round_number === 100 || day.round_number >= 201)) return { success: false, error: 'La fase final ya fue creada.' };
+  const groupDays = days.filter((day) => day.round_number >= 101 && day.round_number <= 106);
+  if (groupDays.length !== 6 || new Set(groupDays.map((day) => day.round_number)).size !== 6) return { success: false, error: 'Primero deben existir las seis jornadas de grupos.' };
+  const { data: matches, error: matchesError } = await supabase.from('matches')
+    .select('home_team_id, away_team_id, home_score, away_score, home_sets, away_sets, status, group_name')
+    .in('matchday_id', groupDays.map((day) => day.id));
+  if (matchesError || !matches || matches.length !== 24 || matches.some((match) => match.status !== 'FINISHED')) {
+    return { success: false, error: 'Finaliza los 24 partidos de grupos antes de crear las semifinales.' };
+  }
+  const { data: teams, error: teamsError } = await supabase.from('teams')
+    .select('id, group_name, fair_play_points').eq('category_id', categoryId);
+  if (teamsError || !teams) return { success: false, error: 'No se pudieron cargar los equipos.' };
+  const ranked: Record<string, Array<{ id: string }>> = {};
+  try {
+    for (const group of ['A', 'B']) {
+      const groupTeams = teams.filter((team) => team.group_name === group);
+      const groupMatches = matches.filter((match) => match.group_name === group);
+      if (groupTeams.length !== 4 || groupMatches.length !== 12) throw new Error('Cada grupo debe tener cuatro equipos y doce partidos.');
+      ranked[group] = rankLoyolaTeams(groupTeams, groupMatches, sport?.name, Boolean(tournament.fair_play_enabled), Number(tournament.fp_starting_points || 0));
+    }
+  } catch (error) { return { success: false, error: error instanceof Error ? error.message : 'No se pudieron calcular las posiciones.' }; }
+  const { data: day, error: dayError } = await supabase.from('matchdays').insert({ category_id: categoryId, round_number: 201, scheduled_date: null, is_open: true }).select('id').single();
+  if (dayError || !day) return { success: false, error: 'No se pudo crear la jornada de semifinales.' };
+  const { error: insertError } = await supabase.from('matches').insert([
+    { matchday_id: day.id, home_team_id: ranked.A[0].id, away_team_id: ranked.B[1].id, status: 'SCHEDULED', match_type: 'SEMIFINAL' },
+    { matchday_id: day.id, home_team_id: ranked.B[0].id, away_team_id: ranked.A[1].id, status: 'SCHEDULED', match_type: 'SEMIFINAL' },
+  ]);
+  if (insertError) { await supabase.from('matchdays').delete().eq('id', day.id); return { success: false, error: 'No se pudieron crear los cruces de semifinales.' }; }
+  await logAuditEvent({ action: 'admin.loyola.semifinals_created', actorType: 'client', clientId: await getClientIdBySlug(slug), targetType: 'category', targetId: categoryId, metadata: { slug, pairings: [[ranked.A[0].id, ranked.B[1].id], [ranked.B[0].id, ranked.A[1].id]] } });
+  return { success: true, insertedMatches: 2 };
+}
+
 export async function createCategoryFixture(
   slug: string,
   categoryId: string,
@@ -511,6 +623,11 @@ export async function createCategoryFixture(
   }
 
   const supabase = createServerSupabaseAdminClient();
+  const { data: fixtureCategory } = await supabase.from('categories').select('tournaments(tournament_format)').eq('id', categoryId).maybeSingle();
+  const fixtureTournament = Array.isArray(fixtureCategory?.tournaments) ? fixtureCategory.tournaments[0] : fixtureCategory?.tournaments;
+  if (fixtureTournament?.tournament_format === 'LOYOLA' && cleanRounds.some((round) => round.roundNumber >= 100)) {
+    return { success: false, error: 'Las fases de grupos y finales de Loyola se crean con sus controles específicos.' };
+  }
   const { data: categoryTeams, error: teamsError } = await supabase
     .from('teams')
     .select('id')
@@ -527,39 +644,6 @@ export async function createCategoryFixture(
         return { success: false, error: 'Uno o más equipos no pertenecen a esta categoría.' };
       }
     }
-  }
-
-  if (cleanRounds.some((round) => round.roundNumber >= 100)) {
-    try {
-      const eligibility = await getLoyolaQualifiers(supabase, categoryId);
-      if (eligibility) {
-        const qualified = new Set(eligibility.qualifiedIds);
-        if (cleanRounds.some((round) => round.roundNumber >= 100 && round.matches.some((match) =>
-          !qualified.has(match.homeTeamId) || (match.awayTeamId && !qualified.has(match.awayTeamId))))) {
-          return { success: false, error: 'Un equipo eliminado no puede participar en los cruces finales.' };
-        }
-        const semifinals = cleanRounds.filter((round) => round.roundNumber === 100).flatMap((round) => round.matches);
-        if (semifinals.length) {
-          const { count: preparedCount, error: preparedError } = await supabase.from('audit_logs').select('id', { count: 'exact', head: true })
-            .eq('client_id', await getClientIdBySlug(slug)).eq('target_type', 'category').eq('target_id', categoryId)
-            .eq('action', 'admin.loyola.draw_prepared');
-          if (preparedError || !preparedCount) return { success: false, error: 'Prepara y registra primero el sorteo manual de los grupos.' };
-          const { data: assigned, error: assignedError } = await supabase.from('teams').select('id, group_name').eq('category_id', categoryId);
-          if (assignedError || !assigned) return { success: false, error: 'No se pudieron validar los grupos sorteados.' };
-          const byId = new Map(assigned.map((team) => [team.id, team.group_name]));
-          const groupA = eligibility.qualifiedIds.filter((id) => byId.get(id) === 'A');
-          const groupB = eligibility.qualifiedIds.filter((id) => byId.get(id) === 'B');
-          if (groupA.length !== 4 || groupB.length !== 4 || semifinals.length !== 2) {
-            return { success: false, error: 'Se requieren dos grupos de cuatro para crear las semifinales.' };
-          }
-          const pair = (first: string, second: string) => [first, second].sort().join(':');
-          const expected = new Set([pair(groupA[0], groupB[1]), pair(groupB[0], groupA[1])]);
-          if (semifinals.some((match) => !match.awayTeamId || !expected.delete(pair(match.homeTeamId, match.awayTeamId))) || expected.size) {
-            return { success: false, error: 'Los cruces deben ser 1.º A contra 2.º B y 1.º B contra 2.º A.' };
-          }
-        }
-      }
-    } catch (error) { return { success: false, error: error instanceof Error ? error.message : 'No se pudo verificar la clasificación.' }; }
   }
 
   let insertedMatches = 0;

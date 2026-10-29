@@ -1,0 +1,62 @@
+[
+  {
+    "round": 101,
+    "date": "2026-10-31",
+    "matches": [
+      { "group": "A", "home": "NIUPI", "away": "ARSENAL", "time": "16:00", "venue": "Cancha 1" },
+      { "group": "A", "home": "GALÁCTICOS", "away": "LA BANDA", "time": "16:00", "venue": "Cancha 2" },
+      { "group": "B", "home": "SPORTING SAN JOSÉ", "away": "TIBURONES", "time": "14:30", "venue": "Cancha 1" },
+      { "group": "B", "home": "TERCER TIEMPO", "away": "SAN JOSÉ UNITED", "time": "14:30", "venue": "Cancha 2" }
+    ]
+  },
+  {
+    "round": 102,
+    "date": "2026-11-07",
+    "matches": [
+      { "group": "A", "home": "ARSENAL", "away": "GALÁCTICOS", "time": "14:30", "venue": "Cancha 1" },
+      { "group": "A", "home": "LA BANDA", "away": "NIUPI", "time": "14:30", "venue": "Cancha 2" },
+      { "group": "B", "home": "TIBURONES", "away": "TERCER TIEMPO", "time": "16:00", "venue": "Cancha 1" },
+      { "group": "B", "home": "SAN JOSÉ UNITED", "away": "SPORTING SAN JOSÉ", "time": "16:00", "venue": "Cancha 2" }
+    ]
+  },
+  {
+    "round": 103,
+    "date": "2026-11-14",
+    "matches": [
+      { "group": "A", "home": "NIUPI", "away": "GALÁCTICOS", "time": "16:00", "venue": "Cancha 1" },
+      { "group": "A", "home": "ARSENAL", "away": "LA BANDA", "time": "16:00", "venue": "Cancha 2" },
+      { "group": "B", "home": "SPORTING SAN JOSÉ", "away": "TERCER TIEMPO", "time": "14:30", "venue": "Cancha 1" },
+      { "group": "B", "home": "TIBURONES", "away": "SAN JOSÉ UNITED", "time": "14:30", "venue": "Cancha 2" }
+    ]
+  },
+  {
+    "round": 104,
+    "date": "2026-11-22",
+    "matches": [
+      { "group": "A", "home": "LA BANDA", "away": "ARSENAL", "time": "09:30", "venue": "Cancha 1" },
+      { "group": "A", "home": "GALÁCTICOS", "away": "NIUPI", "time": "09:30", "venue": "Cancha 2" },
+      { "group": "B", "home": "SAN JOSÉ UNITED", "away": "TIBURONES", "time": "08:00", "venue": "Cancha 1" },
+      { "group": "B", "home": "TERCER TIEMPO", "away": "SPORTING SAN JOSÉ", "time": "08:00", "venue": "Cancha 2" }
+    ]
+  },
+  {
+    "round": 105,
+    "date": "2026-11-28",
+    "matches": [
+      { "group": "A", "home": "NIUPI", "away": "LA BANDA", "time": "14:00", "venue": "Cancha 1" },
+      { "group": "A", "home": "GALÁCTICOS", "away": "ARSENAL", "time": "14:00", "venue": "Cancha 2" },
+      { "group": "B", "home": "SPORTING SAN JOSÉ", "away": "SAN JOSÉ UNITED", "time": "15:30", "venue": "Cancha 1" },
+      { "group": "B", "home": "TERCER TIEMPO", "away": "TIBURONES", "time": "15:30", "venue": "Cancha 2" }
+    ]
+  },
+  {
+    "round": 106,
+    "date": "2026-12-05",
+    "matches": [
+      { "group": "A", "home": "LA BANDA", "away": "GALÁCTICOS", "time": "16:00", "venue": "Cancha 1" },
+      { "group": "A", "home": "ARSENAL", "away": "NIUPI", "time": "16:00", "venue": "Cancha 2" },
+      { "group": "B", "home": "SAN JOSÉ UNITED", "away": "TERCER TIEMPO", "time": "14:30", "venue": "Cancha 1" },
+      { "group": "B", "home": "TIBURONES", "away": "SPORTING SAN JOSÉ", "time": "14:30", "venue": "Cancha 2" }
+    ]
+  }
+]

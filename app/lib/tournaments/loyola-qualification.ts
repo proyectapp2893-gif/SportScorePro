@@ -11,14 +11,13 @@ type RegularMatch = {
   status: string;
 };
 
-export function selectLoyolaQualifiers(
+export function rankLoyolaTeams(
   teams: RegularTeam[],
   matches: RegularMatch[],
   sportName: string | null | undefined,
   fairPlayEnabled: boolean,
   fairPlayStartingPoints: number,
 ) {
-  if (teams.length < 8) throw new Error('El sorteo Loyola requiere al menos ocho equipos.');
   if (!matches.length || matches.some((match) => match.status !== 'FINISHED' && match.status !== 'BYE')) {
     throw new Error('Finaliza todos los partidos de la fase regular antes de sortear grupos.');
   }
@@ -41,6 +40,17 @@ export function selectLoyolaQualifiers(
     if (score.away > score.home) away.won++;
   }
   if ([...stats.values()].some((team) => team.played === 0)) throw new Error('Todos los equipos deben haber jugado en la fase regular.');
-  const ranked = [...stats.values()].sort((a, b) => compareTeamsForStandings(a, b, rules, fairPlayEnabled, fairPlayStartingPoints));
+  return [...stats.values()].sort((a, b) => compareTeamsForStandings(a, b, rules, fairPlayEnabled, fairPlayStartingPoints));
+}
+
+export function selectLoyolaQualifiers(
+  teams: RegularTeam[],
+  matches: RegularMatch[],
+  sportName: string | null | undefined,
+  fairPlayEnabled: boolean,
+  fairPlayStartingPoints: number,
+) {
+  if (teams.length < 8) throw new Error('El sorteo Loyola requiere al menos ocho equipos.');
+  const ranked = rankLoyolaTeams(teams, matches, sportName, fairPlayEnabled, fairPlayStartingPoints);
   return { qualifiedIds: ranked.slice(0, 8).map((team) => team.id), eliminatedIds: ranked.slice(8).map((team) => team.id) };
 }
