@@ -4,8 +4,9 @@ import { hasAdminSession } from '@/app/lib/auth';
 import { logAuditEvent } from '@/app/lib/audit';
 import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import { categoryBelongsToClientSlug, getClientIdBySlug, teamBelongsToClientSlug } from '@/app/lib/tenant';
-import { rankLoyolaTeams, selectLoyolaQualifiers } from '@/app/lib/tournaments/loyola-qualification';
+import { selectLoyolaQualifiers } from '@/app/lib/tournaments/loyola-qualification';
 import { buildLoyolaGroupFixture } from '@/app/lib/tournaments/loyola-group-fixture';
+import { calculateLoyolaGroupStandings } from '@/app/lib/tournaments/loyola-phase-standings';
 
 type FixtureActionResult =
   | { success: true }
@@ -53,7 +54,7 @@ export async function getAdminFixtureCategories(slug: string) {
   if (!clientId) return { success: false as const, error: 'No se encontró el cliente.' };
   const supabase = createServerSupabaseAdminClient();
   const { data, error } = await supabase.from('categories')
-    .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates, fixture_visible_to_public, tournament_format, fair_play_enabled, fp_starting_points), sports(name)')
+    .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates, fixture_visible_to_public, tournament_format, fair_play_enabled, fp_starting_points, fp_yellow_deduction, fp_red_deduction), sports(name)')
     .eq('tournaments.client_id', clientId).order('name');
   if (error) return { success: false as const, error: 'No se pudieron cargar las categorías.' };
   return { success: true as const, clientId, categories: data || [] };
@@ -67,14 +68,22 @@ export async function getAdminCategoryFixture(slug: string, categoryId: string) 
   const [{ data: teams, error: teamsError }, { data: matches, error: matchesError }] = await Promise.all([
     supabase.from('teams').select('*').eq('category_id', categoryId).order('name'),
     supabase.from('matches').select(`
-      id, status, home_score, away_score, home_sets, away_sets, scheduled_time, venue, home_team_id, away_team_id,
+      id, status, home_score, away_score, home_sets, away_sets, scheduled_time, venue, home_team_id, away_team_id, group_name,
       home_team:teams!home_team_id(id, name, schools(logo_url)),
       away_team:teams!away_team_id(id, name, schools(logo_url)),
       matchdays!inner(id, category_id, round_number, scheduled_date)
     `).eq('matchdays.category_id', categoryId).order('scheduled_time', { ascending: true }),
   ]);
   if (teamsError || matchesError) return { success: false as const, error: 'No se pudo cargar el fixture de administración.' };
-  return { success: true as const, teams: teams || [], matches: matches || [] };
+  const groupMatchIds = (matches || []).filter((match) => {
+    const round = Number((match.matchdays as unknown as { round_number: number } | null)?.round_number || 0);
+    return round >= 101 && round <= 106;
+  }).map((match) => match.id);
+  const { data: cards, error: cardsError } = groupMatchIds.length
+    ? await supabase.from('match_events').select('match_id, team_id, event_type, player_id, created_at, period, match_second, minute_record').in('match_id', groupMatchIds).in('event_type', ['YELLOW', 'RED'])
+    : { data: [], error: null };
+  if (cardsError) return { success: false as const, error: 'No se pudo cargar el Fair Play de los grupos.' };
+  return { success: true as const, teams: teams || [], matches: matches || [], cards: cards || [] };
 }
 
 export async function updateTournamentFixtureVisibility(slug: string, categoryId: string, visible: boolean): Promise<FixtureActionResult> {
@@ -234,8 +243,17 @@ async function getLoyolaQualifiers(supabase: ReturnType<typeof createServerSupab
   if (tournament?.tournament_format !== 'LOYOLA') return null;
 
   const { data: teams, error: teamsError } = await supabase.from('teams')
-    .select('id, fair_play_points').eq('category_id', categoryId);
+    .select('id, fair_play_points, group_name').eq('category_id', categoryId);
   if (teamsError || !teams) throw new Error('No se pudieron cargar los equipos.');
+
+  const { count: groupRoundCount, error: groupRoundError } = await supabase.from('matchdays')
+    .select('id', { count: 'exact', head: true }).eq('category_id', categoryId).gte('round_number', 101).lte('round_number', 106);
+  if (groupRoundError) throw new Error('No se pudo verificar la fase de grupos.');
+  if (groupRoundCount) {
+    const qualifiedIds = teams.filter((team) => team.group_name === 'A' || team.group_name === 'B').map((team) => team.id);
+    if (qualifiedIds.length !== 8) throw new Error('Los grupos creados no conservan a los ocho clasificados.');
+    return { qualifiedIds, eliminatedIds: teams.filter((team) => !qualifiedIds.includes(team.id)).map((team) => team.id) };
+  }
 
   const { data: matchdays, error: daysError } = await supabase.from('matchdays')
     .select('id').eq('category_id', categoryId).lt('round_number', 100);
@@ -557,7 +575,7 @@ export async function createLoyolaSemifinals(slug: string, categoryId: string): 
   if (!(await hasAdminSession(slug)) || !(await categoryBelongsToClientSlug(categoryId, slug))) return { success: false, error: 'Acceso no autorizado.' };
   const supabase = createServerSupabaseAdminClient();
   const { data: category, error: categoryError } = await supabase.from('categories')
-    .select('tournaments(tournament_format, fair_play_enabled, fp_starting_points), sports(name)')
+    .select('tournaments(tournament_format, fair_play_enabled, fp_starting_points, fp_yellow_deduction, fp_red_deduction), sports(name)')
     .eq('id', categoryId).maybeSingle();
   const tournament = Array.isArray(category?.tournaments) ? category.tournaments[0] : category?.tournaments;
   const sport = Array.isArray(category?.sports) ? category.sports[0] : category?.sports;
@@ -569,23 +587,29 @@ export async function createLoyolaSemifinals(slug: string, categoryId: string): 
   const groupDays = days.filter((day) => day.round_number >= 101 && day.round_number <= 106);
   if (groupDays.length !== 6 || new Set(groupDays.map((day) => day.round_number)).size !== 6) return { success: false, error: 'Primero deben existir las seis jornadas de grupos.' };
   const { data: matches, error: matchesError } = await supabase.from('matches')
-    .select('home_team_id, away_team_id, home_score, away_score, home_sets, away_sets, status, group_name')
+    .select('id, matchday_id, home_team_id, away_team_id, home_score, away_score, home_sets, away_sets, status, group_name')
     .in('matchday_id', groupDays.map((day) => day.id));
   if (matchesError || !matches || matches.length !== 24 || matches.some((match) => match.status !== 'FINISHED')) {
     return { success: false, error: 'Finaliza los 24 partidos de grupos antes de crear las semifinales.' };
   }
   const { data: teams, error: teamsError } = await supabase.from('teams')
-    .select('id, group_name, fair_play_points').eq('category_id', categoryId);
+    .select('id, name, group_name, fair_play_points').eq('category_id', categoryId);
   if (teamsError || !teams) return { success: false, error: 'No se pudieron cargar los equipos.' };
-  const ranked: Record<string, Array<{ id: string }>> = {};
-  try {
-    for (const group of ['A', 'B']) {
-      const groupTeams = teams.filter((team) => team.group_name === group);
-      const groupMatches = matches.filter((match) => match.group_name === group);
-      if (groupTeams.length !== 4 || groupMatches.length !== 12) throw new Error('Cada grupo debe tener cuatro equipos y doce partidos.');
-      ranked[group] = rankLoyolaTeams(groupTeams, groupMatches, sport?.name, Boolean(tournament.fair_play_enabled), Number(tournament.fp_starting_points || 0));
-    }
-  } catch (error) { return { success: false, error: error instanceof Error ? error.message : 'No se pudieron calcular las posiciones.' }; }
+  if (['A', 'B'].some((group) => teams.filter((team) => team.group_name === group).length !== 4 || matches.filter((match) => match.group_name === group).length !== 12)) {
+    return { success: false, error: 'Cada grupo debe tener cuatro equipos y doce partidos.' };
+  }
+  const teamGroups = new Map(teams.map((team) => [team.id, team.group_name]));
+  if (matches.some((match) => teamGroups.get(match.home_team_id) !== match.group_name || teamGroups.get(match.away_team_id || '') !== match.group_name)) {
+    return { success: false, error: 'Los partidos de grupos contienen un equipo mal asignado.' };
+  }
+  const { data: cards, error: cardsError } = await supabase.from('match_events').select('match_id, team_id, event_type, player_id, created_at, period, match_second, minute_record')
+    .in('match_id', matches.map((match) => match.id)).in('event_type', ['YELLOW', 'RED']);
+  if (cardsError) return { success: false, error: 'No se pudo calcular el Fair Play de grupos.' };
+  const roundByDay = new Map(groupDays.map((day) => [day.id, day.round_number]));
+  const ranked = calculateLoyolaGroupStandings(teams, matches.map((match) => ({ ...match, round_number: roundByDay.get(match.matchday_id) || 0 })), cards || [], sport?.name, {
+    fairPlayEnabled: Boolean(tournament.fair_play_enabled), startingPoints: Number(tournament.fp_starting_points ?? 0),
+    yellowDeduction: Number(tournament.fp_yellow_deduction ?? 100), redDeduction: Number(tournament.fp_red_deduction ?? 300),
+  });
   const { data: day, error: dayError } = await supabase.from('matchdays').insert({ category_id: categoryId, round_number: 201, scheduled_date: null, is_open: true }).select('id').single();
   if (dayError || !day) return { success: false, error: 'No se pudo crear la jornada de semifinales.' };
   const { error: insertError } = await supabase.from('matches').insert([

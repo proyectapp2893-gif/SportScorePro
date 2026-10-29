@@ -9,6 +9,7 @@ import { useSearchParams, useRouter, useParams } from 'next/navigation';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 'react-icons/fa';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '../../../lib/sports/rules';
 import { normalizeAsOfDate } from '@/app/lib/date-filter';
+import { calculateLoyolaGroupStandings } from '@/app/lib/tournaments/loyola-phase-standings';
 
 function FaseFinalContent() {
   const searchParams = useSearchParams();
@@ -38,7 +39,7 @@ function FaseFinalContent() {
         setClientId(client.id);
         const { data: catData } = await supabase
           .from('categories')
-          .select('*, tournaments!inner(client_id, name, tournament_format, fair_play_enabled, fp_starting_points), sports(name)')
+          .select('*, tournaments!inner(client_id, name, tournament_format, fair_play_enabled, fp_starting_points, fp_yellow_deduction, fp_red_deduction), sports(name)')
           .eq('tournaments.client_id', client.id)
           .order('name');
           
@@ -85,7 +86,7 @@ function FaseFinalContent() {
       let finishedMatchesQuery = supabase
         .from('matches')
         .select(`
-          home_score, away_score, home_sets, away_sets, status,
+          id, home_team_id, away_team_id, home_score, away_score, home_sets, away_sets, status,
           home_team:teams!home_team_id(id),
           away_team:teams!away_team_id(id),
           matchdays!inner(category_id, scheduled_date, round_number)
@@ -98,7 +99,26 @@ function FaseFinalContent() {
       const groupMatches = (finishedMatches || []).filter((match: any) => match.matchdays?.round_number >= 101 && match.matchdays?.round_number <= 106);
       const groupsComplete = groupMatches.length === 24 && groupMatches.every((match: any) => match.status === 'FINISHED');
       setLoyolaGroupsComplete(groupsComplete);
-      (finishedMatches || []).filter((match: any) => match.status === 'FINISHED' && (tournament?.tournament_format !== 'LOYOLA' || (groupsComplete && match.matchdays?.round_number >= 101 && match.matchdays?.round_number <= 106))).forEach((match: any) => {
+      if (tournament?.tournament_format === 'LOYOLA') {
+        if (groupsComplete) {
+          const { data: cards, error: cardsError } = await supabase.from('match_events').select('match_id, team_id, event_type, player_id, created_at, period, match_second, minute_record')
+            .in('match_id', groupMatches.map((match: any) => match.id)).in('event_type', ['YELLOW', 'RED']);
+          if (!cardsError) {
+            const standings = calculateLoyolaGroupStandings(teamsData, groupMatches.map((match: any) => ({
+              id: match.id, round_number: Number(match.matchdays?.round_number || 0), status: match.status,
+              home_team_id: match.home_team_id, away_team_id: match.away_team_id,
+              home_score: match.home_score, away_score: match.away_score, home_sets: match.home_sets, away_sets: match.away_sets,
+            })), cards || [], selectedSport, {
+              fairPlayEnabled: Boolean(tournament.fair_play_enabled), startingPoints: Number(tournament.fp_starting_points ?? 0),
+              yellowDeduction: Number(tournament.fp_yellow_deduction ?? 100), redDeduction: Number(tournament.fp_red_deduction ?? 300),
+            });
+            setTeams([...standings.A, ...standings.B]);
+          } else { setLoyolaGroupsComplete(false); setTeams(teamsData); }
+        } else setTeams(teamsData);
+        setLoading(false);
+        return;
+      }
+      (finishedMatches || []).filter((match: any) => match.status === 'FINISHED').forEach((match: any) => {
         const homeId = match.home_team?.id;
         const awayId = match.away_team?.id;
         if (!homeId || !awayId || !teamStats[homeId] || !teamStats[awayId]) return;

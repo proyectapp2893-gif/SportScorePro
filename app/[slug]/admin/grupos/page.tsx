@@ -17,6 +17,7 @@ import { DEMO_SLUG } from '@/app/lib/demo/config';
 import { createDemoFixture, deleteDemoFixture, randomizeDemoGroups, scheduleDemoFixture, setDemoFixtureVisibility, setDemoPublicFixtureVisibility, updateDemoMatch, updateDemoTeamGroup } from '@/app/lib/demo/actions';
 import { analyzeFixture } from '@/app/lib/fixture/intelligence';
 import { getFixtureWorkflowState } from '@/app/lib/fixture/workflow';
+import { calculateLoyolaGroupStandings, type LoyolaCardEvent } from '@/app/lib/tournaments/loyola-phase-standings';
 
 type ParsedFixtureMatch = {
   round_number: number;
@@ -56,6 +57,7 @@ function FixtureContent() {
   
   const [teams, setTeams] = useState<any[]>([]);
   const [matches, setMatches] = useState<any[]>([]);
+  const [phaseCards, setPhaseCards] = useState<LoyolaCardEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [reorganizing, setReorganizing] = useState(false);
   const [fixturePdfPreview, setFixturePdfPreview] = useState<{ url: string; filename: string } | null>(null);
@@ -103,7 +105,7 @@ function FixtureContent() {
         setClientId(client.id);
         const categoriesQuery = () => supabase
           .from('categories')
-          .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates, fixture_visible_to_public, tournament_format, fair_play_enabled, fp_starting_points), sports(name)')
+          .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates, fixture_visible_to_public, tournament_format, fair_play_enabled, fp_starting_points, fp_yellow_deduction, fp_red_deduction), sports(name)')
           .eq('tournaments.client_id', client.id)
           .order('name');
         let { data: catData, error: categoriesError } = await categoriesQuery();
@@ -114,7 +116,7 @@ function FixtureContent() {
         if (categoriesError && /fixture_visible_to_public|column .* does not exist/i.test(categoriesError.message || '')) {
           const legacy = await supabase
             .from('categories')
-            .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates, tournament_format, fair_play_enabled, fp_starting_points), sports(name)')
+            .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates, tournament_format, fair_play_enabled, fp_starting_points, fp_yellow_deduction, fp_red_deduction), sports(name)')
             .eq('tournaments.client_id', client.id)
             .order('name');
           catData = (legacy.data || []).map((category: any) => ({
@@ -167,6 +169,7 @@ function FixtureContent() {
     } else {
       setTeams([]);
       setMatches([]);
+      setPhaseCards([]);
       setAvailableRounds([]);
     }
   }, [selectedCategory]);
@@ -205,12 +208,14 @@ function FixtureContent() {
         toast.error(result.error);
         setTeams([]);
         setMatches([]);
+        setPhaseCards([]);
         setAvailableRounds([]);
         setLoading(false);
         return;
       }
       teamsData = result.teams;
       matchesData = result.matches;
+      setPhaseCards(result.cards);
     }
     
     if (matchesData) {
@@ -925,6 +930,15 @@ function FixtureContent() {
     const date = match.matchdays?.scheduled_date;
     if (Number.isFinite(round) && date && !roundDates.has(round)) roundDates.set(round, String(date));
   }
+  const loyolaGroupStandings = isLoyolaDraw && loyolaGroupRounds.length > 0
+    ? calculateLoyolaGroupStandings(teams, matches.map((match) => ({
+      id: match.id, round_number: Number(match.matchdays?.round_number || 0), status: match.status,
+      home_team_id: match.home_team_id, away_team_id: match.away_team_id,
+      home_score: match.home_score, away_score: match.away_score, home_sets: match.home_sets, away_sets: match.away_sets,
+    })), phaseCards, selectedSport, {
+      fairPlayEnabled: Boolean(selectedTournament?.fair_play_enabled), startingPoints: Number(selectedTournament?.fp_starting_points ?? 0),
+      yellowDeduction: Number(selectedTournament?.fp_yellow_deduction ?? 100), redDeduction: Number(selectedTournament?.fp_red_deduction ?? 300),
+    }) : null;
   const hasFaseFinal = availableRounds.includes(100) || availableRounds.some((round) => round >= 201);
   const loyolaStageStarted = loyolaGroupRounds.length > 0 || hasFaseFinal;
   const oddTeamGroups = Object.entries(teams.reduce((groups: Record<string, any[]>, team) => {
@@ -1485,6 +1499,12 @@ function FixtureContent() {
                     </button>
                   ))}
                 </div>
+
+                {activePhase === 2 && loyolaGroupStandings && <section className="border-b border-slate-100 bg-slate-50/60 p-4 sm:p-6" aria-label="Tablas de posiciones de la Fase 2">
+                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-900">Posiciones · Fase 2</h3>
+                  <p className="mt-1 text-[10px] font-bold text-slate-500">Cada grupo inicia con estadísticas en cero y el Fair Play completo. Solo cuentan sus partidos y tarjetas de esta fase.</p>
+                  <div className="mt-4 grid gap-4 xl:grid-cols-2">{(['A', 'B'] as const).map((group) => <div key={group} className="overflow-hidden rounded-2xl border border-slate-200 bg-white"><h4 className="border-b border-slate-100 px-4 py-3 text-xs font-black uppercase text-blue-700">Grupo {group}</h4><div className="overflow-x-auto"><table className="w-full min-w-[570px] text-center text-[10px]"><thead className="bg-slate-50 text-[9px] font-black uppercase text-slate-500"><tr><th className="px-2 py-2">#</th><th className="px-2 py-2 text-left">Equipo</th><th>PJ</th><th>PG</th><th>PE</th><th>PP</th><th>GF</th><th>GC</th><th>DG</th><th>FP</th><th>PTS</th></tr></thead><tbody>{loyolaGroupStandings[group].map((team, index) => <tr key={team.id} className="border-t border-slate-100"><td className="px-2 py-2 font-black">{index + 1}</td><td className="px-2 py-2 text-left font-bold">{team.name}</td><td>{team.played}</td><td>{team.won}</td><td>{team.drawn}</td><td>{team.lost}</td><td>{team.goals_for}</td><td>{team.goals_against}</td><td>{team.goals_for - team.goals_against}</td><td className="text-blue-700">{team.fair_play_points}</td><td className="font-black text-slate-950">{team.points}</td></tr>)}</tbody></table></div></div>)}</div>
+                </section>}
 
                 <div className="divide-y divide-slate-100 flex-1">
                   {matchesToShow.length === 0 ? (

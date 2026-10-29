@@ -6,7 +6,7 @@ import { getSportRules, isBasketballSport, isSetBasedSport, isSoccerSport } from
 // ============================================================================
 // 1. RENDER DE LA TABLA GENERAL (POSICIONES) - GRILLA BLINDADA
 // ============================================================================
-export const renderPosiciones = (sportName: string, teams: any[], activeTournament: any) => {
+export const renderPosiciones = (sportName: string, teams: any[], activeTournament: any, title = 'Clasificación General') => {
   const sportRules = getSportRules(sportName);
   const isVolleyball = isSetBasedSport(sportName);
   const isBasketball = isBasketballSport(sportName);
@@ -23,7 +23,7 @@ export const renderPosiciones = (sportName: string, teams: any[], activeTourname
       <div className="p-4 md:p-8 flex items-center gap-3 border-b border-slate-100 relative overflow-hidden">
          <div className="absolute top-0 right-0 w-64 h-64 bg-blue-50 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 opacity-50"></div>
          <Activity className="text-blue-500 relative z-10" size={24} />
-         <h2 className="text-lg md:text-2xl font-black text-slate-800 uppercase tracking-tighter relative z-10">Clasificación General</h2>
+         <h2 className="text-lg md:text-2xl font-black text-slate-800 uppercase tracking-tighter relative z-10">{title}</h2>
       </div>
 
       <div className="overflow-x-auto w-full scrollbar-hide">

@@ -20,6 +20,7 @@ import {
 } from '../../lib/sports/rules';
 import { inferMissingTeamByes } from '@/app/lib/tournaments/byes';
 import { normalizeAsOfDate } from '@/app/lib/date-filter';
+import { calculateLoyolaFairPlayDeductions, calculateLoyolaGroupStandings, type LoyolaCardEvent } from '@/app/lib/tournaments/loyola-phase-standings';
 
 const marqueeStyles = `
   @keyframes marquee {
@@ -65,6 +66,9 @@ export default function ResultadosPublicos() {
   const [matches, setMatches] = useState<any[]>([]);
   const [liveMatches, setLiveMatches] = useState<any[]>([]); 
   const [teams, setTeams] = useState<any[]>([]);
+  const [loyolaStandings, setLoyolaStandings] = useState<ReturnType<typeof calculateLoyolaGroupStandings> | null>(null);
+  const [loyolaStandingsError, setLoyolaStandingsError] = useState(false);
+  const [positionView, setPositionView] = useState<'REGULAR' | 'A' | 'B'>('REGULAR');
   const [scorers, setScorers] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'FIXTURE' | 'POSICIONES' | 'ESTADISTICAS'>('FIXTURE');
 
@@ -192,15 +196,16 @@ export default function ResultadosPublicos() {
 
     try {
     if (activeTournament && activeTournament.fixture_visible_to_public === false) {
-      setMatches([]); setLiveMatches([]); setTeams([]); setScorers([]); setMatchEvents([]); return;
+      setMatches([]); setLiveMatches([]); setTeams([]); setLoyolaStandings(null); setLoyolaStandingsError(false); setScorers([]); setMatchEvents([]); return;
     }
     const activeCat = categories.find(c => c.id === categoryId);
+    const isLoyola = activeTournament?.tournament_format === 'LOYOLA';
     const sportName = activeCat?.sports?.name || '';
     const sportRules = getSportRules(sportName);
     const isFairPlayActive = activeTournament?.fair_play_enabled;
     const fpStartingPoints = activeTournament?.fp_starting_points || 0;
-    const yellowDeduction = activeTournament?.fp_yellow_deduction || 100;
-    const redDeduction = activeTournament?.fp_red_deduction || 300;
+    const yellowDeduction = activeTournament?.fp_yellow_deduction ?? 100;
+    const redDeduction = activeTournament?.fp_red_deduction ?? 300;
     const isFinishedMatch = (match: any) => match.status === 'FINISHED';
     const isPublicStatMatch = (match: any) => match.status === 'LIVE' || match.status === 'FINISHED';
 
@@ -251,23 +256,41 @@ export default function ResultadosPublicos() {
         cardDeductionsByTeam[team.id] = 0;
       });
 
+      let phaseCardEvents: LoyolaCardEvent[] = [];
+      let phaseCardEventsError = false;
       if (isFairPlayActive) {
         let cardEventsQuery = supabase
           .from('match_events')
-          .select('team_id, event_type, matches!inner(status, matchdays!inner(category_id, scheduled_date))')
+          .select('match_id, team_id, event_type, player_id, created_at, period, match_second, minute_record, matches!inner(status, matchdays!inner(category_id, scheduled_date, round_number))')
           .eq('matches.matchdays.category_id', categoryId)
           .in('event_type', ['YELLOW', 'RED']);
         if (asOfDate) cardEventsQuery = cardEventsQuery.lte('matches.matchdays.scheduled_date', asOfDate);
-        const { data: cardEvents } = await cardEventsQuery;
+        const { data: cardEvents, error: cardsError } = await cardEventsQuery;
+        phaseCardEventsError = Boolean(cardsError);
+        phaseCardEvents = (cardEvents || []).map((event: any) => ({
+          match_id: event.match_id, team_id: event.team_id, event_type: event.event_type,
+          player_id: event.player_id, created_at: event.created_at, period: event.period,
+          match_second: event.match_second, minute_record: event.minute_record,
+        }));
 
         (cardEvents || []).forEach((event: any) => {
           const eventMatch = event.matches;
           const countsForPublicStats = isPublicStatMatch(eventMatch);
           if (!countsForPublicStats) return;
+          if (isLoyola && Number(eventMatch?.matchdays?.round_number || 0) >= 100) return;
           if (!event.team_id || typeof cardDeductionsByTeam[event.team_id] !== 'number') return;
           const deduction = event.event_type === 'RED' ? redDeduction : yellowDeduction;
           cardDeductionsByTeam[event.team_id] += deduction;
         });
+        if (isLoyola) {
+          const regularMatches = matchesData.filter((match: any) => Number(match.matchdays?.round_number || 0) < 100).map((match: any) => ({
+            id: match.id, round_number: Number(match.matchdays?.round_number || 0), status: match.status,
+            home_team_id: match.home_team?.id, away_team_id: match.away_team?.id,
+            home_score: match.home_score, away_score: match.away_score,
+          }));
+          const deductions = calculateLoyolaFairPlayDeductions(regularMatches, phaseCardEvents, yellowDeduction, redDeduction);
+          teamsData.forEach((team: any) => { cardDeductionsByTeam[team.id] = deductions.get(team.id) || 0; });
+        }
       }
 
       // a. Diccionario para iniciar todo en 0
@@ -275,12 +298,12 @@ export default function ResultadosPublicos() {
       teamsData.forEach((t: any) => {
         const storedFairPlay = t.fair_play_points ?? fpStartingPoints;
         const calculatedFairPlay = fpStartingPoints - (cardDeductionsByTeam[t.id] || 0);
-        const visibleFairPlay = isFairPlayActive ? Math.min(storedFairPlay, calculatedFairPlay) : storedFairPlay;
+        const visibleFairPlay = isFairPlayActive ? (isLoyola ? calculatedFairPlay : Math.min(storedFairPlay, calculatedFairPlay)) : storedFairPlay;
         teamStats[t.id] = { ...t, fair_play_points: visibleFairPlay, played: 0, won: 0, drawn: 0, lost: 0, goals_for: 0, goals_against: 0, points: 0 };
       });
 
       // b. Solo procesar partidos FINALIZADOS
-      const finishedMatches = matchesData.filter(isFinishedMatch);
+      const finishedMatches = matchesData.filter((match: any) => isFinishedMatch(match) && (!isLoyola || Number(match.matchdays?.round_number || 0) < 100));
       
       finishedMatches.forEach((m: any) => {
         const homeId = m.home_team?.id;
@@ -330,6 +353,16 @@ export default function ResultadosPublicos() {
         compareTeamsForStandings(a, b, sportRules, isFairPlayActive, fpStartingPoints)
       );
       setTeams(sortedTeams);
+      const groupMatches = matchesData.filter((match: any) => Number(match.matchdays?.round_number || 0) >= 101 && Number(match.matchdays?.round_number || 0) <= 106);
+      setLoyolaStandingsError(isLoyola && groupMatches.length > 0 && phaseCardEventsError);
+      setLoyolaStandings(isLoyola && groupMatches.length > 0 && !phaseCardEventsError ? calculateLoyolaGroupStandings(teamsData, matchesData.map((match: any) => ({
+        id: match.id, round_number: Number(match.matchdays?.round_number || 0), status: match.status,
+        home_team_id: match.home_team?.id, away_team_id: match.away_team?.id,
+        home_score: match.home_score, away_score: match.away_score, home_sets: match.home_sets, away_sets: match.away_sets,
+      })), phaseCardEvents, sportName, {
+        fairPlayEnabled: Boolean(isFairPlayActive), startingPoints: Number(fpStartingPoints),
+        yellowDeduction: Number(yellowDeduction), redDeduction: Number(redDeduction),
+      }) : null);
     }
 
     // 3. Obtener Jugadores para Goleadores
@@ -997,9 +1030,14 @@ export default function ResultadosPublicos() {
                   </div>
                 )}
 
-                {activeTab === 'POSICIONES' && selectedCategory && 
-                  renderPosiciones(activeSportName, teams, activeTournament)
-                }
+                {activeTab === 'POSICIONES' && selectedCategory && <div className="space-y-4">
+                  {loyolaStandingsError && <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs font-bold text-amber-800">No se pudo cargar el Fair Play de los grupos. Actualiza la página para consultar la tabla de Fase 2.</p>}
+                  {loyolaStandings && <div className="flex flex-wrap gap-2 rounded-2xl bg-slate-100 p-2" role="tablist" aria-label="Tablas de posiciones de Loyola">
+                    {([['REGULAR', 'Fase 1'], ['A', 'Fase 2 · Grupo A'], ['B', 'Fase 2 · Grupo B']] as const).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={positionView === value} onClick={() => setPositionView(value)} className={`rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-wider ${positionView === value ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:bg-white/70'}`}>{label}</button>)}
+                  </div>}
+                  {loyolaStandings && positionView !== 'REGULAR' && <p className="px-2 text-xs font-bold text-slate-500">La Fase 2 inicia con estadísticas en cero y el Fair Play completo; solo cuentan los partidos y tarjetas de este grupo.</p>}
+                  {renderPosiciones(activeSportName, loyolaStandings && positionView !== 'REGULAR' ? loyolaStandings[positionView] : teams, activeTournament, loyolaStandings ? positionView === 'REGULAR' ? 'Posiciones · Fase 1' : `Posiciones · Fase 2 · Grupo ${positionView}` : 'Clasificación General')}
+                </div>}
 
                 {activeTab === 'ESTADISTICAS' && selectedCategory && 
                   renderEstadisticas(activeSportName, teams, scorers)
