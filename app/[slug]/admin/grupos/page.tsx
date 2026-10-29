@@ -27,6 +27,10 @@ type ParsedFixtureMatch = {
   status: string;
 };
 
+function getFixturePhase(roundNumber: number) {
+  return roundNumber === 100 ? 3 : Math.max(1, Math.floor((roundNumber - 1) / 100) + 1);
+}
+
 function formatTime12Hour(value?: string | null) {
   if (!value) return '--:--';
   const [rawHour, rawMinute = '00'] = String(value).split(':');
@@ -58,6 +62,7 @@ function FixtureContent() {
 
   const [activeRound, setActiveRound] = useState<number>(1);
   const [availableRounds, setAvailableRounds] = useState<number[]>([]);
+  const lastRoundByPhase = useRef<Record<number, number>>({});
 
   const [viewMode, setViewMode] = useState<'FIXTURE' | 'GROUPS'>('FIXTURE');
   const [randomGroupCount, setRandomGroupCount] = useState(2);
@@ -871,9 +876,11 @@ function FixtureContent() {
   };
 
   const getRoundLabels = (roundNumber: number) => {
-    if (roundNumber === 100 || roundNumber >= 201) return { phase: 'Fase 3', round: 'Finales' };
-    if (roundNumber >= 101) return { phase: 'Fase 2', round: `Jornada ${roundNumber - 100}` };
-    return { phase: 'Fase 1', round: `Jornada ${roundNumber}` };
+    const phase = getFixturePhase(roundNumber);
+    if (roundNumber === 100) return { phase: 'Fase 3', round: 'Finales' };
+    if (roundNumber === 201) return { phase: 'Fase 3', round: 'Semifinales' };
+    if (roundNumber === 202) return { phase: 'Fase 3', round: 'Final' };
+    return { phase: `Fase ${phase}`, round: `Jornada ${((roundNumber - 1) % 100) + 1}` };
   };
 
   const inferredByeMatches = inferMissingTeamByes(matches, teams);
@@ -909,6 +916,15 @@ function FixtureContent() {
   const fixtureWorkflow = getFixtureWorkflowState({ hasFixture: matches.length > 0, delegatesVisible: Boolean(selectedTournament?.fixture_visible_to_delegates), publicVisible: Boolean(selectedTournament?.fixture_visible_to_public), publicFlagAvailable: isDemo || selectedTournament?.fixture_visible_to_public !== undefined, analysis: matches.length > 0 ? fixtureAnalysis : null });
 
   const uniqueSports = Array.from(new Set(categories.map(c => c.sports?.name).filter(Boolean)));
+  const fixturePhases = Array.from(new Set(availableRounds.map(getFixturePhase))).sort((a, b) => a - b);
+  const activePhase = getFixturePhase(activeRound);
+  const visiblePhaseRounds = availableRounds.filter((round) => getFixturePhase(round) === activePhase);
+  const roundDates = new Map<number, string>();
+  for (const match of matches) {
+    const round = Number(match.matchdays?.round_number);
+    const date = match.matchdays?.scheduled_date;
+    if (Number.isFinite(round) && date && !roundDates.has(round)) roundDates.set(round, String(date));
+  }
   const hasFaseFinal = availableRounds.includes(100) || availableRounds.some((round) => round >= 201);
   const loyolaStageStarted = loyolaGroupRounds.length > 0 || hasFaseFinal;
   const oddTeamGroups = Object.entries(teams.reduce((groups: Record<string, any[]>, team) => {
@@ -1439,22 +1455,33 @@ function FixtureContent() {
                 </section>
                 {teamsOutsideFixture.length > 0 && <div className="m-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-800 sm:m-6"><div className="flex items-start gap-3"><AlertTriangle className="mt-0.5 shrink-0 text-red-600" size={20} /><div><p className="text-xs font-black uppercase tracking-widest">Fixture desactualizado</p><p className="mt-1 text-[10px] font-bold uppercase leading-relaxed tracking-wider">{teamsOutsideFixture.map((team) => team.name).join(', ')} no participa en ninguna jornada. Este equipo fue agregado después de generar el calendario. Limpia y regenera el fixture para obtener 9 jornadas con descansos rotativos.</p></div></div></div>}
                 
-                <div className="flex overflow-x-auto bg-slate-50 px-4 pt-4 border-b border-slate-100 gap-2 scrollbar-hide">
-                  {availableRounds.map((round) => (
+                <div className="border-b border-slate-100 bg-slate-50 px-4 pt-4 sm:px-6">
+                  <div className="flex flex-wrap gap-2" role="tablist" aria-label="Fases del torneo">
+                    {fixturePhases.map((phase) => {
+                      const phaseRounds = availableRounds.filter((round) => getFixturePhase(round) === phase);
+                      return <button key={phase} type="button" role="tab" aria-selected={activePhase === phase} onClick={() => {
+                        const rememberedRound = lastRoundByPhase.current[phase];
+                        setActiveRound(phaseRounds.includes(rememberedRound) ? rememberedRound : phaseRounds[0]);
+                      }} className={`rounded-t-xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-colors ${activePhase === phase ? 'bg-white text-blue-600 shadow-sm' : 'bg-slate-200 text-slate-500 hover:bg-white hover:text-slate-700'}`}>Fase {phase}<span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[9px] text-slate-500">{phaseRounds.length}</span></button>;
+                    })}
+                  </div>
+                </div>
+                <div className="flex gap-2 overflow-x-auto border-b border-slate-100 bg-white px-4 py-3 scrollbar-hide sm:px-6" role="tablist" aria-label={`Jornadas de la fase ${activePhase}`}>
+                  {visiblePhaseRounds.map((round) => (
                     <button
                       key={round}
-                      onClick={() => setActiveRound(round)}
-                      className={`min-w-[150px] rounded-t-2xl px-6 py-3 font-black uppercase transition-all whitespace-nowrap flex flex-col items-center justify-center gap-1
+                      type="button"
+                      role="tab"
+                      aria-selected={activeRound === round}
+                      onClick={() => { lastRoundByPhase.current[activePhase] = round; setActiveRound(round); }}
+                      className={`min-w-[122px] rounded-xl px-4 py-3 font-black uppercase transition-all whitespace-nowrap flex flex-col items-center justify-center gap-1
                         ${activeRound === round 
-                          ? 'bg-white text-blue-600 border-t-2 border-x border-slate-100 shadow-sm z-10 -mb-[1px]' 
-                          : 'bg-slate-100 text-slate-400 hover:bg-white hover:text-slate-600 border-t border-transparent'}
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'bg-slate-100 text-slate-500 hover:bg-blue-50 hover:text-blue-700'}
                       `}
                     >
-                      <span className="flex items-center gap-2 text-[9px] tracking-[0.25em]">
-                        {(round === 100 || round >= 201) && <GitMerge size={12}/>}
-                        {getRoundLabels(round).phase}
-                      </span>
-                      <span className={`text-[10px] tracking-[0.16em] ${activeRound === round ? 'text-slate-700' : 'text-slate-400'}`}>{getRoundLabels(round).round}</span>
+                      <span className="flex items-center gap-2 text-[10px] tracking-wider">{getRoundLabels(round).round}</span>
+                      <span className={`text-[10px] font-bold normal-case tracking-normal ${activeRound === round ? 'text-blue-100' : 'text-slate-400'}`}>{roundDates.has(round) ? roundDates.get(round)?.split('-').reverse().join('/') : 'Fecha pendiente'}</span>
                     </button>
                   ))}
                 </div>
