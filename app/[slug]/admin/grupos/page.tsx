@@ -7,7 +7,7 @@ import Link from 'next/link';
 import { useSearchParams, useRouter, useParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 'react-icons/fa';
-import { createCategoryFixture, deleteCategoryFixture, getCategoryGroupEligibility, getLoyolaDrawHistory, prepareLoyolaGroupDraw, randomizeCategoryGroups, reorganizeCategoryFixtureTimes, updateFixtureMatch, updateTeamGroup, updateTournamentFixtureVisibility, updateTournamentPublicFixtureVisibility } from './actions';
+import { createCategoryFixture, deleteCategoryFixture, getAdminCategoryFixture, getAdminFixtureCategories, getCategoryGroupEligibility, getLoyolaDrawHistory, prepareLoyolaGroupDraw, randomizeCategoryGroups, reorganizeCategoryFixtureTimes, updateFixtureMatch, updateTeamGroup, updateTournamentFixtureVisibility, updateTournamentPublicFixtureVisibility } from './actions';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '../../../lib/sports/rules';
 import AppSelect from '@/app/components/AppSelect';
 import { advanceRoundRobinSemifinalsTournament, advanceThreeStageTournament, getThreeStageStatus, startRoundRobinSemifinalsTournament, startThreeStageTournament } from './stage-actions';
@@ -85,6 +85,14 @@ function FixtureContent() {
   useEffect(() => {
     async function initializeHub() {
       if (!slug) return;
+      if (!isDemo) {
+        const result = await getAdminFixtureCategories(slug);
+        if (result.success) {
+          setClientId(result.clientId);
+          setCategories(result.categories);
+        } else toast.error(result.error);
+        return;
+      }
       const { data: client } = await supabase.from('clients').select('id').eq('slug', slug).single();
       if (client) {
         setClientId(client.id);
@@ -172,17 +180,33 @@ function FixtureContent() {
 
   async function loadCategoryData() {
     setLoading(true);
-    // Teams and matches are independent reads. Loading them together keeps
-    // the fixture screen from waiting on two sequential network round trips.
-    const [{ data: teamsData }, { data: matchesData }] = await Promise.all([
-      supabase.from('teams').select('*').eq('category_id', selectedCategory).order('name'),
-      supabase.from('matches').select(`
+    let teamsData: any[] | null = null;
+    let matchesData: any[] | null = null;
+    if (isDemo) {
+      const [teamsResult, matchesResult] = await Promise.all([
+        supabase.from('teams').select('*').eq('category_id', selectedCategory).order('name'),
+        supabase.from('matches').select(`
           id, status, home_score, away_score, home_sets, away_sets, scheduled_time, venue, home_team_id, away_team_id,
           home_team:teams!home_team_id(id, name, schools(logo_url)),
           away_team:teams!away_team_id(id, name, schools(logo_url)),
           matchdays!inner(id, category_id, round_number, scheduled_date)
         `).eq('matchdays.category_id', selectedCategory).order('scheduled_time', { ascending: true }),
-    ]);
+      ]);
+      teamsData = teamsResult.data;
+      matchesData = matchesResult.data;
+    } else if (selectedCategory) {
+      const result = await getAdminCategoryFixture(slug, selectedCategory);
+      if (!result.success) {
+        toast.error(result.error);
+        setTeams([]);
+        setMatches([]);
+        setAvailableRounds([]);
+        setLoading(false);
+        return;
+      }
+      teamsData = result.teams;
+      matchesData = result.matches;
+    }
     
     if (matchesData) {
       setMatches(matchesData);

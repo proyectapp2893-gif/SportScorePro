@@ -46,6 +46,36 @@ type ReorganizeFixtureResult =
   | { success: true; updatedMatches: number }
   | { success: false; error: string };
 
+export async function getAdminFixtureCategories(slug: string) {
+  if (!(await hasAdminSession(slug))) return { success: false as const, error: 'Sesión de administrador no válida.' };
+  const clientId = await getClientIdBySlug(slug);
+  if (!clientId) return { success: false as const, error: 'No se encontró el cliente.' };
+  const supabase = createServerSupabaseAdminClient();
+  const { data, error } = await supabase.from('categories')
+    .select('*, tournaments!inner(id, client_id, fixture_visible_to_delegates, fixture_visible_to_public, tournament_format, fair_play_enabled, fp_starting_points), sports(name)')
+    .eq('tournaments.client_id', clientId).order('name');
+  if (error) return { success: false as const, error: 'No se pudieron cargar las categorías.' };
+  return { success: true as const, clientId, categories: data || [] };
+}
+
+export async function getAdminCategoryFixture(slug: string, categoryId: string) {
+  if (!(await hasAdminSession(slug)) || !(await categoryBelongsToClientSlug(categoryId, slug))) {
+    return { success: false as const, error: 'Acceso no autorizado.' };
+  }
+  const supabase = createServerSupabaseAdminClient();
+  const [{ data: teams, error: teamsError }, { data: matches, error: matchesError }] = await Promise.all([
+    supabase.from('teams').select('*').eq('category_id', categoryId).order('name'),
+    supabase.from('matches').select(`
+      id, status, home_score, away_score, home_sets, away_sets, scheduled_time, venue, home_team_id, away_team_id,
+      home_team:teams!home_team_id(id, name, schools(logo_url)),
+      away_team:teams!away_team_id(id, name, schools(logo_url)),
+      matchdays!inner(id, category_id, round_number, scheduled_date)
+    `).eq('matchdays.category_id', categoryId).order('scheduled_time', { ascending: true }),
+  ]);
+  if (teamsError || matchesError) return { success: false as const, error: 'No se pudo cargar el fixture de administración.' };
+  return { success: true as const, teams: teams || [], matches: matches || [] };
+}
+
 export async function updateTournamentFixtureVisibility(slug: string, categoryId: string, visible: boolean): Promise<FixtureActionResult> {
   if (!(await hasAdminSession(slug))) return { success: false, error: 'Sesión de administrador no válida.' };
   if (!(await categoryBelongsToClientSlug(categoryId, slug))) return { success: false, error: 'La categoría no pertenece a este cliente.' };
