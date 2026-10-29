@@ -8,7 +8,7 @@ import { useSearchParams, useRouter, useParams } from 'next/navigation';
 import { FaFutbol, FaBasketballBall, FaVolleyballBall, FaBaseballBall } from 'react-icons/fa';
 import { compareTeamsForStandings, getMatchScoreForStandings, getResultPoints, getSportRules } from '../../../lib/sports/rules';
 import { normalizeAsOfDate } from '@/app/lib/date-filter';
-import { calculateLoyolaFairPlayDeductions, calculateLoyolaGroupStandings, type LoyolaCardEvent } from '@/app/lib/tournaments/loyola-phase-standings';
+import { calculateLoyolaCumulativeStats, calculateLoyolaFairPlayDeductions, calculateLoyolaGroupStandings, type LoyolaCardEvent } from '@/app/lib/tournaments/loyola-phase-standings';
 
 function EstadisticasContent() {
   const searchParams = useSearchParams();
@@ -190,7 +190,12 @@ function EstadisticasContent() {
       
       setTeams(sortedTeams);
 
-      const activeTeams = sortedTeams.filter(t => (t.played || 0) > 0);
+      const cumulativeTeams = isLoyola ? calculateLoyolaCumulativeStats(teamsData, (finishedMatches || []).map((match: any) => ({
+        id: match.id, round_number: Number(match.matchdays?.round_number || 0), status: match.status,
+        home_team_id: match.home_team_id, away_team_id: match.away_team_id,
+        home_score: match.home_score, away_score: match.away_score, home_sets: match.home_sets, away_sets: match.away_sets,
+      })), activeCat?.sports?.name) : sortedTeams;
+      const activeTeams = cumulativeTeams.filter(t => (t.played || 0) > 0);
       if (activeTeams.length > 0) {
         const defense = [...activeTeams].sort((a, b) => (a.goals_against || 0) - (b.goals_against || 0))[0];
         const offense = [...activeTeams].sort((a, b) => (b.goals_for || 0) - (a.goals_for || 0))[0];

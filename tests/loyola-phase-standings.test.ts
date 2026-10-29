@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculateLoyolaGroupStandings } from '../app/lib/tournaments/loyola-phase-standings';
+import { calculateLoyolaCumulativeStats, calculateLoyolaGroupStandings } from '../app/lib/tournaments/loyola-phase-standings';
 
 const teams = [
   { id: 'niupi', name: 'NIUPI', group_name: 'A', fair_play_points: 600 },
@@ -40,5 +40,15 @@ describe('Loyola phase 2 standings', () => {
     ];
     const standings = calculateLoyolaGroupStandings(teams, [group], cards, 'Fútbol', settings);
     expect(standings.A.find((team) => team.id === 'niupi')?.fair_play_points).toBe(600);
+  });
+
+  it('keeps least-conceded statistics cumulative across regular, group and final phases', () => {
+    const cumulative = calculateLoyolaCumulativeStats(teams, [regular, group, {
+      id: 'semifinal', round_number: 201, status: 'FINISHED', home_team_id: 'niupi', away_team_id: 'sporting', home_score: 2, away_score: 1,
+    }, {
+      id: 'pending', round_number: 102, status: 'SCHEDULED', home_team_id: 'niupi', away_team_id: 'arsenal', home_score: 5, away_score: 5,
+    }], 'Fútbol');
+    expect(cumulative.find((team) => team.id === 'niupi')).toMatchObject({ played: 3, goals_for: 11, goals_against: 2 });
+    expect(cumulative.find((team) => team.id === 'arsenal')).toMatchObject({ played: 2, goals_for: 1, goals_against: 9 });
   });
 });

@@ -20,7 +20,7 @@ import {
 } from '../../lib/sports/rules';
 import { inferMissingTeamByes } from '@/app/lib/tournaments/byes';
 import { normalizeAsOfDate } from '@/app/lib/date-filter';
-import { calculateLoyolaFairPlayDeductions, calculateLoyolaGroupStandings, type LoyolaCardEvent } from '@/app/lib/tournaments/loyola-phase-standings';
+import { calculateLoyolaCumulativeStats, calculateLoyolaFairPlayDeductions, calculateLoyolaGroupStandings, type LoyolaCardEvent } from '@/app/lib/tournaments/loyola-phase-standings';
 
 const marqueeStyles = `
   @keyframes marquee {
@@ -66,6 +66,7 @@ export default function ResultadosPublicos() {
   const [matches, setMatches] = useState<any[]>([]);
   const [liveMatches, setLiveMatches] = useState<any[]>([]); 
   const [teams, setTeams] = useState<any[]>([]);
+  const [statisticsTeams, setStatisticsTeams] = useState<any[] | null>(null);
   const [loyolaStandings, setLoyolaStandings] = useState<ReturnType<typeof calculateLoyolaGroupStandings> | null>(null);
   const [loyolaStandingsError, setLoyolaStandingsError] = useState(false);
   const [positionView, setPositionView] = useState<'REGULAR' | 'A' | 'B'>('REGULAR');
@@ -196,7 +197,7 @@ export default function ResultadosPublicos() {
 
     try {
     if (activeTournament && activeTournament.fixture_visible_to_public === false) {
-      setMatches([]); setLiveMatches([]); setTeams([]); setLoyolaStandings(null); setLoyolaStandingsError(false); setScorers([]); setMatchEvents([]); return;
+      setMatches([]); setLiveMatches([]); setTeams([]); setStatisticsTeams(null); setLoyolaStandings(null); setLoyolaStandingsError(false); setScorers([]); setMatchEvents([]); return;
     }
     const activeCat = categories.find(c => c.id === categoryId);
     const isLoyola = activeTournament?.tournament_format === 'LOYOLA';
@@ -249,6 +250,12 @@ export default function ResultadosPublicos() {
       .eq('category_id', categoryId);
 
     if (teamsData && matchesData) {
+      const normalizedMatches = matchesData.map((match: any) => ({
+        id: match.id, round_number: Number(match.matchdays?.round_number || 0), status: match.status,
+        home_team_id: match.home_team?.id, away_team_id: match.away_team?.id,
+        home_score: match.home_score, away_score: match.away_score, home_sets: match.home_sets, away_sets: match.away_sets,
+      }));
+      setStatisticsTeams(isLoyola ? calculateLoyolaCumulativeStats(teamsData, normalizedMatches, sportName) : null);
       const inferredByes = inferMissingTeamByes(matchesData, teamsData);
       setMatches((currentMatches) => [...currentMatches.filter((match: any) => !match.inferred), ...inferredByes]);
       const cardDeductionsByTeam: Record<string, number> = {};
@@ -355,11 +362,7 @@ export default function ResultadosPublicos() {
       setTeams(sortedTeams);
       const groupMatches = matchesData.filter((match: any) => Number(match.matchdays?.round_number || 0) >= 101 && Number(match.matchdays?.round_number || 0) <= 106);
       setLoyolaStandingsError(isLoyola && groupMatches.length > 0 && phaseCardEventsError);
-      setLoyolaStandings(isLoyola && groupMatches.length > 0 && !phaseCardEventsError ? calculateLoyolaGroupStandings(teamsData, matchesData.map((match: any) => ({
-        id: match.id, round_number: Number(match.matchdays?.round_number || 0), status: match.status,
-        home_team_id: match.home_team?.id, away_team_id: match.away_team?.id,
-        home_score: match.home_score, away_score: match.away_score, home_sets: match.home_sets, away_sets: match.away_sets,
-      })), phaseCardEvents, sportName, {
+      setLoyolaStandings(isLoyola && groupMatches.length > 0 && !phaseCardEventsError ? calculateLoyolaGroupStandings(teamsData, normalizedMatches, phaseCardEvents, sportName, {
         fairPlayEnabled: Boolean(isFairPlayActive), startingPoints: Number(fpStartingPoints),
         yellowDeduction: Number(yellowDeduction), redDeduction: Number(redDeduction),
       }) : null);
@@ -1040,7 +1043,7 @@ export default function ResultadosPublicos() {
                 </div>}
 
                 {activeTab === 'ESTADISTICAS' && selectedCategory && 
-                  renderEstadisticas(activeSportName, teams, scorers)
+                  renderEstadisticas(activeSportName, statisticsTeams || teams, scorers)
                 }
 
               </div>

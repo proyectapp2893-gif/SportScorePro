@@ -18,6 +18,24 @@ export type LoyolaCardEvent = {
   match_second?: number | null; minute_record?: number | string | null;
 };
 
+export function calculateLoyolaCumulativeStats<T extends { id: string }>(teams: T[], matches: LoyolaGroupMatch[], sportName: string | null | undefined) {
+  const rules = getSportRules(sportName);
+  const byId = new Map(teams.map((team) => [team.id, { ...team, played: 0, goals_for: 0, goals_against: 0 }]));
+  for (const match of matches) {
+    if (match.status !== 'FINISHED') continue;
+    const home = byId.get(match.home_team_id);
+    const away = match.away_team_id ? byId.get(match.away_team_id) : null;
+    if (!home || !away) continue;
+    const score = getMatchScoreForStandings(match, rules);
+    home.played++; away.played++;
+    if (score.countsForScoreColumns) {
+      home.goals_for += score.home; home.goals_against += score.away;
+      away.goals_for += score.away; away.goals_against += score.home;
+    }
+  }
+  return [...byId.values()];
+}
+
 export function calculateLoyolaFairPlayDeductions(
   matches: LoyolaGroupMatch[], cards: LoyolaCardEvent[], yellowDeduction: number, redDeduction: number,
 ) {
