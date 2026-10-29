@@ -62,7 +62,7 @@ export function generatePlacementFinals(groupA: string[], groupB: string[]): Gen
 }
 
 export function generateSemifinals(rankedTeamIds: string[]): GeneratedRound[] {
-  if (rankedTeamIds.length < 4) throw new Error('Se requieren cuatro equipos para las semifinales.');
+  if (rankedTeamIds.length !== 4 || new Set(rankedTeamIds).size !== 4) throw new Error('Se requieren exactamente cuatro equipos distintos para las semifinales.');
   return [{ roundNumber: 1, matches: [
     { homeTeamId: rankedTeamIds[0], awayTeamId: rankedTeamIds[3], leg: 1, matchType: 'SEMIFINAL' },
     { homeTeamId: rankedTeamIds[1], awayTeamId: rankedTeamIds[2], leg: 1, matchType: 'SEMIFINAL' },

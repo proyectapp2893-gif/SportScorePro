@@ -64,8 +64,9 @@ async function rankStage(supabase: ReturnType<typeof createServerSupabaseAdminCl
 }
 
 async function ensureStageComplete(supabase: ReturnType<typeof createServerSupabaseAdminClient>, stageId: string) {
-  const { count } = await supabase.from('matches').select('id, matchdays!inner(stage_id)', { count: 'exact', head: true }).eq('matchdays.stage_id', stageId).neq('status', 'FINISHED');
-  return count === 0;
+  const { count, error } = await supabase.from('matches').select('id, matchdays!inner(stage_id)', { count: 'exact', head: true }).eq('matchdays.stage_id', stageId).neq('status', 'FINISHED');
+  const { count: total, error: totalError } = await supabase.from('matches').select('id, matchdays!inner(stage_id)', { count: 'exact', head: true }).eq('matchdays.stage_id', stageId);
+  return !error && !totalError && total !== null && total > 0 && count === 0;
 }
 
 export async function getThreeStageStatus(slug: string, categoryId: string): Promise<StageResult<any>> {
@@ -77,7 +78,11 @@ export async function getThreeStageStatus(slug: string, categoryId: string): Pro
     ? { A: await rankStage(auth.supabase, active.id, 'A'), B: await rankStage(auth.supabase, active.id, 'B') }
     : active ? { GENERAL: await rankStage(auth.supabase, active.id) } : {};
   const format = (category as any)?.tournaments?.tournament_format;
-  return { success: true, data: { enabled: format === 'THREE_STAGE_35' || format === 'ROUND_ROBIN_2LEG_SEMIFINALS', format, stages: stages || [], standings } };
+  const regularStage = (stages || []).find((stage) => stage.stage_number === 1);
+  const regularStandings = format === 'ROUND_ROBIN_2LEG_SEMIFINALS' && regularStage?.status === 'COMPLETED'
+    ? await rankStage(auth.supabase, regularStage.id)
+    : null;
+  return { success: true, data: { enabled: format === 'THREE_STAGE_35' || format === 'ROUND_ROBIN_2LEG_SEMIFINALS', format, stages: stages || [], standings, regularStandings } };
 }
 
 export async function startRoundRobinSemifinalsTournament(slug: string, categoryId: string): Promise<StageResult> {

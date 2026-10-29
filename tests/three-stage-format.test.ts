@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { generateGroupStage, generatePlacementFinals, generateRoundRobin, seedTwoGroups } from '../app/lib/tournaments/three-stage';
+import { generateGroupStage, generatePlacementFinals, generateRoundRobin, generateSemifinals, seedTwoGroups } from '../app/lib/tournaments/three-stage';
 
 const teams = Array.from({ length: 8 }, (_, index) => ({ id: `team-${index + 1}` }));
 
@@ -22,5 +22,16 @@ describe('three-stage tournament format', () => {
       { homeTeamId: 'a1', awayTeamId: 'b1', matchType: 'GOLD_FINAL' },
       { homeTeamId: 'a2', awayTeamId: 'b2', matchType: 'SILVER_FINAL' },
     ]);
+  });
+});
+
+describe('league semifinals', () => {
+  it('pairs only the top four distinct teams', () => {
+    expect(generateSemifinals(['first', 'second', 'third', 'fourth'])[0].matches).toMatchObject([
+      { homeTeamId: 'first', awayTeamId: 'fourth' },
+      { homeTeamId: 'second', awayTeamId: 'third' },
+    ]);
+    expect(() => generateSemifinals(['first', 'second', 'third', 'fourth', 'eliminated'])).toThrow();
+    expect(() => generateSemifinals(['first', 'second', 'third', 'third'])).toThrow();
   });
 });

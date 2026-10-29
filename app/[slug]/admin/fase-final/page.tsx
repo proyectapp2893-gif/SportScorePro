@@ -37,7 +37,7 @@ function FaseFinalContent() {
         setClientId(client.id);
         const { data: catData } = await supabase
           .from('categories')
-          .select('*, tournaments!inner(client_id, name), sports(name)')
+          .select('*, tournaments!inner(client_id, name, tournament_format, fair_play_enabled, fp_starting_points), sports(name)')
           .eq('tournaments.client_id', client.id)
           .order('name');
           
@@ -86,14 +86,15 @@ function FaseFinalContent() {
           home_score, away_score, home_sets, away_sets, status,
           home_team:teams!home_team_id(id),
           away_team:teams!away_team_id(id),
-          matchdays!inner(category_id, scheduled_date)
+          matchdays!inner(category_id, scheduled_date, round_number)
         `)
         .eq('matchdays.category_id', selectedCategory)
         .eq('status', 'FINISHED');
       if (asOfDate) finishedMatchesQuery = finishedMatchesQuery.lte('matchdays.scheduled_date', asOfDate);
       const { data: finishedMatches } = await finishedMatchesQuery;
 
-      (finishedMatches || []).forEach((match: any) => {
+      const tournament = categories.find((category) => category.id === selectedCategory)?.tournaments;
+      (finishedMatches || []).filter((match: any) => tournament?.tournament_format !== 'LOYOLA' || match.matchdays?.round_number < 100).forEach((match: any) => {
         const homeId = match.home_team?.id;
         const awayId = match.away_team?.id;
         if (!homeId || !awayId || !teamStats[homeId] || !teamStats[awayId]) return;
@@ -128,7 +129,7 @@ function FaseFinalContent() {
         }
       });
 
-      setTeams(Object.values(teamStats).sort((a: any, b: any) => compareTeamsForStandings(a, b, sportRules)));
+      setTeams(Object.values(teamStats).sort((a: any, b: any) => compareTeamsForStandings(a, b, sportRules, Boolean(tournament?.fair_play_enabled), Number(tournament?.fp_starting_points || 0))));
     }
     setLoading(false);
   }
@@ -159,6 +160,7 @@ function FaseFinalContent() {
   // Lógica Voleibol (2 Grupos)
   const groupA = teams.filter(t => t.group_name === 'A');
   const groupB = teams.filter(t => t.group_name === 'B');
+  const isLoyolaGroups = activeCategory?.tournaments?.tournament_format === 'LOYOLA' && groupA.length === 4 && groupB.length === 4;
   const semi1A = groupA[0]; const semi1B = groupB[1]; // 1°A vs 2°B
   const semi2B = groupB[0]; const semi2A = groupA[1]; // 1°B vs 2°A
 
@@ -291,7 +293,7 @@ function FaseFinalContent() {
                 <div className="absolute inset-0 bg-[linear-gradient(to_right,#f8fafc_1px,transparent_1px),linear-gradient(to_bottom,#f8fafc_1px,transparent_1px)] bg-[size:2rem_2rem] opacity-70 z-0"></div>
                 
                 {/* === BRACKET: SEMIFINALES Y FINAL === */}
-                {(isVolleyball || isCuadrangular) && (
+                {(isVolleyball || isCuadrangular || isLoyolaGroups) && (
                   <div className="flex items-center justify-center gap-8 md:gap-32 min-w-[680px] md:min-w-[800px] relative z-10 w-full">
                     
                     {/* COLUMNA 1: SEMIFINALES */}
@@ -301,8 +303,8 @@ function FaseFinalContent() {
                         <span className="text-[10px] font-black text-slate-500 bg-white px-3 py-1 uppercase tracking-widest text-center absolute -top-5 left-1/2 -translate-x-1/2 border border-slate-200 rounded-full z-20 shadow-sm">
                           Llave A
                         </span>
-                        <TeamSlot team={isVolleyball ? semi1A : semiC1_1} seed={isVolleyball ? "1° Grupo A" : "1° Clasificado"} />
-                        <TeamSlot team={isVolleyball ? semi1B : semiC1_4} seed={isVolleyball ? "2° Grupo B" : "4° Clasificado"} />
+                        <TeamSlot team={isVolleyball || isLoyolaGroups ? semi1A : semiC1_1} seed={isVolleyball || isLoyolaGroups ? "1° Grupo A" : "1° Clasificado"} />
+                        <TeamSlot team={isVolleyball || isLoyolaGroups ? semi1B : semiC1_4} seed={isVolleyball || isLoyolaGroups ? "2° Grupo B" : "4° Clasificado"} />
                         
                         {/* Líneas Conectoras (Gris Plata) */}
                         <div className="hidden md:block absolute -right-6 md:-right-16 top-1/2 w-6 md:w-16 border-t-2 border-slate-300"></div>
@@ -313,8 +315,8 @@ function FaseFinalContent() {
                         <span className="text-[10px] font-black text-slate-500 bg-white px-3 py-1 uppercase tracking-widest text-center absolute -top-5 left-1/2 -translate-x-1/2 border border-slate-200 rounded-full z-20 shadow-sm">
                           Llave B
                         </span>
-                        <TeamSlot team={isVolleyball ? semi2B : semiC2_2} seed={isVolleyball ? "1° Grupo B" : "2° Clasificado"} />
-                        <TeamSlot team={isVolleyball ? semi2A : semiC2_3} seed={isVolleyball ? "2° Grupo A" : "3° Clasificado"} />
+                        <TeamSlot team={isVolleyball || isLoyolaGroups ? semi2B : semiC2_2} seed={isVolleyball || isLoyolaGroups ? "1° Grupo B" : "2° Clasificado"} />
+                        <TeamSlot team={isVolleyball || isLoyolaGroups ? semi2A : semiC2_3} seed={isVolleyball || isLoyolaGroups ? "2° Grupo A" : "3° Clasificado"} />
                         
                         {/* Líneas Conectoras (Gris Plata) */}
                         <div className="hidden md:block absolute -right-6 md:-right-16 bottom-1/2 w-6 md:w-16 border-b-2 border-slate-300"></div>
@@ -378,7 +380,7 @@ function FaseFinalContent() {
                 )}
 
                 {/* ESTADO DE DESARROLLO (Si no se cumplen condiciones) */}
-                {!isVolleyball && !isCuadrangular && !isPentagonal && teams.length > 0 && (
+                {!isVolleyball && !isCuadrangular && !isLoyolaGroups && !isPentagonal && teams.length > 0 && (
                   <div className="flex flex-col items-center justify-center text-center relative z-10 py-12">
                     <div className="bg-slate-50 p-6 rounded-full mb-6 border border-slate-200 shadow-inner">
                       <GitMerge size={48} className="text-slate-400" />

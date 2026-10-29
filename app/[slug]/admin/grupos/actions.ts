@@ -4,6 +4,7 @@ import { hasAdminSession } from '@/app/lib/auth';
 import { logAuditEvent } from '@/app/lib/audit';
 import { createServerSupabaseAdminClient } from '@/app/lib/supabase/server';
 import { categoryBelongsToClientSlug, getClientIdBySlug, teamBelongsToClientSlug } from '@/app/lib/tenant';
+import { selectLoyolaQualifiers } from '@/app/lib/tournaments/loyola-qualification';
 
 type FixtureActionResult =
   | { success: true }
@@ -190,39 +191,162 @@ function shuffleTeams<T>(items: T[]) {
   return shuffled;
 }
 
+async function getLoyolaQualifiers(supabase: ReturnType<typeof createServerSupabaseAdminClient>, categoryId: string) {
+  const { data: category, error: categoryError } = await supabase.from('categories')
+    .select('sports(name), tournaments(tournament_format, fair_play_enabled, fp_starting_points)')
+    .eq('id', categoryId).maybeSingle();
+  if (categoryError || !category) throw new Error('No se pudo consultar el formato del torneo.');
+  const tournament = Array.isArray(category.tournaments) ? category.tournaments[0] : category.tournaments;
+  if (tournament?.tournament_format !== 'LOYOLA') return null;
+
+  const { data: teams, error: teamsError } = await supabase.from('teams')
+    .select('id, fair_play_points').eq('category_id', categoryId);
+  if (teamsError || !teams) throw new Error('No se pudieron cargar los equipos.');
+
+  const { data: matchdays, error: daysError } = await supabase.from('matchdays')
+    .select('id').eq('category_id', categoryId).lt('round_number', 100);
+  if (daysError || !matchdays?.length) throw new Error('La fase regular aún no tiene jornadas.');
+  const { data: matches, error: matchesError } = await supabase.from('matches')
+    .select('home_team_id, away_team_id, home_score, away_score, home_sets, away_sets, status')
+    .in('matchday_id', matchdays.map((day) => day.id));
+  if (matchesError || !matches) throw new Error('No se pudieron cargar los partidos de la fase regular.');
+  const sport = Array.isArray(category.sports) ? category.sports[0] : category.sports;
+  return selectLoyolaQualifiers(teams, matches, sport?.name, Boolean(tournament.fair_play_enabled), Number(tournament.fp_starting_points || 0));
+}
+
+async function hasLoyolaPlayoffs(supabase: ReturnType<typeof createServerSupabaseAdminClient>, categoryId: string) {
+  const { count, error } = await supabase.from('matchdays').select('id', { count: 'exact', head: true })
+    .eq('category_id', categoryId).gte('round_number', 100);
+  if (error) throw new Error('No se pudo verificar si ya existen cruces finales.');
+  return Boolean(count);
+}
+
+async function recordLoyolaDraw(supabase: ReturnType<typeof createServerSupabaseAdminClient>, slug: string, categoryId: string, action: string, metadata: Record<string, unknown>) {
+  const { error } = await supabase.from('audit_logs').insert({
+    action, actor_type: 'client', client_id: await getClientIdBySlug(slug),
+    target_type: 'category', target_id: categoryId, metadata: { slug, categoryId, ...metadata },
+  });
+  if (error) throw new Error('No se pudo registrar el movimiento en el acta del sorteo.');
+}
+
+export async function getCategoryGroupEligibility(slug: string, categoryId: string) {
+  if (!(await hasAdminSession(slug)) || !(await categoryBelongsToClientSlug(categoryId, slug))) return { success: false as const, error: 'Acceso no autorizado.' };
+  try {
+    const supabase = createServerSupabaseAdminClient();
+    if (await hasLoyolaPlayoffs(supabase, categoryId)) {
+      const { data: category } = await supabase.from('categories').select('tournaments(tournament_format)').eq('id', categoryId).maybeSingle();
+      const tournament = Array.isArray(category?.tournaments) ? category.tournaments[0] : category?.tournaments;
+      if (tournament?.tournament_format === 'LOYOLA') {
+        const { data: teams, error } = await supabase.from('teams').select('id, group_name').eq('category_id', categoryId);
+        if (error || !teams) throw new Error('No se pudieron cargar los grupos sorteados.');
+        const qualifiedIds = teams.filter((team) => team.group_name === 'A' || team.group_name === 'B').map((team) => team.id);
+        if (qualifiedIds.length !== 8) throw new Error('Los grupos sorteados no contienen ocho clasificados.');
+        return { success: true as const, data: { qualifiedIds, eliminatedIds: teams.filter((team) => !qualifiedIds.includes(team.id)).map((team) => team.id) } };
+      }
+    }
+    const result = await getLoyolaQualifiers(supabase, categoryId);
+    return { success: true as const, data: result };
+  } catch (error) {
+    return { success: false as const, error: error instanceof Error ? error.message : 'No se pudo calcular la clasificación.' };
+  }
+}
+
+export async function prepareLoyolaGroupDraw(slug: string, categoryId: string): Promise<FixtureActionResult> {
+  if (!(await hasAdminSession(slug)) || !(await categoryBelongsToClientSlug(categoryId, slug))) return { success: false, error: 'Acceso no autorizado.' };
+  const supabase = createServerSupabaseAdminClient();
+  try {
+    if (await hasLoyolaPlayoffs(supabase, categoryId)) return { success: false, error: 'Ya existen cruces finales; no se puede reiniciar el sorteo.' };
+    const eligibility = await getLoyolaQualifiers(supabase, categoryId);
+    if (!eligibility) return { success: false, error: 'La categoría no usa el formato Loyola.' };
+    const { data: before, error: beforeError } = await supabase.from('teams').select('id, group_name').eq('category_id', categoryId);
+    if (beforeError || !before) return { success: false, error: 'No se pudieron consultar las asignaciones actuales.' };
+    const { error } = await supabase.from('teams').update({ group_name: null })
+      .eq('category_id', categoryId).in('id', [...eligibility.qualifiedIds, ...eligibility.eliminatedIds]);
+    if (error) return { success: false, error: 'No se pudieron preparar los equipos para el sorteo.' };
+    try {
+      await recordLoyolaDraw(supabase, slug, categoryId, 'admin.loyola.draw_prepared', { qualifiedIds: eligibility.qualifiedIds, eliminatedIds: eligibility.eliminatedIds });
+    } catch (auditError) {
+      await Promise.all(before.map((team) => supabase.from('teams').update({ group_name: team.group_name }).eq('id', team.id)));
+      throw auditError;
+    }
+    return { success: true };
+  } catch (error) { return { success: false, error: error instanceof Error ? error.message : 'No se pudo preparar el sorteo.' }; }
+}
+
+export async function getLoyolaDrawHistory(slug: string, categoryId: string) {
+  if (!(await hasAdminSession(slug)) || !(await categoryBelongsToClientSlug(categoryId, slug))) return { success: false as const, error: 'Acceso no autorizado.' };
+  const supabase = createServerSupabaseAdminClient();
+  const { data, error } = await supabase.from('audit_logs').select('id, created_at, action, metadata')
+    .eq('client_id', await getClientIdBySlug(slug)).eq('target_type', 'category').eq('target_id', categoryId)
+    .in('action', ['admin.loyola.draw_prepared', 'admin.loyola.draw_assignment'])
+    .order('created_at', { ascending: false }).limit(200);
+  if (error) return { success: false as const, error: 'No se pudo cargar el acta del sorteo.' };
+  const chronological = [...(data || [])].reverse();
+  const latestStart = chronological.findLastIndex((event) => event.action === 'admin.loyola.draw_prepared');
+  return { success: true as const, events: latestStart < 0 ? [] : chronological.slice(latestStart) };
+}
+
 export async function updateTeamGroup(slug: string, teamId: string, groupName: string): Promise<FixtureActionResult> {
   if (!(await hasAdminSession(slug))) {
     return { success: false, error: 'Sesión de administrador no válida.' };
   }
 
   const safeGroupName = groupName.trim().toUpperCase().slice(0, 12);
-  if (!safeGroupName) {
-    return { success: false, error: 'Grupo inválido.' };
-  }
 
   if (!(await teamBelongsToClientSlug(teamId, slug))) {
     return { success: false, error: 'El equipo no pertenece a este cliente.' };
   }
 
   const supabase = createServerSupabaseAdminClient();
+  const { data: team, error: teamError } = await supabase.from('teams').select('category_id, group_name, categories(tournaments(tournament_format))').eq('id', teamId).maybeSingle();
+  if (teamError || !team) return { success: false, error: 'No se pudo verificar el formato del torneo.' };
+  const format = (team as any)?.categories?.tournaments?.tournament_format;
+  if (!safeGroupName && format !== 'LOYOLA') return { success: false, error: 'Grupo inválido.' };
+  if (format === 'ROUND_ROBIN_2LEG_SEMIFINALS' || format === 'THREE_STAGE_35') {
+    return { success: false, error: 'Los clasificados y cruces de este formato se definen desde el panel de fases.' };
+  }
+  if (format === 'LOYOLA') {
+    if (safeGroupName && !['A', 'B'].includes(safeGroupName)) return { success: false, error: 'Loyola utiliza solo los grupos A y B.' };
+    try {
+      if (await hasLoyolaPlayoffs(supabase, team.category_id)) return { success: false, error: 'Los cruces finales ya fueron creados. No se pueden cambiar los grupos.' };
+      const { count: preparedCount, error: preparedError } = await supabase.from('audit_logs').select('id', { count: 'exact', head: true })
+        .eq('client_id', await getClientIdBySlug(slug)).eq('target_type', 'category').eq('target_id', team.category_id)
+        .eq('action', 'admin.loyola.draw_prepared');
+      if (preparedError || !preparedCount) return { success: false, error: 'Prepara primero el sorteo manual.' };
+      const eligibility = await getLoyolaQualifiers(supabase, team.category_id);
+      if (!eligibility?.qualifiedIds.includes(teamId)) return { success: false, error: 'El equipo no clasificó a la fase de grupos.' };
+      if (eligibility.eliminatedIds.length) {
+        const { data: eliminated, error: eliminatedError } = await supabase.from('teams').select('id, group_name').in('id', eligibility.eliminatedIds);
+        if (eliminatedError || eliminated?.some((entry) => entry.group_name)) return { success: false, error: 'Prepara primero el sorteo manual para retirar al eliminado.' };
+      }
+    } catch (error) { return { success: false, error: error instanceof Error ? error.message : 'No se pudo verificar la clasificación.' }; }
+    if (safeGroupName && team.group_name !== safeGroupName) {
+      const { count, error: countError } = await supabase.from('teams').select('id', { count: 'exact', head: true })
+        .eq('category_id', team.category_id).eq('group_name', safeGroupName);
+      if (countError) return { success: false, error: 'No se pudo validar el tamaño del grupo.' };
+      if ((count || 0) >= 4) return { success: false, error: `El grupo ${safeGroupName} ya tiene cuatro equipos.` };
+    }
+  }
   const { error } = await supabase
     .from('teams')
-    .update({ group_name: safeGroupName })
+    .update({ group_name: safeGroupName || null })
     .eq('id', teamId);
 
   if (error) {
     return { success: false, error: 'No se pudo actualizar el grupo.' };
   }
 
-  const clientId = await getClientIdBySlug(slug);
-  await logAuditEvent({
-    action: 'admin.fixture.team_group_update',
-    actorType: 'client',
-    clientId,
-    targetType: 'team',
-    targetId: teamId,
-    metadata: { slug, groupName: safeGroupName },
-  });
+  const { data: namedTeam } = format === 'LOYOLA' ? await supabase.from('teams').select('name').eq('id', teamId).maybeSingle() : { data: null };
+  if (format === 'LOYOLA') {
+    try {
+      await recordLoyolaDraw(supabase, slug, team.category_id, 'admin.loyola.draw_assignment', { teamId, teamName: namedTeam?.name, fromGroup: team.group_name, groupName: safeGroupName || null });
+    } catch (auditError) {
+      await supabase.from('teams').update({ group_name: team.group_name }).eq('id', teamId);
+      return { success: false, error: auditError instanceof Error ? auditError.message : 'No se pudo registrar la asignación.' };
+    }
+  } else {
+    await logAuditEvent({ action: 'admin.fixture.team_group_update', actorType: 'client', clientId: await getClientIdBySlug(slug), targetType: 'team', targetId: teamId, metadata: { slug, groupName: safeGroupName } });
+  }
 
   return { success: true };
 }
@@ -244,6 +368,13 @@ export async function randomizeCategoryGroups(
   const groupNames = ['A', 'B', 'C', 'D'].slice(0, safeGroupCount);
 
   const supabase = createServerSupabaseAdminClient();
+  const { data: category, error: categoryError } = await supabase.from('categories').select('tournaments(tournament_format)').eq('id', categoryId).maybeSingle();
+  if (categoryError || !category) return { success: false, error: 'No se pudo verificar el formato del torneo.' };
+  const format = (category as any)?.tournaments?.tournament_format;
+  if (format === 'ROUND_ROBIN_2LEG_SEMIFINALS' || format === 'THREE_STAGE_35') {
+    return { success: false, error: 'Los clasificados y cruces de este formato se definen desde el panel de fases.' };
+  }
+  if (format === 'LOYOLA') return { success: false, error: 'El sorteo Loyola se realiza manualmente, equipo por equipo.' };
   const { data: categoryTeams, error: teamsError } = await supabase
     .from('teams')
     .select('id')
@@ -366,6 +497,39 @@ export async function createCategoryFixture(
         return { success: false, error: 'Uno o más equipos no pertenecen a esta categoría.' };
       }
     }
+  }
+
+  if (cleanRounds.some((round) => round.roundNumber >= 100)) {
+    try {
+      const eligibility = await getLoyolaQualifiers(supabase, categoryId);
+      if (eligibility) {
+        const qualified = new Set(eligibility.qualifiedIds);
+        if (cleanRounds.some((round) => round.roundNumber >= 100 && round.matches.some((match) =>
+          !qualified.has(match.homeTeamId) || (match.awayTeamId && !qualified.has(match.awayTeamId))))) {
+          return { success: false, error: 'Un equipo eliminado no puede participar en los cruces finales.' };
+        }
+        const semifinals = cleanRounds.filter((round) => round.roundNumber === 100).flatMap((round) => round.matches);
+        if (semifinals.length) {
+          const { count: preparedCount, error: preparedError } = await supabase.from('audit_logs').select('id', { count: 'exact', head: true })
+            .eq('client_id', await getClientIdBySlug(slug)).eq('target_type', 'category').eq('target_id', categoryId)
+            .eq('action', 'admin.loyola.draw_prepared');
+          if (preparedError || !preparedCount) return { success: false, error: 'Prepara y registra primero el sorteo manual de los grupos.' };
+          const { data: assigned, error: assignedError } = await supabase.from('teams').select('id, group_name').eq('category_id', categoryId);
+          if (assignedError || !assigned) return { success: false, error: 'No se pudieron validar los grupos sorteados.' };
+          const byId = new Map(assigned.map((team) => [team.id, team.group_name]));
+          const groupA = eligibility.qualifiedIds.filter((id) => byId.get(id) === 'A');
+          const groupB = eligibility.qualifiedIds.filter((id) => byId.get(id) === 'B');
+          if (groupA.length !== 4 || groupB.length !== 4 || semifinals.length !== 2) {
+            return { success: false, error: 'Se requieren dos grupos de cuatro para crear las semifinales.' };
+          }
+          const pair = (first: string, second: string) => [first, second].sort().join(':');
+          const expected = new Set([pair(groupA[0], groupB[1]), pair(groupB[0], groupA[1])]);
+          if (semifinals.some((match) => !match.awayTeamId || !expected.delete(pair(match.homeTeamId, match.awayTeamId))) || expected.size) {
+            return { success: false, error: 'Los cruces deben ser 1.º A contra 2.º B y 1.º B contra 2.º A.' };
+          }
+        }
+      }
+    } catch (error) { return { success: false, error: error instanceof Error ? error.message : 'No se pudo verificar la clasificación.' }; }
   }
 
   let insertedMatches = 0;
