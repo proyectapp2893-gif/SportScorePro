@@ -20,6 +20,8 @@ import FormationBoard from '@/app/components/FormationBoard';
 import DelegateBulletinsCard from './DelegateBulletinsCard';
 import { getFootball9Formation } from '@/app/lib/sports/formations';
 import DelegateLoyolaProgress from './DelegateLoyolaProgress';
+import DelegateModule from './DelegateModule';
+import { getUpcomingDelegateMatches } from '@/app/lib/tournaments/delegate-next-match';
 
 const DISCIPLINARY_PAYMENT_URL = 'https://eco.credibanco.com/payment/docsite/payform-1.html?token=g9f5bncp69drlh26jr28c0438u&ask=amount&def=%7B%22iva%22:%220.00%22%7D&ask=email&ask=%7B%22name%22:%22CODIGO_DEL_ALUMNO%22,%22placeholder%22:%22C%25C3%25B3digo%2520del%2520Alumno%22,%22label%22:%22C%25C3%2593DIGO%2520DEL%2520ALUMNO%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22NOMBRE_DEL_ALUMNO%22,%22placeholder%22:%22Ingrese%2520Nombre%2520del%2520Alumno%22,%22label%22:%22NOMBRE%2520DEL%2520ALUMNO%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22CONCEPTO%22,%22placeholder%22:%22Digite%2520Concepto%2520del%2520Pago%22,%22label%22:%22CONCEPTO%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22DOCUMENTO_DE_REFERENCIA%22,%22placeholder%22:%22Digite%2520Documento%2520de%2520Referencia%22,%22label%22:%22DOCUMENTO%2520DE%2520REFERENCIA%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22OBSERVACIONES%22,%22placeholder%22:%22Digite%2520Observaciones%22,%22label%22:%22OBSERVACIONES%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D';
 
@@ -357,7 +359,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const fullSchedule = fixtureVisibleToDelegates ? data?.schedulesByTeam?.[selectedTeam?.id] || [] : [];
   const eventsByMatch = fixtureVisibleToDelegates ? data?.eventsByMatch || {} : {};
   const historyMatches = matches.filter((match: any) => match.status === 'FINISHED');
-  const teamUpcomingMatches = matches.filter((match: any) => match.status !== 'FINISHED');
+  const teamUpcomingMatches = getUpcomingDelegateMatches(matches);
   const nextMatch = teamUpcomingMatches[0];
   const nextOpponent = nextMatch ? (nextMatch.home_team_id === selectedTeam?.id ? nextMatch.away_team : nextMatch.home_team) : null;
   const currentPhase = phaseForRound(nextMatch?.matchdays?.round_number || Math.max(...fullSchedule.map((match: any) => match.matchdays?.round_number || 1), 1));
@@ -1334,7 +1336,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
       </header>
 
       <div className="delegate-portal-content relative z-10 mx-auto max-w-6xl space-y-6 px-4 py-8">
-        {(tournamentBulletins.length > 0 || tournamentStatutes) && <div className="grid items-start gap-5 lg:grid-cols-2">
+        {(tournamentBulletins.length > 0 || tournamentStatutes) && <DelegateModule title="Documentos oficiales" subtitle="Consulta y descarga" detail="Boletines y estatutos publicados por la organización" tone="slate"><div className="grid items-start gap-4 lg:grid-cols-2">
         {tournamentBulletins.length > 0 && <DelegateBulletinsCard bulletins={tournamentBulletins} />}
         {tournamentStatutes && <section className="flex min-h-52 flex-col gap-4 rounded-3xl border border-blue-200 bg-gradient-to-br from-blue-50 to-white p-5 shadow-sm sm:p-6">
           <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-200"><FileCheck2 size={26} /></span>
@@ -1344,7 +1346,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
             <a href={tournamentStatutes.downloadUrl} className="flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-5 py-3 text-xs font-black uppercase tracking-widest text-white hover:bg-blue-700" download><Download size={16} /> Descargar PDF</a>
           </div>
         </section>}
-        </div>}
+        </div></DelegateModule>}
         {showTransferModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
             <section role="dialog" aria-modal="true" aria-labelledby="transfer-title" className="w-full max-w-lg rounded-[2rem] bg-white p-6 text-slate-900 shadow-2xl sm:p-8">
@@ -1699,7 +1701,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
 
         {selectedTeam && (
           <>
-            <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+            <DelegateModule title="Resumen del equipo" subtitle="Tu equipo en cifras" detail={`${players.length} inscritos · ${fixtureVisibleToDelegates ? 'fixture publicado' : 'fixture pendiente'}`} defaultOpen tone="blue"><section className="delegate-summary-grid grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-3 xl:grid-cols-6">
               <div className="flex min-h-32 flex-col items-center justify-center rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-center">
                 <Users className="mb-2 text-blue-600" size={22} />
                 <p className="text-2xl font-black">{players.length}</p>
@@ -1729,18 +1731,18 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 <p className="text-2xl font-black">{formatCopAmount(debt)}</p>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Multas</p>
               </button>
-              <button type="button" onClick={() => document.getElementById('upcoming-matches')?.scrollIntoView({ behavior: 'smooth', block: 'center' })} className="col-span-2 flex min-h-32 flex-col items-center justify-center rounded-2xl border border-cyan-100 bg-cyan-50/70 p-4 text-center transition hover:-translate-y-0.5 hover:shadow-md md:col-span-1" aria-label="Ver próximo partido">
+              <button type="button" onClick={() => { document.getElementById('upcoming-matches')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); const toggle = document.getElementById('upcoming-matches-toggle'); if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click(); }} className="col-span-2 flex min-h-28 min-w-0 flex-col items-center justify-center rounded-2xl border border-cyan-100 bg-cyan-50/70 p-3 text-center transition hover:-translate-y-0.5 hover:shadow-md md:col-span-1" aria-label="Ver próximo partido">
                 <CalendarDays className="mb-2 text-cyan-600" size={22} />
                 <p className="text-[9px] font-black uppercase tracking-widest text-cyan-700">Próximo rival</p>
-                <p className="mt-1 truncate text-sm font-black uppercase">{nextOpponent?.name || 'Sin programación'}</p>
+                <p className="mt-1 max-w-full truncate text-sm font-black uppercase">{nextOpponent?.name || 'Sin programación'}</p>
                 <p className="mt-1 text-[9px] font-black uppercase tracking-widest text-slate-400">{nextMatch ? `${nextMatch.matchdays?.scheduled_date || 'Fecha pendiente'} · ${nextMatch.scheduled_time?.slice(0, 5) || '--:--'}` : 'Sin próximo partido'}</p>
               </button>
               </>}
-            </section>
+            </section></DelegateModule>
 
-            {fixtureVisibleToDelegates && isLoyola && <DelegateLoyolaProgress selectedTeamId={selectedTeam.id} teams={data?.categoryTeamsByCategory?.[selectedTeam.category_id] || []} matches={fullSchedule} eventsByMatch={eventsByMatch} drawEvents={data?.drawHistoryByCategory?.[selectedTeam.category_id] || []} tournament={selectedCategory?.tournaments} sportName={selectedCategory?.sports?.name || ''} />}
+            {fixtureVisibleToDelegates && isLoyola && <DelegateModule title="Seguimiento de Loyola" subtitle="Fases, tablas y calendario" detail="Consulta clasificados, grupos, estadísticas y todas las jornadas" defaultOpen tone="blue"><DelegateLoyolaProgress selectedTeamId={selectedTeam.id} teams={data?.categoryTeamsByCategory?.[selectedTeam.category_id] || []} matches={fullSchedule} eventsByMatch={eventsByMatch} drawEvents={data?.drawHistoryByCategory?.[selectedTeam.category_id] || []} tournament={selectedCategory?.tournaments} sportName={selectedCategory?.sports?.name || ''} /></DelegateModule>}
 
-            {fixtureVisibleToDelegates && !isLoyola && <section className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
+            {fixtureVisibleToDelegates && !isLoyola && <DelegateModule title="Posiciones y rendimiento" subtitle="Clasificación oficial" detail="Tabla y estadísticas del equipo" defaultOpen tone="blue"><section className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
               <div className="delegate-module delegate-module-blue overflow-hidden rounded-[2rem] border border-blue-100 bg-blue-50/35">
                 <div className="flex items-center justify-between border-b border-blue-100 bg-blue-50/80 p-5">
                   <div>
@@ -1767,9 +1769,9 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   {[['Posición', selectedStanding ? `${standings.indexOf(selectedStanding) + 1}°` : '-'], ['Partidos', selectedStanding?.played || 0], ['Ganados', selectedStanding?.won || 0], ['Empatados', selectedStanding?.drawn || 0], ['Perdidos', selectedStanding?.lost || 0], ['Diferencia', selectedStanding ? selectedStanding.goals_for - selectedStanding.goals_against : 0]].map(([label, value]) => <div key={String(label)} className="rounded-2xl border border-indigo-100 bg-white/75 p-4"><p className="text-xl font-black">{value}</p><p className="text-[9px] font-black uppercase tracking-widest text-indigo-400">{label}</p></div>)}
                 </div>
               </div>
-            </section>}
+            </section></DelegateModule>}
 
-            {fixtureVisibleToDelegates && <section className="grid gap-6 lg:grid-cols-2">
+            {fixtureVisibleToDelegates && <DelegateModule title="Goleadores y disciplina" subtitle="Estadísticas y pagos" detail="Anotaciones, tarjetas, sanciones y comprobantes" tone="amber"><section className="grid min-w-0 gap-4 lg:grid-cols-2">
               <div className="delegate-module delegate-module-emerald rounded-[2rem] border border-emerald-100 bg-emerald-50/45 p-5">
                 <h2 className="text-lg font-black uppercase">{sportRules.scoreLabels.scorerPlural} y goleadores</h2>
                 <div className="mt-4 divide-y divide-slate-100">
@@ -1836,7 +1838,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   </div>
                 </div>
               </div>
-            </section>}
+            </section></DelegateModule>}
 
             {false && <section className="delegate-module delegate-module-violet rounded-[2rem] border border-violet-100 bg-violet-50/50 p-5">
               <div className="mb-4 flex items-center gap-3"><div className="rounded-xl bg-violet-600 p-3 text-white"><Users size={20} /></div><div><h2 className="text-lg font-black uppercase">Cuerpo técnico</h2><p className="text-[9px] font-black uppercase tracking-widest text-violet-500">Inscripción oficial de la delegación</p></div></div>
@@ -1987,21 +1989,18 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               </div>
 
               <div className="grid gap-6">
-                {fixtureVisibleToDelegates ? <div id="upcoming-matches" className="delegate-module delegate-module-cyan scroll-mt-6 rounded-[2rem] border border-slate-200 bg-white p-5 xl:min-w-[420px]">
-                  <h2 className="font-black uppercase text-lg mb-1">Próximo partido</h2>
-                  <p className="mb-4 text-[9px] font-black uppercase tracking-widest text-slate-400">Tu equipo vs. próximo rival</p>
+                {fixtureVisibleToDelegates ? <DelegateModule id="upcoming-matches" title="Próximo partido" subtitle="Tu equipo y su próximo rival" detail={nextMatch ? `${nextOpponent?.name || 'Rival pendiente'} · ${nextMatch.matchdays?.scheduled_date || 'Fecha pendiente'} · ${nextMatch.scheduled_time?.slice(0, 5) || 'Hora pendiente'}` : 'No hay un encuentro futuro programado'} defaultOpen tone="cyan">
                   <div className="space-y-3">
                     {(showAllUpcoming ? teamUpcomingMatches : teamUpcomingMatches.slice(0, 1)).map((match: any) => renderMatchCard(match))}
                     {teamUpcomingMatches.length === 0 && <p className="text-center text-slate-400 text-xs font-black uppercase tracking-widest py-8">Sin partidos pendientes</p>}
                     {teamUpcomingMatches.length > 1 && <button type="button" onClick={() => setShowAllUpcoming((open) => !open)} className="w-full rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-700 transition hover:bg-cyan-100" aria-expanded={showAllUpcoming}>{showAllUpcoming ? 'Mostrar solo el próximo' : `Ver los ${teamUpcomingMatches.length} partidos`}</button>}
                   </div>
-                </div> : <div className="rounded-[2rem] border border-indigo-100 bg-indigo-50 p-6 text-center xl:min-w-[420px]"><Lock className="mx-auto text-indigo-400" size={24} /><h2 className="mt-3 text-sm font-black uppercase text-indigo-800">Fixture pendiente de publicación</h2><p className="mt-2 text-[9px] font-bold uppercase tracking-widest text-indigo-400">La organización lo habilitará cuando esté confirmado.</p></div>}
+                </DelegateModule> : <div className="rounded-[2rem] border border-indigo-100 bg-indigo-50 p-6 text-center"><Lock className="mx-auto text-indigo-400" size={24} /><h2 className="mt-3 text-sm font-black uppercase text-indigo-800">Fixture pendiente de publicación</h2><p className="mt-2 text-[9px] font-bold uppercase tracking-widest text-indigo-400">La organización lo habilitará cuando esté confirmado.</p></div>}
               </div>
             </section>
 
-            {fixtureVisibleToDelegates && <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="delegate-module delegate-module-slate rounded-[2rem] border border-slate-200 bg-white p-5">
-                <h2 className="font-black uppercase text-lg mb-4">Historial del equipo</h2>
+            {fixtureVisibleToDelegates && <section className={`grid min-w-0 grid-cols-1 gap-4 ${isLoyola ? '' : 'lg:grid-cols-2'}`}>
+              <DelegateModule title="Historial del equipo" subtitle="Resultados oficiales" detail={`${historyMatches.length} partidos finalizados`} tone="slate">
                 <div className="space-y-3">
                   {historyMatches.map((match: any) => (
                     <button key={match.id} onClick={() => setSelectedHistoryMatch(match)} className="w-full text-left block hover:scale-[1.01] transition-transform">
@@ -2010,9 +2009,9 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   ))}
                   {historyMatches.length === 0 && <p className="text-center text-slate-400 text-xs font-black uppercase tracking-widest py-8">Aún no hay partidos finalizados</p>}
                 </div>
-              </div>
+              </DelegateModule>
 
-              {fixtureVisibleToDelegates && !isLoyola && <div className="delegate-module delegate-module-blue rounded-[2rem] border border-slate-200 bg-white p-5">
+              {fixtureVisibleToDelegates && !isLoyola && <DelegateModule title="Jornadas de la fase actual" subtitle={`Fase ${currentPhase}`} detail="Fechas y partidos programados" tone="blue"><div className="min-w-0">
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div><h2 className="font-black uppercase text-lg">Jornadas de la fase actual</h2><p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Fase {currentPhase} · incluye fechas futuras programadas</p></div>
                   {lastScheduledRound && <button type="button" onClick={() => setActiveRound(lastScheduledRound)} className="shrink-0 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100">Ver última programada</button>}
@@ -2039,7 +2038,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                   </div>
                 )}
                 {roundEntries.length === 0 && <p className="rounded-2xl border border-dashed border-blue-200 bg-blue-50/50 p-8 text-center text-[10px] font-black uppercase tracking-widest text-blue-500">No hay jornadas generadas para esta fase</p>}
-              </div>}
+              </div></DelegateModule>}
             </section>}
           </>
         )}

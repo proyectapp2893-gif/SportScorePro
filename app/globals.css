@@ -326,6 +326,29 @@ label[for] {
 .delegate-module-rose { background-color: rgba(255, 241, 242, 0.88); border-color: rgb(254 205 211); }
 .delegate-module-slate { background-color: rgba(248, 250, 252, 0.92); border-color: rgb(203 213 225); }
 
+.delegate-accordion {
+  overflow: hidden;
+  border: 1px solid #dbe5f2;
+  border-radius: 1.5rem;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.055);
+}
+.delegate-accordion-blue { border-color: #bfdbfe; }
+.delegate-accordion-cyan { border-color: #a5f3fc; }
+.delegate-accordion-emerald { border-color: #a7f3d0; }
+.delegate-accordion-amber { border-color: #fde68a; }
+.delegate-accordion-slate { border-color: #cbd5e1; }
+.delegate-accordion-summary {
+  background: linear-gradient(110deg, rgba(248, 250, 252, 0.97), rgba(255, 255, 255, 0.96));
+  transition: background-color 180ms ease;
+}
+.delegate-accordion-summary:hover { background: #f1f5f9; }
+.delegate-accordion-summary:focus-visible { outline: 3px solid #60a5fa; outline-offset: -3px; }
+.delegate-accordion-cyan .delegate-accordion-summary { background: linear-gradient(110deg, #ecfeff, #fff); }
+.delegate-accordion-amber .delegate-accordion-summary { background: linear-gradient(110deg, #fffbeb, #fff); }
+.delegate-accordion-content > .delegate-module { box-shadow: none; }
+.delegate-summary-grid > * { min-width: 0; }
+
 @media (max-width: 639px) {
   .delegate-portal-content {
     gap: 1rem;
@@ -336,6 +359,10 @@ label[for] {
     border-radius: 1.25rem !important;
     box-shadow: 0 5px 18px rgba(15, 23, 42, 0.04);
   }
+
+  .delegate-accordion { border-radius: 1.25rem; }
+  .delegate-accordion-content { padding: 0.75rem; }
+  .delegate-summary-grid > * { min-height: 6.5rem; padding: 0.75rem; }
 
   .delegate-table-scroll {
     margin-inline: -1px;
