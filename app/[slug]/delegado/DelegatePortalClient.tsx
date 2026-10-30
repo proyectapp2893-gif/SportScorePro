@@ -19,6 +19,7 @@ import { normalizeDoubleCautions } from '@/app/lib/discipline/double-caution';
 import FormationBoard from '@/app/components/FormationBoard';
 import DelegateBulletinsCard from './DelegateBulletinsCard';
 import { getFootball9Formation } from '@/app/lib/sports/formations';
+import DelegateLoyolaProgress from './DelegateLoyolaProgress';
 
 const DISCIPLINARY_PAYMENT_URL = 'https://eco.credibanco.com/payment/docsite/payform-1.html?token=g9f5bncp69drlh26jr28c0438u&ask=amount&def=%7B%22iva%22:%220.00%22%7D&ask=email&ask=%7B%22name%22:%22CODIGO_DEL_ALUMNO%22,%22placeholder%22:%22C%25C3%25B3digo%2520del%2520Alumno%22,%22label%22:%22C%25C3%2593DIGO%2520DEL%2520ALUMNO%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22NOMBRE_DEL_ALUMNO%22,%22placeholder%22:%22Ingrese%2520Nombre%2520del%2520Alumno%22,%22label%22:%22NOMBRE%2520DEL%2520ALUMNO%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22CONCEPTO%22,%22placeholder%22:%22Digite%2520Concepto%2520del%2520Pago%22,%22label%22:%22CONCEPTO%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22DOCUMENTO_DE_REFERENCIA%22,%22placeholder%22:%22Digite%2520Documento%2520de%2520Referencia%22,%22label%22:%22DOCUMENTO%2520DE%2520REFERENCIA%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D&ask=%7B%22name%22:%22OBSERVACIONES%22,%22placeholder%22:%22Digite%2520Observaciones%22,%22label%22:%22OBSERVACIONES%22,%22value%22:%22%22,%22readOnly%22:%22false%22,%22regexp%22:%22%22%7D';
 
@@ -339,6 +340,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
   const isFootball9Category = selectedCategory?.tournaments?.sport_modality === 'SOCCER_9' || /F(?:Ú|U)TBOL\s*9|FOOTBALL\s*9|\b9\s*(?:JUGADORES|PLAYERS)\b/.test(categoryDescriptor) || Number(selectedCategory?.players_per_side) === 9;
   const teamTournamentCount = new Set((data?.teams || []).map((team: any) => team.categories?.tournaments?.id || team.categories?.tournaments?.name).filter(Boolean)).size;
   const fixtureVisibleToDelegates = Boolean(selectedCategory?.tournaments?.fixture_visible_to_delegates);
+  const isLoyola = selectedCategory?.tournaments?.tournament_format === 'LOYOLA';
   const canEditRoster = selectedTeam && isRegistrationOpen(selectedCategory);
   const transferableTeams = (data?.teams || []).filter((team: any) => team.id !== selectedTeam?.id && team.school_id === selectedTeam?.school_id);
   const players = data?.playersByTeam?.[selectedTeam?.id] || [];
@@ -1736,7 +1738,9 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
               </>}
             </section>
 
-            {fixtureVisibleToDelegates && <section className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
+            {fixtureVisibleToDelegates && isLoyola && <DelegateLoyolaProgress selectedTeamId={selectedTeam.id} teams={data?.categoryTeamsByCategory?.[selectedTeam.category_id] || []} matches={fullSchedule} eventsByMatch={eventsByMatch} drawEvents={data?.drawHistoryByCategory?.[selectedTeam.category_id] || []} tournament={selectedCategory?.tournaments} sportName={selectedCategory?.sports?.name || ''} />}
+
+            {fixtureVisibleToDelegates && !isLoyola && <section className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
               <div className="delegate-module delegate-module-blue overflow-hidden rounded-[2rem] border border-blue-100 bg-blue-50/35">
                 <div className="flex items-center justify-between border-b border-blue-100 bg-blue-50/80 p-5">
                   <div>
@@ -2008,7 +2012,7 @@ export default function DelegatePortalClient({ slug, initialData }: DelegatePort
                 </div>
               </div>
 
-              {fixtureVisibleToDelegates && <div className="delegate-module delegate-module-blue rounded-[2rem] border border-slate-200 bg-white p-5">
+              {fixtureVisibleToDelegates && !isLoyola && <div className="delegate-module delegate-module-blue rounded-[2rem] border border-slate-200 bg-white p-5">
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div><h2 className="font-black uppercase text-lg">Jornadas de la fase actual</h2><p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Fase {currentPhase} · incluye fechas futuras programadas</p></div>
                   {lastScheduledRound && <button type="button" onClick={() => setActiveRound(lastScheduledRound)} className="shrink-0 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100">Ver última programada</button>}

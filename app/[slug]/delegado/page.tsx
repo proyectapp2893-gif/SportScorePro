@@ -18,7 +18,7 @@ async function loadTeamAccess(supabase: ReturnType<typeof createServerSupabaseAd
         categories(
           id, name, gender, registration_open, registration_deadline, min_roster_size, max_roster_size, roster_locked_message,
           sports(name),
-          tournaments(id, name, fair_play_enabled, fine_yellow_amount, fine_red_amount, fp_yellow_deduction, fp_red_deduction, schedule_dates, fixture_visible_to_delegates, sport_modality)
+          tournaments(id, name, tournament_format, fair_play_enabled, fp_starting_points, fine_yellow_amount, fine_red_amount, fp_yellow_deduction, fp_red_deduction, schedule_dates, fixture_visible_to_delegates, sport_modality)
         )
       )
     `)
@@ -35,7 +35,7 @@ async function loadTeamAccess(supabase: ReturnType<typeof createServerSupabaseAd
         categories(
           id, name, gender,
           sports(name),
-          tournaments(id, name, fair_play_enabled, fine_yellow_amount, fine_red_amount, fp_yellow_deduction, fp_red_deduction, sport_modality)
+          tournaments(id, name, tournament_format, fair_play_enabled, fp_starting_points, fine_yellow_amount, fine_red_amount, fp_yellow_deduction, fp_red_deduction, sport_modality)
         )
       )
     `)
@@ -89,12 +89,15 @@ async function loadDelegatePortalData(slug: string, asOfDate: string | null) {
   })).filter((team: any) => team?.id);
   const teamIds = teams.map((team: any) => team.id);
   const categoryIds = Array.from(new Set(teams.map((team: any) => team.category_id).filter(Boolean)));
+  const visibleCategoryIds = categoryIds.filter((id) => teams.some((team: any) => team.category_id === id && team.categories?.tournaments?.fixture_visible_to_delegates));
 
   const playersByTeam: Record<string, any[]> = {};
   const eventsByTeam: Record<string, any[]> = {};
   const matchesByTeam: Record<string, any[]> = {};
   const eventsByMatch: Record<string, any[]> = {};
   const schedulesByTeam: Record<string, any[]> = {};
+  const categoryTeamsByCategory: Record<string, any[]> = {};
+  const drawHistoryByCategory: Record<string, any[]> = {};
   const staffByTeam: Record<string, any[]> = {};
   const statutesByTournament: Record<string, any> = {};
   const bulletinsByTournament: Record<string, any> = {};
@@ -175,7 +178,7 @@ async function loadDelegatePortalData(slug: string, asOfDate: string | null) {
     const { data: loadedMatches } = await supabase
       .from('matches')
       .select(`
-        id, status, home_score, away_score, home_sets, away_sets, scheduled_time,
+        id, status, home_score, away_score, home_sets, away_sets, scheduled_time, venue, group_name,
         home_team_id,
         away_team_id,
         home_team:teams!home_team_id(id, name, schools(name, logo_url)),
@@ -185,7 +188,7 @@ async function loadDelegatePortalData(slug: string, asOfDate: string | null) {
       .or(`home_team_id.in.(${teamIds.join(',')}),away_team_id.in.(${teamIds.join(',')})`)
       .order('matchdays(scheduled_date)', { ascending: true });
 
-    const matches = (loadedMatches || []).filter((match: any) => !asOfDate || match.matchdays?.scheduled_date <= asOfDate);
+    const matches = (loadedMatches || []).filter((match: any) => visibleCategoryIds.includes(match.matchdays?.category_id) && (!asOfDate || match.matchdays?.scheduled_date <= asOfDate));
     matches.forEach((match: any) => {
       [match.home_team?.id, match.away_team?.id].forEach((teamId) => {
         if (!teamId || !teamIds.includes(teamId)) return;
@@ -198,7 +201,7 @@ async function loadDelegatePortalData(slug: string, asOfDate: string | null) {
     if (matchIds.length > 0) {
       const matchEventsQuery = await supabase
         .from('match_events')
-        .select('id, match_id, team_id, player_id, event_type, period, minute_record, created_at, fine_amount, fine_status, players(name, shirt_number), teams(name, schools(name, logo_url))')
+        .select('id, match_id, team_id, player_id, event_type, period, minute_record, match_second, created_at, fine_amount, fine_status, players(name, shirt_number), teams(name, schools(name, logo_url))')
         .in('match_id', matchIds)
         .in('event_type', ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3', 'YELLOW', 'RED'])
         .order('created_at', { ascending: true });
@@ -231,18 +234,34 @@ async function loadDelegatePortalData(slug: string, asOfDate: string | null) {
     }
   }
 
-  if (categoryIds.length > 0) {
+  if (visibleCategoryIds.length > 0) {
+    const { data: drawEvents } = await supabase.from('audit_logs')
+      .select('id, created_at, target_id, action, metadata')
+      .eq('client_id', delegate.client_id).eq('target_type', 'category').in('target_id', visibleCategoryIds)
+      .in('action', ['admin.loyola.draw_prepared', 'admin.loyola.draw_assignment'])
+      .order('created_at', { ascending: true }).limit(300);
+    for (const categoryId of visibleCategoryIds) {
+      const categoryEvents = (drawEvents || []).filter((event) => event.target_id === categoryId);
+      const latestStart = categoryEvents.findLastIndex((event) => event.action === 'admin.loyola.draw_prepared');
+      drawHistoryByCategory[categoryId] = latestStart < 0 ? [] : categoryEvents.slice(latestStart);
+    }
+    const { data: categoryTeams } = await supabase.from('teams')
+      .select('id, name, group_name, fair_play_points, category_id, schools(name, logo_url)').in('category_id', visibleCategoryIds);
+    (categoryTeams || []).forEach((team: any) => {
+      if (!categoryTeamsByCategory[team.category_id]) categoryTeamsByCategory[team.category_id] = [];
+      categoryTeamsByCategory[team.category_id].push(team);
+    });
     const { data: loadedCategoryMatches } = await supabase
       .from('matches')
       .select(`
-        id, status, home_score, away_score, home_sets, away_sets, scheduled_time,
+        id, status, home_score, away_score, home_sets, away_sets, scheduled_time, venue, group_name,
         home_team_id,
         away_team_id,
         home_team:teams!home_team_id(id, name, schools(name, logo_url)),
         away_team:teams!away_team_id(id, name, schools(name, logo_url)),
         matchdays!inner(id, scheduled_date, round_number, category_id)
       `)
-      .in('matchdays.category_id', categoryIds)
+      .in('matchdays.category_id', visibleCategoryIds)
       .order('matchdays(scheduled_date)', { ascending: true });
 
     const categoryMatches = (loadedCategoryMatches || []).filter((match: any) => !asOfDate || match.matchdays?.scheduled_date <= asOfDate);
@@ -254,7 +273,7 @@ async function loadDelegatePortalData(slug: string, asOfDate: string | null) {
     if (categoryMatchIds.length > 0) {
       const { data: categoryEvents } = await supabase
         .from('match_events')
-        .select('id, match_id, team_id, player_id, event_type, period, minute_record, created_at, fine_amount, fine_status, players(name, shirt_number), teams(name, schools(name, logo_url))')
+        .select('id, match_id, team_id, player_id, event_type, period, minute_record, match_second, created_at, fine_amount, fine_status, players(name, shirt_number), teams(name, schools(name, logo_url))')
         .in('match_id', categoryMatchIds)
         .in('event_type', ['GOAL', 'BASKET_1', 'BASKET_2', 'BASKET_3', 'YELLOW', 'RED'])
         .order('created_at', { ascending: true });
@@ -285,6 +304,9 @@ async function loadDelegatePortalData(slug: string, asOfDate: string | null) {
     try { return [team.id, await loadTeamDisciplinaryBlocks(supabase, team.id)]; }
     catch { return [team.id, null]; }
   })));
+  const visibleMatchIds = new Set(Object.values(schedulesByTeam).flat().map((match: any) => match.id));
+  const visibleEventsByMatch = Object.fromEntries(Object.entries(eventsByMatch).filter(([matchId]) => visibleMatchIds.has(matchId)));
+  const visibleEventsByTeam = Object.fromEntries(teams.map((team: any) => [team.id, visibleCategoryIds.includes(team.category_id) ? eventsByTeam[team.id] || [] : []]));
 
   return {
     delegate: {
@@ -297,10 +319,12 @@ async function loadDelegatePortalData(slug: string, asOfDate: string | null) {
     playersByTeam,
     disciplinaryBlocksByTeam,
     staffByTeam,
-    eventsByTeam,
+    eventsByTeam: visibleEventsByTeam,
     matchesByTeam,
-    eventsByMatch,
+    eventsByMatch: visibleEventsByMatch,
     schedulesByTeam,
+    categoryTeamsByCategory,
+    drawHistoryByCategory,
     statutesByTournament,
     bulletinsByTournament,
     schemaReady: accessLoad.schemaReady,
